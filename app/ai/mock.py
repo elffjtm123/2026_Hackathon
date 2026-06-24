@@ -1,10 +1,30 @@
 import asyncio
+import json
 import re
 from collections import Counter
+from typing import Any
 
 from app.ai.base import AIResult, MediaPayload
 
 FILLER_PATTERN = re.compile(r"(?<![가-힣])(어|음|그|저기|그러니까)(?![가-힣])")
+
+
+def _decode_transcript_payload(payload: bytes) -> tuple[str, float | None]:
+    raw = payload.decode("utf-8", errors="ignore").strip()
+    try:
+        data: Any = json.loads(raw)
+    except json.JSONDecodeError:
+        return raw, None
+    if not isinstance(data, dict):
+        return raw, None
+    text = str(data.get("text", "")).strip()
+    duration_ms = data.get("duration_ms")
+    duration_sec = (
+        max(0.5, float(duration_ms) / 1000)
+        if isinstance(duration_ms, int | float)
+        else None
+    )
+    return text, duration_sec
 
 
 class MockGazeAdapter:
@@ -30,11 +50,11 @@ class MockGazeAdapter:
 class MockSpeechAdapter:
     async def infer(self, media: MediaPayload) -> AIResult:
         await asyncio.sleep(0.02)
-        text = media.payload.decode("utf-8", errors="ignore").strip()
+        text, duration_sec = _decode_transcript_payload(media.payload)
         fillers = Counter(FILLER_PATTERN.findall(text))
         syllables = len(re.findall(r"[가-힣]", text))
-        # Mock transcript chunks represent roughly one second of speech.
-        speech_rate = syllables * 60
+        estimated_duration_sec = duration_sec or max(1.0, syllables / 5)
+        speech_rate = syllables / estimated_duration_sec * 60 if estimated_duration_sec else 0
         level = "warning" if speech_rate > 360 else "info"
         return AIResult(
             source="speech_rate",
@@ -46,6 +66,9 @@ class MockSpeechAdapter:
             metrics={
                 "syllables_per_minute": speech_rate,
                 "filler_words": [{"word": word, "count": count} for word, count in fillers.items()],
+                "duration_sec": round(estimated_duration_sec, 2),
+                "avg_logprob": -0.35 if text else -1.0,
+                "no_speech_prob": 0.1 if text else 1.0,
             },
             transcript=text or None,
             is_final=True,

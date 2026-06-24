@@ -37,6 +37,9 @@ def _frontend_feedback(event: RealtimeEvent) -> dict[str, Any] | None:
     speech_pace = "unknown"
     syllables_per_second = None
     filler_words: dict[str, int] = {}
+    pronunciation_accuracy = None
+    pronunciation_message = None
+    pronunciation_method = None
 
     if source == "gaze":
         direction = str(metrics.get("direction", "unknown"))
@@ -64,6 +67,13 @@ def _frontend_feedback(event: RealtimeEvent) -> dict[str, Any] | None:
                 if word:
                     filler_words[word] = count
 
+    if source == "pronunciation":
+        score = metrics.get("pronunciation_clarity_score")
+        if score is not None:
+            pronunciation_accuracy = float(score)
+        pronunciation_message = str(metrics.get("message", event.data.get("message", "")))
+        pronunciation_method = metrics.get("method")
+
     return {
         "type": "feedback",
         "sessionId": str(event.session_id),
@@ -85,6 +95,11 @@ def _frontend_feedback(event: RealtimeEvent) -> dict[str, Any] | None:
             "totalCount": sum(filler_words.values()),
             "counts": filler_words,
         },
+        "pronunciation": {
+            "accuracy": pronunciation_accuracy,
+            "message": pronunciation_message,
+            "method": pronunciation_method,
+        },
         "message": str(event.data.get("message", "")),
     }
 
@@ -100,12 +115,22 @@ async def practice_demo_websocket(websocket: WebSocket) -> None:
         gaze = VideoGazeAdapter()
     except Exception:
         gaze = MockGazeAdapter()
+    try:
+        from app.ai.local_stt import create_local_whisper_speech_adapter
+
+        speech = (
+            create_local_whisper_speech_adapter()
+            if settings.stt_provider == "whisper"
+            else MockSpeechAdapter()
+        )
+    except RuntimeError:
+        speech = MockSpeechAdapter()
     pipeline = SessionPipeline(
         session_id,
         settings,
         websocket.app.state.state_store,
         gaze,
-        MockSpeechAdapter(),
+        speech,
         {
             "gaze_enabled": True,
             "speech_rate_enabled": True,
@@ -163,13 +188,34 @@ async def practice_demo_websocket(websocket: WebSocket) -> None:
             if client_event.event == "ping":
                 await pipeline.emit("pong", client_event.timestamp_ms, {})
             elif client_event.event == "session.start":
+                settings_data = client_event.data.get("settings", {})
+                analysis_updates = settings_data if isinstance(settings_data, dict) else {}
+                if "karaokeGuideEnabled" in analysis_updates:
+                    analysis_updates["karaoke_guide_enabled"] = analysis_updates[
+                        "karaokeGuideEnabled"
+                    ]
+                analysis_updates["pronunciation_enabled"] = True
+                pipeline.update_analysis_settings(
+                    {
+                        **analysis_updates,
+                        "script": client_event.data.get("script"),
+                        "time_limit_seconds": client_event.data.get("timeLimitSeconds"),
+                    }
+                )
                 await pipeline.emit("session.started", client_event.timestamp_ms, client_event.data)
             elif client_event.event in {"transcript.partial", "transcript.final"}:
                 text = str(client_event.data.get("text", ""))
+                duration_ms = client_event.data.get("durationMs")
                 if len(text) > 10_000:
                     await pipeline.emit_error("TRANSCRIPT_TOO_LARGE", "텍스트가 너무 깁니다.")
                 else:
-                    await pipeline.push_audio(client_event.timestamp_ms, text.encode())
+                    payload = {"text": text}
+                    if isinstance(duration_ms, int | float):
+                        payload["duration_ms"] = duration_ms
+                    await pipeline.push_audio(
+                        client_event.timestamp_ms,
+                        json.dumps(payload, ensure_ascii=False).encode(),
+                    )
     except WebSocketDisconnect:
         pass
     finally:
@@ -272,10 +318,17 @@ async def session_websocket(websocket: WebSocket, session_id: UUID, token: str) 
                 await pipeline.emit("pong", client_event.timestamp_ms, {})
             elif client_event.event in {"transcript.partial", "transcript.final"}:
                 text = str(client_event.data.get("text", ""))
+                duration_ms = client_event.data.get("durationMs")
                 if len(text) > 10_000:
                     await pipeline.emit_error("TRANSCRIPT_TOO_LARGE", "텍스트가 너무 깁니다.")
                 else:
-                    await pipeline.push_audio(client_event.timestamp_ms, text.encode())
+                    payload = {"text": text}
+                    if isinstance(duration_ms, int | float):
+                        payload["duration_ms"] = duration_ms
+                    await pipeline.push_audio(
+                        client_event.timestamp_ms,
+                        json.dumps(payload, ensure_ascii=False).encode(),
+                    )
     except WebSocketDisconnect:
         pass
     finally:

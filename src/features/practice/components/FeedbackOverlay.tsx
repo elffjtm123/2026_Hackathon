@@ -26,10 +26,6 @@ export function FeedbackOverlay({ feedback }: FeedbackOverlayProps) {
         <span>속도</span>
         <strong>{feedback.speech.pace}</strong>
       </div>
-      <div className="overlay-row">
-        <span>습관어</span>
-        <strong>{feedback.filler.totalCount}</strong>
-      </div>
       {feedback.message ? (
         <p className="overlay-message">{feedback.message}</p>
       ) : null}

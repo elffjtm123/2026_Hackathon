@@ -93,22 +93,26 @@ CHUNK_DURATION  = 5          # 초, 기본 청크 길이
 
 # ── 습관어 목록 ────────────────────────────────────────────────────────────────
 _SINGLE_FILLERS = [
-    "어", "음", "아", "에", "으", "이",
+    "어", "음", "아", "에", "으", "응", "흠",   # 주저 소리·변이형
     "뭐", "좀", "막", "약간", "그냥",
-    "이제", "저기", "그", "일단", "사실",
-    "뭔가",
+    "이제", "인제", "저기", "그", "일단", "사실",
+    "뭔가", "아무튼", "어쨌든", "뭐냐", "자",
 ]
 _MULTI_FILLERS = [
-    "그러니까", "그니까", "사실은", "기본적으로",
+    "그러니까", "그니까", "그러니까요",
+    "사실은", "기본적으로", "솔직히",
     "말하자면", "뭐랄까", "어떻게 보면",
-    "있잖아요", "있잖아",
+    "있잖아요", "있잖아", "그래가지고",
+    "다시 말해서", "솔직히 말해서",
+    "어떻게 말하면", "그렇게 말하자면",
+    "그러다 보니까", "뭔가 좀",
 ]
 
 # ── 한국어 불용어 (맥락 키워드 추출용) ──────────────────────────────────────
 _KO_STOPWORDS = {
-    "이", "그", "저", "것", "수", "등", "및", "또", "를", "을", "이", "가",
+    "이", "그", "저", "것", "수", "등", "및", "또", "를", "을", "가",
     "은", "는", "의", "에", "서", "와", "과", "도", "로", "으로", "하다",
-    "있다", "되다", "하고", "에서", "으로", "부터", "까지", "라고",
+    "있다", "되다", "하고", "에서", "부터", "까지", "라고",
 }
 
 
@@ -299,7 +303,8 @@ class STTEngine:
         self._load()
 
         # Korean context prompt — 모델이 한국어 발화 맥락을 인식하도록 유도한다.
-        # 이 prompt 없이는 base/small 모델이 잡음·침묵 구간에서 영어나 엉뚱한 단어를 생성하는 경향이 있다.
+        # 이 prompt 없이는 base/small 모델이 잡음·침묵 구간에서
+        # 영어나 엉뚱한 단어를 생성하는 경향이 있다.
         ko_prompt = "다음은 한국어 면접 또는 발표 내용입니다."
 
         if self._backend == "faster":
@@ -315,8 +320,12 @@ class STTEngine:
             )
             segments = list(segments_gen)
             transcript = "".join(s.text for s in segments).strip()
-            avg_logprob    = float(np.mean([s.avg_logprob    for s in segments])) if segments else -1.0
-            no_speech_prob = float(np.mean([s.no_speech_prob for s in segments])) if segments else 1.0
+            avg_logprob = (
+                float(np.mean([s.avg_logprob for s in segments])) if segments else -1.0
+            )
+            no_speech_prob = (
+                float(np.mean([s.no_speech_prob for s in segments])) if segments else 1.0
+            )
             seg_list = [
                 {
                     "start": round(s.start, 2),
@@ -389,13 +398,19 @@ class SpeechRateAnalyzer:
 
         if cpm < CPM_SLOW_THRESHOLD:
             level    = "SLOW"
-            feedback = "발화 속도가 느립니다. 좀 더 자신 있게 말해보세요."
+            feedback = (
+                f"발화 속도가 느립니다 (분당 {cpm}자·{wpm}어절). "
+                "자신감 있게 일정한 속도로 말해보세요."
+            )
         elif cpm > CPM_FAST_THRESHOLD:
             level    = "FAST"
-            feedback = "발화 속도가 다소 빠릅니다. 문장 사이에 짧은 pause를 두면 좋습니다."
+            feedback = (
+                f"발화 속도가 빠릅니다 (분당 {cpm}자·{wpm}어절). "
+                "문장 사이 짧은 pause를 두면 전달력이 높아집니다."
+            )
         else:
             level    = "NORMAL"
-            feedback = "발화 속도가 적절합니다."
+            feedback = f"발화 속도가 적절합니다 (분당 {cpm}자·{wpm}어절)."
 
         return {
             "cpm":      cpm,
@@ -424,15 +439,28 @@ class FillerWordAnalyzer:
         tokens  = cleaned.split()
         counts: dict[str, int] = {}
 
+        # 음절 반복 허용(어어어→어로 취급) + 단어 경계 매칭
         for f in _SINGLE_FILLERS:
-            n = tokens.count(f)
+            pat = re.compile(r'(?<!\w)' + re.escape(f) + r'+(?!\w)', re.UNICODE)
+            n = len(pat.findall(cleaned))
             if n:
                 counts[f] = n
 
+        # STT 공백 오차 흡수: "그러 니까" / "그러니까" 모두 매칭
         for f in _MULTI_FILLERS:
-            n = len(re.findall(re.escape(f), transcript))
+            parts = f.split()
+            pat = re.compile(r'\s+'.join(re.escape(p) for p in parts), re.UNICODE)
+            n = len(pat.findall(transcript))
             if n:
                 counts[f] = n
+
+        # 연속 동일 단어 반복 감지 (말더듬: "그 그 그", "어 어")
+        repeat_count = sum(
+            1 for i in range(len(tokens) - 1)
+            if tokens[i] == tokens[i + 1]
+        )
+        if repeat_count:
+            counts["(말더듬)"] = repeat_count
 
         total      = sum(counts.values())
         word_count = len(tokens)
@@ -442,7 +470,7 @@ class FillerWordAnalyzer:
             level    = "HIGH"
             feedback = (
                 "습관어 사용이 많습니다. "
-                "답변 시작 전 1초 정도 생각하고 말하는 것이 좋습니다."
+                "답변 시작 전 1~2초 생각하고 말하면 자연스러워집니다."
             )
         elif ratio >= FILLER_MEDIUM_RATIO:
             level    = "MEDIUM"
@@ -452,12 +480,12 @@ class FillerWordAnalyzer:
             feedback = "습관어 사용이 적절합니다."
 
         return {
-            "total_count": total,
-            "counts":      counts,
-            "word_count":  word_count,
+            "total_count":  total,
+            "counts":       counts,
+            "word_count":   word_count,
             "filler_ratio": round(ratio, 4),
-            "level":       level,
-            "feedback":    feedback,
+            "level":        level,
+            "feedback":     feedback,
         }
 
 
@@ -492,12 +520,13 @@ class ClarityAnalyzer:
             no_speech_prob = stt_result.get("no_speech_prob", 0.1)
             transcript_len = len(transcript.strip())
 
-            # logprob: 0 이상이면 매우 높은 신뢰, -2 이하면 낮음 → 0~100으로 매핑
-            logprob_score  = min(100, max(0, round((avg_logprob + 2) / 2 * 100)))
-            nsp_penalty    = round(no_speech_prob * 40)
-            empty_penalty  = 30 if transcript_len < 5 else 0
+            # 실제 발화 avg_logprob 분포: 맑은 발화 -0.3~-0.7, 불명확 -1.0~-1.5
+            # [-1.5, 0] → [0, 100] 매핑으로 실용 구간 감도 향상
+            logprob_score  = min(100, max(0, round((avg_logprob + 1.5) / 1.5 * 100)))
+            nsp_penalty    = round(no_speech_prob * 50)
+            length_penalty = 30 if transcript_len < 3 else (10 if transcript_len < 10 else 0)
 
-            score  = max(0, min(100, logprob_score - nsp_penalty - empty_penalty))
+            score  = max(0, min(100, logprob_score - nsp_penalty - length_penalty))
             method = "proxy"
 
         if score >= 80:
@@ -782,7 +811,7 @@ def dataset_speech_rate_stats(
     CPM 분포를 기반으로 SLOW/NORMAL/FAST 임계값을 제안한다.
     """
     cpms = []
-    for t, d in zip(transcripts, durations):
+    for t, d in zip(transcripts, durations, strict=False):
         if d > 0:
             chars = len(re.sub(r"[\s\W]", "", t))
             cpms.append(chars / d * 60)
@@ -1038,7 +1067,7 @@ def enrich_csv(input_csv: Path, output_csv: Path, stt_engine: STTEngine) -> None
 def _print_result(result: dict[str, Any]) -> None:
     """분석 결과를 콘솔에 보기 좋게 출력한다."""
     audio = result["audio"]
-    print(f"\n  [전사 텍스트]")
+    print("\n  [전사 텍스트]")
     t = audio["transcript"]
     print(f"    {t[:120]}{'...' if len(t)>120 else ''}")
 
@@ -1065,7 +1094,7 @@ def _print_result(result: dict[str, Any]) -> None:
         print(f"\n  [맥락 관련성]  {rv['score']}점  →  {rv['level']}")
         print(f"    {rv['feedback']}")
 
-    print(f"\n  [종합 피드백]")
+    print("\n  [종합 피드백]")
     print(f"    {audio['overall_feedback']}")
 
     m = audio["_meta"]
@@ -1191,7 +1220,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--question",      type=str, default=None, help="면접 질문 / 발표 주제")
     p.add_argument("--extract",       action="store_true", help="WAV 피처 추출 → CSV 저장")
     p.add_argument("--enrich",        action="store_true", help="기존 CSV에 STT 컬럼 추가")
-    p.add_argument("--stats",         action="store_true", help="데이터셋 습관어/발화속도 통계 출력")
+    p.add_argument(
+        "--stats",
+        action="store_true",
+        help="데이터셋 습관어/발화속도 통계 출력",
+    )
     p.add_argument("--whisper-model", default="small",
                    choices=["tiny", "base", "small", "medium", "large"],
                    help="Whisper 모델 크기 (기본: base)")

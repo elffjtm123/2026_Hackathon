@@ -40,6 +40,11 @@ export type RealtimeFeedback = {
     totalCount: number;
     counts?: Record<string, number>;
   };
+  pronunciation?: {
+    accuracy?: number | null;
+    message?: string | null;
+    method?: string | null;
+  };
   message?: string;
 };
 
@@ -54,8 +59,8 @@ export type PracticeSummary = {
   sessionId: string;
   durationSeconds: number;
   gazeAwayRatio: number;
+  pronunciationAccuracy: number | null;
   speechPaceWarningCount: number;
-  fillerTotalCount: number;
 };
 
 export type ClientRealtimeMessage =
@@ -96,6 +101,7 @@ export type BackendClientEvent =
       timestamp_ms: number;
       data: {
         text: string;
+        durationMs?: number;
       };
     }
   | {

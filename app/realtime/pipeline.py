@@ -7,7 +7,7 @@ from uuid import UUID
 
 from app.ai.base import AIResult, GazeAdapter, MediaPayload, SpeechAdapter
 from app.core.config import Settings
-from app.modules.pronunciation.service import estimate_pronunciation_clarity
+from app.modules.pronunciation.service import estimate_stt_pronunciation_accuracy
 from app.modules.script_sync.service import ScriptSyncService, analyze_script
 from app.realtime.aggregator import FeedbackAggregator
 from app.realtime.events import RealtimeEvent
@@ -47,6 +47,13 @@ class SessionPipeline:
         script = analysis_settings.get("script")
         time_limit = analysis_settings.get("time_limit_seconds")
         self.script_sync: ScriptSyncService | None = None
+        if isinstance(script, str) and script and isinstance(time_limit, int) and time_limit > 0:
+            self.script_sync = ScriptSyncService(analyze_script(script, time_limit))
+
+    def update_analysis_settings(self, settings: dict[str, Any]) -> None:
+        self.analysis_settings.update(settings)
+        script = self.analysis_settings.get("script")
+        time_limit = self.analysis_settings.get("time_limit_seconds")
         if isinstance(script, str) and script and isinstance(time_limit, int) and time_limit > 0:
             self.script_sync = ScriptSyncService(analyze_script(script, time_limit))
 
@@ -170,7 +177,11 @@ class SessionPipeline:
                     "speech_inference_failed",
                     extra={"session_id": self.session_id, "error_code": "SPEECH_AI_FAILED"},
                 )
-                await self.emit_error("SPEECH_AI_UNAVAILABLE", "음성 분석이 일시적으로 지연됩니다.")
+                await self.emit_error(
+                    "SPEECH_AI_UNAVAILABLE",
+                    "Whisper 음성 분석에 실패했습니다. "
+                    "백엔드 로그와 STT 모델 설치 상태를 확인하세요.",
+                )
             finally:
                 self.audio_queue.task_done()
 
@@ -191,7 +202,6 @@ class SessionPipeline:
             level="warning" if result.level == "warning" else "info",
         )
         if result.transcript:
-            await self._handle_transcript_analysis(result)
             name = "transcript.final" if result.is_final else "transcript.partial"
             await self.emit(
                 name,
@@ -199,41 +209,57 @@ class SessionPipeline:
                 {"text": result.transcript},
                 module="speech_rate",
             )
+            await self._handle_transcript_analysis(result)
 
     async def _handle_transcript_analysis(self, result: AIResult) -> None:
-        if self.script_sync is None or result.transcript is None:
+        if result.transcript is None:
             return
-        progress = self.script_sync.update(
-            result.transcript, result.timestamp_ms, is_final=bool(result.is_final)
-        )
-        self.aggregator.add_script_progress(progress, result.timestamp_ms)
-        if self.analysis_settings.get("karaoke_guide_enabled", True):
-            await self.emit(
-                "script.progress",
-                result.timestamp_ms,
-                progress,
-                module="script_sync",
-                level="warning" if progress["pace_status"] != "on_time" else "info",
+        progress: dict[str, Any] | None = None
+        if self.script_sync is not None:
+            progress = self.script_sync.update(
+                result.transcript, result.timestamp_ms, is_final=bool(result.is_final)
             )
+            self.aggregator.add_script_progress(progress, result.timestamp_ms)
+            if self.analysis_settings.get("karaoke_guide_enabled", True):
+                await self.emit(
+                    "script.progress",
+                    result.timestamp_ms,
+                    progress,
+                    module="script_sync",
+                    level="warning" if progress["pace_status"] != "on_time" else "info",
+                )
         if not result.is_final or not self.analysis_settings.get("pronunciation_enabled", True):
             return
-        plan = self.script_sync.plan.timeline
-        cursor = int(progress["current_token_index"])
-        start = max(0, cursor - max(1, len(result.transcript.split())) + 1)
-        expected = " ".join(str(item["text"]) for item in plan[start : cursor + 1])
-        pronunciation = estimate_pronunciation_clarity(expected, result.transcript)
+        expected = None
+        if self.script_sync is not None and progress is not None:
+            plan = self.script_sync.plan.timeline
+            cursor = int(progress["current_token_index"])
+            start = max(0, cursor - max(1, len(result.transcript.split())) + 1)
+            expected = " ".join(str(item["text"]) for item in plan[start : cursor + 1])
+        pronunciation = estimate_stt_pronunciation_accuracy(
+            result.transcript,
+            reference_text=expected,
+            avg_logprob=result.metrics.get("avg_logprob"),
+            no_speech_prob=result.metrics.get("no_speech_prob"),
+        )
         self.aggregator.add_pronunciation(pronunciation, result.timestamp_ms)
+        level = (
+            "warning"
+            if pronunciation.get("pronunciation_clarity_score") is not None
+            and float(pronunciation["pronunciation_clarity_score"]) < 80
+            else "info"
+        )
         await self.emit(
             "feedback",
             result.timestamp_ms,
-            pronunciation,
+            {
+                "source": "pronunciation",
+                "level": level,
+                "message": pronunciation["message"],
+                "metrics": pronunciation,
+            },
             module="pronunciation",
-            level=(
-                "warning"
-                if pronunciation.get("pronunciation_clarity_score") is not None
-                and float(pronunciation["pronunciation_clarity_score"]) < 80
-                else "info"
-            ),
+            level=level,
         )
 
     def elapsed_ms(self) -> int:

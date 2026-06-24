@@ -63,3 +63,30 @@ def estimate_pronunciation_clarity(
             else "표시된 음절을 조금 더 또렷하게 발음해보세요."
         ),
     }
+
+
+def estimate_stt_pronunciation_accuracy(
+    recognized: str,
+    *,
+    reference_text: str | None = None,
+    avg_logprob: float | None = None,
+    no_speech_prob: float | None = None,
+) -> dict[str, Any]:
+    from stt import ClarityAnalyzer
+
+    stt_result = {
+        "avg_logprob": -0.5 if avg_logprob is None else avg_logprob,
+        "no_speech_prob": 0.1 if no_speech_prob is None else no_speech_prob,
+    }
+    result = ClarityAnalyzer().analyze(recognized, stt_result, reference_text)
+    score = float(result["score"])
+    return {
+        "status": str(result["level"]).lower(),
+        "pronunciation_clarity_score": round(score, 1),
+        "confidence": round(max(0.0, min(1.0, score / 100)), 2),
+        "expected": reference_text,
+        "recognized": recognized,
+        "difficult_units": [],
+        "method": f"stt_{result['method']}",
+        "message": result["feedback"],
+    }

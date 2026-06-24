@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 
 from app.ai.base import GazeAdapter, SpeechAdapter
 from app.ai.http import HTTPGazeAdapter, HTTPSpeechAdapter
+from app.ai.local_stt import create_local_whisper_speech_adapter
 from app.ai.mock import MockGazeAdapter, MockSpeechAdapter
 from app.api.health import router as health_router
 from app.api.v1.auth import router as auth_router
@@ -62,7 +63,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             http_clients = [http_gaze.client, http_speech.client]
         else:
             gaze = MockGazeAdapter()
-            speech = MockSpeechAdapter()
+            if settings.stt_provider == "whisper":
+                try:
+                    speech = create_local_whisper_speech_adapter()
+                except RuntimeError as exc:
+                    logger.warning("local_whisper_unavailable", extra={"reason": str(exc)})
+                    speech = MockSpeechAdapter()
+            else:
+                speech = MockSpeechAdapter()
         app.state.settings = settings
         app.state.database = database
         app.state.state_store = state_store

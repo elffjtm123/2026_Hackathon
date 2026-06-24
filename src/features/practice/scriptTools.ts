@@ -18,6 +18,26 @@ const hangulPattern = /[가-힣]/g;
 const tokenPattern = /\S+/g;
 const sentenceEndPattern = /[.!?。！？]+$/;
 const clauseEndPattern = /[,;:，；：]+$/;
+const keywordStopwords = new Set([
+  "그리고",
+  "그러나",
+  "그래서",
+  "저는",
+  "제가",
+  "우리",
+  "오늘",
+  "이것",
+  "그것",
+  "있는",
+  "없는",
+  "합니다",
+  "했습니다",
+  "됩니다",
+  "입니다",
+  "통해",
+  "대한",
+  "위해",
+]);
 
 export function normalizeScript(text: string) {
   return text.trim().split(/\s+/).filter(Boolean).join(" ");
@@ -100,6 +120,59 @@ export function transformScript(script: string, style: string) {
   const opening = openings[style] ?? openings.concise;
   const closing = closings[style] ?? closings.concise;
   return `${opening} ${normalized} ${closing}`;
+}
+
+function cleanKeywordToken(token: string) {
+  return token.replace(/[^\w가-힣]/g, "");
+}
+
+function characterNgrams(text: string) {
+  if (text.length <= 2) {
+    return new Set([text]);
+  }
+
+  const grams = new Set<string>();
+  for (let index = 0; index <= text.length - 2; index += 1) {
+    grams.add(text.slice(index, index + 2));
+  }
+  return grams;
+}
+
+function attentionSimilarity(left: Set<string>, right: Set<string>) {
+  const overlap = [...left].filter((gram) => right.has(gram)).length;
+  return overlap / Math.sqrt(Math.max(1, left.size * right.size));
+}
+
+export function selectAttentionKeyword(tokens: string[]) {
+  const candidates = tokens
+    .map((token, sentenceIndex) => ({
+      sentenceIndex,
+      text: cleanKeywordToken(token),
+    }))
+    .filter(({ text }) => text.length >= 2 && !keywordStopwords.has(text));
+
+  if (!candidates.length) {
+    return null;
+  }
+
+  const vectors = candidates.map(({ text }) => characterNgrams(text));
+  const scored = candidates.map((candidate, index) => {
+    const attention = vectors.reduce((sum, vector, otherIndex) => {
+      if (index === otherIndex) {
+        return sum;
+      }
+
+      return sum + attentionSimilarity(vectors[index], vector);
+    }, 0);
+    const lengthBonus = Math.min(candidate.text.length / 8, 1);
+    const positionBonus = 1 - candidate.sentenceIndex / Math.max(tokens.length, 1) * 0.2;
+    return {
+      ...candidate,
+      score: attention + lengthBonus + positionBonus,
+    };
+  });
+
+  return scored.sort((left, right) => right.score - left.score)[0]?.text ?? null;
 }
 
 export function formatTime(seconds: number) {

@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { FeedbackOverlay } from "./components/FeedbackOverlay";
 import { FeedbackPanel } from "./components/FeedbackPanel";
 import { FeatureToggles } from "./components/FeatureToggles";
@@ -19,20 +19,12 @@ export function PracticePage() {
   const media = useUserMedia();
   const [isStarting, setIsStarting] = useState(false);
   const [presentationScript, setPresentationScript] = useState(
-    "안녕하세요. 오늘은 실시간 발표 피드백 서비스의 핵심 기능을 소개하겠습니다. 이 서비스는 시선, 발화 속도, 습관어를 실시간으로 확인해 발표자가 더 안정적으로 연습할 수 있도록 돕습니다."
+    "안녕하세요. 오늘은 실시간 발표 피드백 서비스의 핵심 기능을 소개하겠습니다. 이 서비스는 시선, 발화 속도, 발음 정확도를 확인해 발표자가 더 안정적으로 연습할 수 있도록 돕습니다."
   );
   const [activePresentationScript, setActivePresentationScript] =
     useState(presentationScript);
   const [timeLimitSeconds, setTimeLimitSeconds] = useState(180);
-  const [interviewTranscriptText, setInterviewTranscriptText] = useState(
-    "음 저는 오늘 프로젝트의 핵심 기능을 소개하겠습니다."
-  );
   const socket = useFeedbackSocket(session.receiveFeedback);
-  const transcriptText =
-    session.mode === "presentation"
-      ? activePresentationScript
-      : interviewTranscriptText;
-
   const isMockMode = useMemo(
     () =>
       session.isRunning &&
@@ -49,9 +41,8 @@ export function PracticePage() {
   useBackendStreaming({
     isActive: session.isRunning && socket.status === "connected",
     stream: media.stream,
-    transcriptText,
-    sendTranscript: socket.sendTranscript,
     sendVideoFrame: socket.sendVideoFrame,
+    sendAudioChunk: socket.sendAudioChunk,
   });
 
   const handleStart = useCallback(async () => {
@@ -100,6 +91,22 @@ export function PracticePage() {
     media.stopMedia();
     session.endSession();
   }, [media, session, socket]);
+
+  useEffect(() => {
+    if (
+      session.mode === "presentation" &&
+      session.isRunning &&
+      session.elapsedSeconds >= timeLimitSeconds
+    ) {
+      handleEnd();
+    }
+  }, [
+    handleEnd,
+    session.elapsedSeconds,
+    session.isRunning,
+    session.mode,
+    timeLimitSeconds,
+  ]);
 
   return (
     <main className="practice-shell">
@@ -164,18 +171,6 @@ export function PracticePage() {
           isMockMode={isMockMode}
         />
       </div>
-
-      {session.mode === "interview" ? (
-        <section className="speech-input-panel" aria-label="백엔드 발화 분석 입력">
-          <label htmlFor="transcript-text">백엔드로 보낼 발화 텍스트</label>
-          <textarea
-            id="transcript-text"
-            value={interviewTranscriptText}
-            onChange={(event) => setInterviewTranscriptText(event.target.value)}
-            rows={3}
-          />
-        </section>
-      ) : null}
 
       <SessionSummary summary={session.summary} />
 

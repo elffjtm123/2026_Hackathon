@@ -32,11 +32,14 @@ export function usePracticeSession() {
   const [latestFeedback, setLatestFeedback] =
     useState<RealtimeFeedback | null>(null);
   const [gazeAwayDurationMs, setGazeAwayDurationMs] = useState(0);
+  const [pronunciationAccuracy, setPronunciationAccuracy] = useState<
+    number | null
+  >(null);
   const [speechPaceWarningCount, setSpeechPaceWarningCount] = useState(0);
-  const [fillerTotalCount, setFillerTotalCount] = useState(0);
   const gazeAwayDurationMsRef = useRef(0);
   const lastGazeSampleAtRef = useRef<number | null>(null);
   const lastGazeWasAwayRef = useRef(false);
+  const pronunciationScoresRef = useRef<number[]>([]);
 
   const isRunning = startedAt !== null && endedAt === null;
 
@@ -66,11 +69,12 @@ export function usePracticeSession() {
     setNow(Date.now());
     setLatestFeedback(null);
     setGazeAwayDurationMs(0);
+    setPronunciationAccuracy(null);
     setSpeechPaceWarningCount(0);
-    setFillerTotalCount(0);
     gazeAwayDurationMsRef.current = 0;
     lastGazeSampleAtRef.current = null;
     lastGazeWasAwayRef.current = false;
+    pronunciationScoresRef.current = [];
     return nextSessionId;
   }, []);
 
@@ -96,7 +100,6 @@ export function usePracticeSession() {
 
   const receiveFeedback = useCallback((feedback: RealtimeFeedback) => {
     setLatestFeedback(feedback);
-    setFillerTotalCount(feedback.filler.totalCount);
 
     if (feedback.source === undefined || feedback.source === "gaze") {
       const observedAt = feedback.timestamp || Date.now();
@@ -111,7 +114,23 @@ export function usePracticeSession() {
       lastGazeWasAwayRef.current = gazeAwayStatuses.has(feedback.gaze.status);
     }
 
-    if (speechWarningStatuses.has(feedback.speech.pace)) {
+    const accuracy = feedback.pronunciation?.accuracy;
+    if (typeof accuracy === "number" && Number.isFinite(accuracy)) {
+      pronunciationScoresRef.current = [
+        ...pronunciationScoresRef.current,
+        accuracy,
+      ];
+      const total = pronunciationScoresRef.current.reduce(
+        (sum, score) => sum + score,
+        0
+      );
+      setPronunciationAccuracy(total / pronunciationScoresRef.current.length);
+    }
+
+    if (
+      (feedback.source === undefined || feedback.source === "speech_rate") &&
+      speechWarningStatuses.has(feedback.speech.pace)
+    ) {
       setSpeechPaceWarningCount((count) => count + 1);
     }
   }, []);
@@ -125,8 +144,11 @@ export function usePracticeSession() {
             elapsedSeconds > 0
               ? Math.min(1, gazeAwayDurationMs / (elapsedSeconds * 1000))
               : 0,
+          pronunciationAccuracy:
+            pronunciationAccuracy === null
+              ? null
+              : Math.round(pronunciationAccuracy * 10) / 10,
           speechPaceWarningCount,
-          fillerTotalCount,
         }
       : null;
 

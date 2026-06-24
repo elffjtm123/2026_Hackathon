@@ -14,6 +14,10 @@ function formatPercent(ratio: number) {
   return `${Math.round(ratio * 100)}%`;
 }
 
+function formatAccuracy(score: number | null) {
+  return score === null ? "분석 없음" : `${Math.round(score)}점`;
+}
+
 export function SessionSummary({ summary }: SessionSummaryProps) {
   if (!summary) {
     return null;
@@ -32,12 +36,12 @@ export function SessionSummary({ summary }: SessionSummaryProps) {
           <dd>{formatPercent(summary.gazeAwayRatio)}</dd>
         </div>
         <div>
-          <dt>속도 경고</dt>
-          <dd>{summary.speechPaceWarningCount}회</dd>
+          <dt>발음 정확도</dt>
+          <dd>{formatAccuracy(summary.pronunciationAccuracy)}</dd>
         </div>
         <div>
-          <dt>습관어</dt>
-          <dd>{summary.fillerTotalCount}회</dd>
+          <dt>속도 경고</dt>
+          <dd>{summary.speechPaceWarningCount}회</dd>
         </div>
       </dl>
     </section>

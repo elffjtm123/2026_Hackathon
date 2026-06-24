@@ -44,19 +44,6 @@ export function FeedbackPanel({
             <strong>{feedback.speech.pace}</strong>
             <p>{feedback.speech.message}</p>
           </div>
-          <div>
-            <span className="label">습관어</span>
-            <strong>{feedback.filler.totalCount}회</strong>
-            <div className="filler-list">
-              {Object.entries(feedback.filler.counts ?? {}).map(
-                ([word, count]) => (
-                  <span key={word}>
-                    {word} {count}
-                  </span>
-                )
-              )}
-            </div>
-          </div>
         </div>
       ) : (
         <p className="muted-text">세션을 시작하면 피드백이 표시됩니다.</p>

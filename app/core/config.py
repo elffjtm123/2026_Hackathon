@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     ai_read_timeout_seconds: float = 2.0
     ai_max_retries: int = 2
     vision_provider: str = "mock"
-    stt_provider: str = "mock"
+    stt_provider: str = "whisper"
     pronunciation_provider: str = "alignment"
     llm_provider: str = "mock"
     llm_base_url: str | None = None

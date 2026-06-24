@@ -31,6 +31,7 @@ ai = [
   "opencv-python>=4.10,<4.11",
   "scikit-learn>=1.5,<2",
   "tqdm>=4.67,<5",
+  "faster-whisper>=1.1,<2",
 ]
 dev = [
   "aiosqlite>=0.20,<1",

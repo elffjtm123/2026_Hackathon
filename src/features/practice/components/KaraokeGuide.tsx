@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { analyzeScript, formatTime } from "../scriptTools";
+import { analyzeScript, formatTime, selectAttentionKeyword } from "../scriptTools";
 
 type KaraokeGuideProps = {
   script: string;
@@ -46,12 +46,9 @@ export function KaraokeGuide({
     sentenceStart,
     Math.min(plan.timeline.length, sentenceEnd)
   );
-  const keywordHints = plan.timeline
-    .slice(sentenceStart, Math.min(plan.timeline.length, sentenceEnd))
-    .map((item) => item.text.replace(/[^\w가-힣]/g, ""))
-    .filter((word) => word.length >= 2)
-    .sort((left, right) => right.length - left.length)
-    .slice(0, 4);
+  const keywordHint = selectAttentionKeyword(
+    sentenceTokens.map((item) => item.text)
+  );
 
   if ((!karaokeEnabled && !keywordHintEnabled) || !plan.normalizedScript) {
     return null;
@@ -64,11 +61,7 @@ export function KaraokeGuide({
       </div>
       {keywordHintEnabled ? (
         <div className="keyword-hints" aria-live="polite">
-          {keywordHints.length ? (
-            keywordHints.map((word) => <span key={word}>{word}</span>)
-          ) : (
-            <span>{current ? current.text : "힌트 대기"}</span>
-          )}
+          <span>{keywordHint ?? current?.text ?? "힌트 대기"}</span>
         </div>
       ) : (
         <div className="karaoke-line" aria-live="polite">

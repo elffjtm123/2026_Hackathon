@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect } from "react";
 import type {
   FeedbackSeverity,
   GazeStatus,
@@ -20,8 +20,6 @@ const speechStatuses: SpeechPaceStatus[] = [
   "fast",
   "slow",
 ];
-const fillerWords = ["음", "어", "그"];
-
 function pick<T>(items: T[]) {
   return items[Math.floor(Math.random() * items.length)];
 }
@@ -46,12 +44,6 @@ export function useMockFeedback(
   sessionId: string | null,
   onFeedback: (feedback: RealtimeFeedback) => void
 ) {
-  const fillerCountsRef = useRef<Record<string, number>>({
-    "음": 0,
-    "어": 0,
-    "그": 0,
-  });
-
   useEffect(() => {
     if (!isActive || !sessionId) {
       return;
@@ -60,20 +52,6 @@ export function useMockFeedback(
     const createFeedback = () => {
       const gaze = pick(gazeStatuses);
       const speech = pick(speechStatuses);
-      const shouldAddFiller = Math.random() > 0.45;
-      const latestWord = shouldAddFiller ? pick(fillerWords) : undefined;
-
-      if (latestWord) {
-        fillerCountsRef.current = {
-          ...fillerCountsRef.current,
-          [latestWord]: fillerCountsRef.current[latestWord] + 1,
-        };
-      }
-
-      const totalCount = Object.values(fillerCountsRef.current).reduce(
-        (sum, count) => sum + count,
-        0
-      );
       const severity = severityFor(gaze, speech);
 
       onFeedback({
@@ -99,9 +77,8 @@ export function useMockFeedback(
               : "발화 속도를 조금 조정해보세요.",
         },
         filler: {
-          latestWord,
-          totalCount,
-          counts: fillerCountsRef.current,
+          totalCount: 0,
+          counts: {},
         },
         message:
           severity === "info"
@@ -118,14 +95,4 @@ export function useMockFeedback(
 
     return () => window.clearInterval(intervalId);
   }, [isActive, onFeedback, sessionId]);
-
-  useEffect(() => {
-    if (!isActive) {
-      fillerCountsRef.current = {
-        "음": 0,
-        "어": 0,
-        "그": 0,
-      };
-    }
-  }, [isActive]);
 }

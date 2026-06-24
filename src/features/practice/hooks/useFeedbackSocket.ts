@@ -56,12 +56,16 @@ export function useFeedbackSocket(
     }
   }, []);
 
-  const sendTranscript = useCallback((text: string, isFinal = true) => {
+  const sendTranscript = useCallback((
+    text: string,
+    isFinal = true,
+    durationMs?: number
+  ) => {
     if (socketRef.current?.readyState === WebSocket.OPEN) {
       const event: BackendClientEvent = {
         event: isFinal ? "transcript.final" : "transcript.partial",
         timestamp_ms: Date.now(),
-        data: { text },
+        data: { text, durationMs },
       };
       socketRef.current.send(JSON.stringify(event));
     }
@@ -76,6 +80,21 @@ export function useFeedbackSocket(
       const timestamp = BigInt(Date.now());
       const bytes = new Uint8Array(9 + buffer.byteLength);
       bytes[0] = 0x01;
+      new DataView(bytes.buffer).setBigUint64(1, timestamp, false);
+      bytes.set(new Uint8Array(buffer), 9);
+      socketRef.current?.send(bytes);
+    });
+  }, []);
+
+  const sendAudioChunk = useCallback((payload: Blob) => {
+    if (socketRef.current?.readyState !== WebSocket.OPEN) {
+      return;
+    }
+
+    void payload.arrayBuffer().then((buffer) => {
+      const timestamp = BigInt(Date.now());
+      const bytes = new Uint8Array(9 + buffer.byteLength);
+      bytes[0] = 0x02;
       new DataView(bytes.buffer).setBigUint64(1, timestamp, false);
       bytes.set(new Uint8Array(buffer), 9);
       socketRef.current?.send(bytes);
@@ -161,5 +180,6 @@ export function useFeedbackSocket(
     send,
     sendTranscript,
     sendVideoFrame,
+    sendAudioChunk,
   };
 }
