@@ -7,6 +7,8 @@ from uuid import UUID
 
 from app.ai.base import AIResult, GazeAdapter, MediaPayload, SpeechAdapter
 from app.core.config import Settings
+from app.modules.pronunciation.service import estimate_pronunciation_clarity
+from app.modules.script_sync.service import ScriptSyncService, analyze_script
 from app.realtime.aggregator import FeedbackAggregator
 from app.realtime.events import RealtimeEvent
 from app.realtime.queues import DropOldestQueue
@@ -42,6 +44,11 @@ class SessionPipeline:
         self.sequence = 0
         self.started_monotonic = time.monotonic()
         self._sequence_lock = asyncio.Lock()
+        script = analysis_settings.get("script")
+        time_limit = analysis_settings.get("time_limit_seconds")
+        self.script_sync: ScriptSyncService | None = None
+        if isinstance(script, str) and script and isinstance(time_limit, int) and time_limit > 0:
+            self.script_sync = ScriptSyncService(analyze_script(script, time_limit))
 
     async def start(self) -> None:
         if self.running:
@@ -100,7 +107,15 @@ class SessionPipeline:
         await self.emit("session.completed", self.elapsed_ms(), {"report": report["summary"]})
         return report
 
-    async def emit(self, event_name: str, timestamp_ms: int, data: dict[str, Any]) -> RealtimeEvent:
+    async def emit(
+        self,
+        event_name: str,
+        timestamp_ms: int,
+        data: dict[str, Any],
+        *,
+        module: str = "system",
+        level: str = "info",
+    ) -> RealtimeEvent:
         async with self._sequence_lock:
             self.sequence += 1
             event = RealtimeEvent(
@@ -108,6 +123,8 @@ class SessionPipeline:
                 session_id=self.session_id,
                 sequence=self.sequence,
                 timestamp_ms=max(0, timestamp_ms),
+                module=module,  # type: ignore[arg-type]
+                level=level,  # type: ignore[arg-type]
                 data=data,
             )
         results = await asyncio.gather(
@@ -170,10 +187,54 @@ class SessionPipeline:
                 "metrics": result.metrics,
                 "ai_latency_ms": result.latency_ms,
             },
+            module=result.source,
+            level="warning" if result.level == "warning" else "info",
         )
         if result.transcript:
+            await self._handle_transcript_analysis(result)
             name = "transcript.final" if result.is_final else "transcript.partial"
-            await self.emit(name, result.timestamp_ms, {"text": result.transcript})
+            await self.emit(
+                name,
+                result.timestamp_ms,
+                {"text": result.transcript},
+                module="speech_rate",
+            )
+
+    async def _handle_transcript_analysis(self, result: AIResult) -> None:
+        if self.script_sync is None or result.transcript is None:
+            return
+        progress = self.script_sync.update(
+            result.transcript, result.timestamp_ms, is_final=bool(result.is_final)
+        )
+        self.aggregator.add_script_progress(progress, result.timestamp_ms)
+        if self.analysis_settings.get("karaoke_guide_enabled", True):
+            await self.emit(
+                "script.progress",
+                result.timestamp_ms,
+                progress,
+                module="script_sync",
+                level="warning" if progress["pace_status"] != "on_time" else "info",
+            )
+        if not result.is_final or not self.analysis_settings.get("pronunciation_enabled", True):
+            return
+        plan = self.script_sync.plan.timeline
+        cursor = int(progress["current_token_index"])
+        start = max(0, cursor - max(1, len(result.transcript.split())) + 1)
+        expected = " ".join(str(item["text"]) for item in plan[start : cursor + 1])
+        pronunciation = estimate_pronunciation_clarity(expected, result.transcript)
+        self.aggregator.add_pronunciation(pronunciation, result.timestamp_ms)
+        await self.emit(
+            "feedback",
+            result.timestamp_ms,
+            pronunciation,
+            module="pronunciation",
+            level=(
+                "warning"
+                if pronunciation.get("pronunciation_clarity_score") is not None
+                and float(pronunciation["pronunciation_clarity_score"]) < 80
+                else "info"
+            ),
+        )
 
     def elapsed_ms(self) -> int:
         return int((time.monotonic() - self.started_monotonic) * 1000)

@@ -5,9 +5,11 @@ from fastapi import APIRouter, Query, Request
 from sqlalchemy import select
 
 from app.api.deps import CurrentUser, DBSession
+from app.api.v1.scripts import validate_script
 from app.core.errors import AppError
 from app.db.models.report import SessionReport
 from app.db.models.session import PracticeSession, SessionStatus
+from app.modules.script_sync.service import analyze_script
 from app.schemas.session import (
     ReportResponse,
     SessionCreate,
@@ -28,12 +30,33 @@ router = APIRouter(prefix="/sessions", tags=["sessions"])
 
 @router.post("", response_model=SessionResponse, status_code=201)
 async def create_session(
-    payload: SessionCreate, user: CurrentUser, db: DBSession
+    payload: SessionCreate, request: Request, user: CurrentUser, db: DBSession
 ) -> PracticeSession:
+    script = None
+    plan = None
+    if payload.script is not None or payload.time_limit_seconds is not None:
+        if payload.script is None:
+            raise AppError("SCRIPT_REQUIRED", "대본을 입력해 주세요.", 422)
+        if payload.time_limit_seconds is None:
+            raise AppError("INVALID_TIME_LIMIT", "제한시간을 입력해 주세요.", 422)
+        script = validate_script(payload.script, payload.time_limit_seconds, request)
+        plan = analyze_script(script, payload.time_limit_seconds)
+        if plan.target_syllables_per_minute > 600:
+            raise AppError(
+                "UNREALISTIC_TARGET_PACE",
+                "대본 길이와 제한시간으로 계산한 목표 속도가 비현실적입니다.",
+                422,
+                {"target_syllables_per_minute": plan.target_syllables_per_minute},
+            )
     session = PracticeSession(
         user_id=user.id,
         type=payload.type,
         title=payload.title.strip(),
+        original_script=script,
+        active_script=script,
+        time_limit_seconds=payload.time_limit_seconds,
+        script_syllable_count=plan.syllable_count if plan else None,
+        target_syllables_per_minute=plan.target_syllables_per_minute if plan else None,
         settings=payload.settings.model_dump(),
     )
     db.add(session)
@@ -70,7 +93,14 @@ async def webrtc_offer(
     if session.status not in {SessionStatus.created, SessionStatus.active}:
         raise AppError("INVALID_SESSION_STATE", "종료된 세션에는 연결할 수 없습니다.", 409)
     await activate_session(db, session)
-    pipeline = await request.app.state.pipelines.get_or_create(session.id, session.settings)
+    pipeline = await request.app.state.pipelines.get_or_create(
+        session.id,
+        {
+            **session.settings,
+            "script": session.active_script,
+            "time_limit_seconds": session.time_limit_seconds,
+        },
+    )
     try:
         answer = await request.app.state.webrtc.create_answer(
             session.id, payload.sdp, payload.type, pipeline

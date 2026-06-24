@@ -5,6 +5,7 @@ export type {
   FeedbackSeverity,
   GazeStatus,
   PracticeMode,
+  PresentationFeatureSettings,
   PracticeSummary,
   RealtimeFeedback,
   ServerRealtimeMessage,

@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import JSON, DateTime, Float, ForeignKey, Integer, Text, func
+from sqlalchemy import JSON, DateTime, Float, ForeignKey, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -19,6 +19,9 @@ class SessionReport(Base):
     gaze_score: Mapped[float] = mapped_column(Float)
     speech_rate_score: Mapped[float] = mapped_column(Float)
     filler_word_score: Mapped[float] = mapped_column(Float)
+    pronunciation_clarity_score: Mapped[float | None] = mapped_column(Float)
+    script_completion_ratio: Mapped[float | None] = mapped_column(Float)
+    time_adherence_score: Mapped[float | None] = mapped_column(Float)
     gaze_away_count: Mapped[int] = mapped_column(Integer, default=0)
     gaze_away_duration_ms: Mapped[int] = mapped_column(Integer, default=0)
     average_syllables_per_minute: Mapped[float] = mapped_column(Float, default=0)
@@ -26,6 +29,11 @@ class SessionReport(Base):
     transcript: Mapped[str | None] = mapped_column(Text)
     timeline: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
     summary: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    gaze_metrics: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    speech_rate_metrics: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    pronunciation_metrics: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    script_sync_metrics: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    scoring_version: Mapped[str] = mapped_column(String(20), default="v1")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

@@ -206,7 +206,11 @@ async def session_websocket(websocket: WebSocket, session_id: UUID, token: str) 
             from app.services.session_service import activate_session
 
             await activate_session(db, session)
-        analysis_settings = session.settings
+        analysis_settings = {
+            **session.settings,
+            "script": session.active_script,
+            "time_limit_seconds": session.time_limit_seconds,
+        }
 
     await websocket.accept()
     websocket.app.state.websocket_counts[session_id] = connection_count + 1
