@@ -130,6 +130,127 @@ button:disabled {
   justify-content: flex-end;
 }
 
+.feature-settings {
+  margin-top: 14px;
+  border: 1px solid #dde4e6;
+  border-radius: 8px;
+  padding: 16px;
+  background: #ffffff;
+}
+
+.feature-settings__header,
+.feature-toggle,
+.switch {
+  display: flex;
+  align-items: center;
+}
+
+.feature-settings__header {
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.feature-settings__header .eyebrow {
+  margin-bottom: 3px;
+}
+
+.settings-lock {
+  border-radius: 999px;
+  padding: 5px 10px;
+  background: #edf2f3;
+  color: #66777d;
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.feature-settings__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.feature-toggle {
+  justify-content: space-between;
+  gap: 18px;
+  min-height: 88px;
+  border: 1px solid #e2e8ea;
+  border-radius: 8px;
+  padding: 14px;
+  background: #f8fafb;
+}
+
+.feature-toggle__copy {
+  display: grid;
+  gap: 5px;
+}
+
+.feature-toggle__copy > span {
+  color: #66777d;
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.switch {
+  position: relative;
+  flex: 0 0 auto;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.switch input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+
+.switch__track {
+  position: relative;
+  width: 46px;
+  height: 26px;
+  border-radius: 999px;
+  background: #aab7ba;
+  transition: background 160ms ease;
+}
+
+.switch__track::after {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.24);
+  content: "";
+  transition: transform 160ms ease;
+}
+
+.switch input:checked + .switch__track {
+  background: #1c6b68;
+}
+
+.switch input:checked + .switch__track::after {
+  transform: translateX(20px);
+}
+
+.switch input:focus-visible + .switch__track {
+  outline: 3px solid rgb(28 107 104 / 0.25);
+  outline-offset: 2px;
+}
+
+.switch input:disabled + .switch__track {
+  opacity: 0.5;
+}
+
+.switch__status {
+  min-width: 28px;
+  color: #3f5157;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
 .practice-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 340px;
@@ -333,6 +454,7 @@ button:disabled {
 @media (max-width: 860px) {
   .controls-bar,
   .practice-layout,
+  .feature-settings__grid,
   .summary-grid {
     grid-template-columns: 1fr;
   }

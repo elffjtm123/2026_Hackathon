@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState } from "react";
 import { FeedbackOverlay } from "./components/FeedbackOverlay";
 import { FeedbackPanel } from "./components/FeedbackPanel";
+import { FeatureToggles } from "./components/FeatureToggles";
 import { SessionControls } from "./components/SessionControls";
 import { SessionSummary } from "./components/SessionSummary";
 import { VideoPreview } from "./components/VideoPreview";
@@ -34,7 +35,7 @@ export function PracticePage() {
     try {
       const nextSessionId = session.startSession();
       await media.startMedia();
-      socket.connect(nextSessionId, session.mode);
+      socket.connect(nextSessionId, session.mode, session.featureSettings);
     } catch {
       session.endSession();
       media.stopMedia();
@@ -76,6 +77,14 @@ export function PracticePage() {
         onStart={handleStart}
         onEnd={handleEnd}
       />
+
+      {session.mode === "presentation" ? (
+        <FeatureToggles
+          settings={session.featureSettings}
+          disabled={session.isRunning || isStarting}
+          onChange={session.setFeatureEnabled}
+        />
+      ) : null}
 
       {media.error ? <p className="error-banner">{media.error}</p> : null}
 

@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { PracticeMode, PracticeSummary, RealtimeFeedback } from "../types";
+import type {
+  PracticeMode,
+  PracticeSummary,
+  PresentationFeatureSettings,
+  RealtimeFeedback,
+} from "../types";
 
 const gazeAwayStatuses = new Set(["away", "left", "right", "up", "down"]);
 const speechWarningStatuses = new Set(["fast", "slow"]);
@@ -14,6 +19,11 @@ function createSessionId() {
 
 export function usePracticeSession() {
   const [mode, setMode] = useState<PracticeMode>("interview");
+  const [featureSettings, setFeatureSettings] =
+    useState<PresentationFeatureSettings>({
+      karaokeGuideEnabled: true,
+      styleTransferEnabled: true,
+    });
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [endedAt, setEndedAt] = useState<number | null>(null);
@@ -61,6 +71,13 @@ export function usePracticeSession() {
     setEndedAt(Date.now());
   }, []);
 
+  const setFeatureEnabled = useCallback(
+    (feature: keyof PresentationFeatureSettings, enabled: boolean) => {
+      setFeatureSettings((current) => ({ ...current, [feature]: enabled }));
+    },
+    []
+  );
+
   const receiveFeedback = useCallback((feedback: RealtimeFeedback) => {
     setLatestFeedback(feedback);
     setFillerTotalCount(feedback.filler.totalCount);
@@ -88,6 +105,8 @@ export function usePracticeSession() {
   return {
     mode,
     setMode,
+    featureSettings,
+    setFeatureEnabled,
     sessionId,
     isRunning,
     elapsedSeconds,

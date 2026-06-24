@@ -3,6 +3,7 @@ import type {
   ClientRealtimeMessage,
   ConnectionStatus,
   PracticeMode,
+  PresentationFeatureSettings,
   RealtimeFeedback,
   ServerRealtimeMessage,
 } from "../types";
@@ -31,7 +32,11 @@ export function useFeedbackSocket(
   }, []);
 
   const connect = useCallback(
-    (sessionId: string, mode: PracticeMode) => {
+    (
+      sessionId: string,
+      mode: PracticeMode,
+      settings: PresentationFeatureSettings
+    ) => {
       if (!feedbackWsUrl) {
         setStatus("disconnected");
         setError(null);
@@ -50,6 +55,7 @@ export function useFeedbackSocket(
           type: "session.start",
           sessionId,
           mode,
+          settings,
           timestamp: Date.now(),
         });
       };

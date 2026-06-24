@@ -13,6 +13,7 @@ from app.ai.http import HTTPGazeAdapter, HTTPSpeechAdapter
 from app.ai.mock import MockGazeAdapter, MockSpeechAdapter
 from app.api.health import router as health_router
 from app.api.v1.auth import router as auth_router
+from app.api.v1.scripts import router as scripts_router
 from app.api.v1.sessions import router as sessions_router
 from app.api.v1.websocket import router as websocket_router
 from app.core.config import Settings, get_settings
@@ -123,6 +124,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(health_router)
     app.include_router(auth_router, prefix=settings.api_prefix)
     app.include_router(sessions_router, prefix=settings.api_prefix)
+    app.include_router(scripts_router, prefix=settings.api_prefix)
     app.include_router(websocket_router, prefix=settings.api_prefix)
     return app
 

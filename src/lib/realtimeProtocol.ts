@@ -13,6 +13,11 @@ export type FeedbackSeverity = "info" | "warning" | "danger";
 
 export type PracticeMode = "interview" | "presentation";
 
+export type PresentationFeatureSettings = {
+  karaokeGuideEnabled: boolean;
+  styleTransferEnabled: boolean;
+};
+
 export type RealtimeFeedback = {
   type: "feedback";
   sessionId: string;
@@ -56,6 +61,7 @@ export type ClientRealtimeMessage =
       type: "session.start";
       sessionId: string;
       mode: PracticeMode;
+      settings: PresentationFeatureSettings;
       timestamp: number;
     }
   | {

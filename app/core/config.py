@@ -27,6 +27,13 @@ class Settings(BaseSettings):
     ai_connect_timeout_seconds: float = 1.0
     ai_read_timeout_seconds: float = 2.0
     ai_max_retries: int = 2
+    vision_provider: str = "mock"
+    stt_provider: str = "mock"
+    pronunciation_provider: str = "alignment"
+    llm_provider: str = "mock"
+    llm_base_url: str | None = None
+    llm_api_key: str | None = None
+    llm_model: str | None = None
 
     video_queue_size: int = 3
     audio_queue_size: int = 8
@@ -38,6 +45,10 @@ class Settings(BaseSettings):
     max_realtime_messages_per_second: int = 30
     video_sample_fps: float = 3.0
     audio_chunk_ms: int = 750
+    module_timeout_seconds: float = 3.0
+    max_script_chars: int = 20_000
+    min_time_limit_seconds: int = 30
+    max_time_limit_seconds: int = 3_600
 
     turn_url: str | None = None
     turn_username: str | None = None
