@@ -22,6 +22,7 @@ export type PresentationFeatureSettings = {
 export type RealtimeFeedback = {
   type: "feedback";
   sessionId: string;
+  source?: string;
   timestamp: number;
   severity: FeedbackSeverity;
   gaze: {
@@ -52,7 +53,7 @@ export type ConnectionStatus =
 export type PracticeSummary = {
   sessionId: string;
   durationSeconds: number;
-  gazeAwayCount: number;
+  gazeAwayRatio: number;
   speechPaceWarningCount: number;
   fillerTotalCount: number;
 };

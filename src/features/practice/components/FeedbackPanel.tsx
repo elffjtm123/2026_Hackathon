@@ -10,9 +10,9 @@ type FeedbackPanelProps = {
 const statusLabels: Record<ConnectionStatus, string> = {
   idle: "대기",
   connecting: "연결 중",
-  connected: "연결됨",
-  disconnected: "Mock",
-  error: "Mock",
+  connected: "백엔드",
+  disconnected: "연결 끊김",
+  error: "오류",
 };
 
 export function FeedbackPanel({

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   PracticeMode,
   PracticeSummary,
@@ -31,9 +31,12 @@ export function usePracticeSession() {
   const [now, setNow] = useState(Date.now());
   const [latestFeedback, setLatestFeedback] =
     useState<RealtimeFeedback | null>(null);
-  const [gazeAwayCount, setGazeAwayCount] = useState(0);
+  const [gazeAwayDurationMs, setGazeAwayDurationMs] = useState(0);
   const [speechPaceWarningCount, setSpeechPaceWarningCount] = useState(0);
   const [fillerTotalCount, setFillerTotalCount] = useState(0);
+  const gazeAwayDurationMsRef = useRef(0);
+  const lastGazeSampleAtRef = useRef<number | null>(null);
+  const lastGazeWasAwayRef = useRef(false);
 
   const isRunning = startedAt !== null && endedAt === null;
 
@@ -62,14 +65,26 @@ export function usePracticeSession() {
     setEndedAt(null);
     setNow(Date.now());
     setLatestFeedback(null);
-    setGazeAwayCount(0);
+    setGazeAwayDurationMs(0);
     setSpeechPaceWarningCount(0);
     setFillerTotalCount(0);
+    gazeAwayDurationMsRef.current = 0;
+    lastGazeSampleAtRef.current = null;
+    lastGazeWasAwayRef.current = false;
     return nextSessionId;
   }, []);
 
   const endSession = useCallback(() => {
-    setEndedAt(Date.now());
+    const endedAtMs = Date.now();
+    const lastGazeSampleAt = lastGazeSampleAtRef.current;
+
+    if (lastGazeWasAwayRef.current && lastGazeSampleAt !== null) {
+      gazeAwayDurationMsRef.current += Math.max(0, endedAtMs - lastGazeSampleAt);
+      setGazeAwayDurationMs(gazeAwayDurationMsRef.current);
+      lastGazeSampleAtRef.current = endedAtMs;
+    }
+
+    setEndedAt(endedAtMs);
   }, []);
 
   const setFeatureEnabled = useCallback(
@@ -83,8 +98,17 @@ export function usePracticeSession() {
     setLatestFeedback(feedback);
     setFillerTotalCount(feedback.filler.totalCount);
 
-    if (gazeAwayStatuses.has(feedback.gaze.status)) {
-      setGazeAwayCount((count) => count + 1);
+    if (feedback.source === undefined || feedback.source === "gaze") {
+      const observedAt = feedback.timestamp || Date.now();
+      const lastGazeSampleAt = lastGazeSampleAtRef.current;
+
+      if (lastGazeWasAwayRef.current && lastGazeSampleAt !== null) {
+        gazeAwayDurationMsRef.current += Math.max(0, observedAt - lastGazeSampleAt);
+        setGazeAwayDurationMs(gazeAwayDurationMsRef.current);
+      }
+
+      lastGazeSampleAtRef.current = observedAt;
+      lastGazeWasAwayRef.current = gazeAwayStatuses.has(feedback.gaze.status);
     }
 
     if (speechWarningStatuses.has(feedback.speech.pace)) {
@@ -97,7 +121,10 @@ export function usePracticeSession() {
       ? {
           sessionId,
           durationSeconds: elapsedSeconds,
-          gazeAwayCount,
+          gazeAwayRatio:
+            elapsedSeconds > 0
+              ? Math.min(1, gazeAwayDurationMs / (elapsedSeconds * 1000))
+              : 0,
           speechPaceWarningCount,
           fillerTotalCount,
         }

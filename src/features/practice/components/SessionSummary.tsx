@@ -10,6 +10,10 @@ function formatDuration(seconds: number) {
   return `${minutes}분 ${remainingSeconds}초`;
 }
 
+function formatPercent(ratio: number) {
+  return `${Math.round(ratio * 100)}%`;
+}
+
 export function SessionSummary({ summary }: SessionSummaryProps) {
   if (!summary) {
     return null;
@@ -24,8 +28,8 @@ export function SessionSummary({ summary }: SessionSummaryProps) {
           <dd>{formatDuration(summary.durationSeconds)}</dd>
         </div>
         <div>
-          <dt>시선 이탈</dt>
-          <dd>{summary.gazeAwayCount}회</dd>
+          <dt>시선 이탈 비율</dt>
+          <dd>{formatPercent(summary.gazeAwayRatio)}</dd>
         </div>
         <div>
           <dt>속도 경고</dt>

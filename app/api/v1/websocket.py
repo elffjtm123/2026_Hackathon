@@ -67,6 +67,7 @@ def _frontend_feedback(event: RealtimeEvent) -> dict[str, Any] | None:
     return {
         "type": "feedback",
         "sessionId": str(event.session_id),
+        "source": source,
         "timestamp": event.timestamp_ms or int(time.time() * 1000),
         "severity": severity,
         "gaze": {
