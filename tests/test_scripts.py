@@ -150,3 +150,17 @@ def test_presentation_features_can_be_disabled(client: TestClient, auth: dict[st
     )
     assert preview.status_code == 409
     assert preview.json()["error"]["code"] == "FEATURE_DISABLED"
+
+
+def test_demo_style_transfer_uses_safe_backend_preview(client: TestClient) -> None:
+    response = client.post(
+        "/api/v1/scripts/style-transfer/demo",
+        json={
+            "script": "발표 연습을 도와주는 서비스입니다.",
+            "time_limit_seconds": 60,
+            "style_vector": {"visionary_keynote": 1},
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["provider"] == "mock"
+    assert response.json()["safety"]["passed"] is True

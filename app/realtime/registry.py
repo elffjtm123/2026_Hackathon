@@ -24,7 +24,7 @@ class PipelineRegistry:
         self._lock = asyncio.Lock()
 
     async def get_or_create(
-        self, session_id: UUID, analysis_settings: dict[str, bool]
+        self, session_id: UUID, analysis_settings: dict[str, Any]
     ) -> SessionPipeline:
         async with self._lock:
             pipeline = self.pipelines.get(session_id)

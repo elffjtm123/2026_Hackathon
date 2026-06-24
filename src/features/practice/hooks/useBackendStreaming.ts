@@ -1,26 +1,16 @@
-import { useEffect, useRef } from "react";
+import { useEffect } from "react";
 
 type UseBackendStreamingOptions = {
   isActive: boolean;
   stream: MediaStream | null;
-  transcriptText: string;
-  sendTranscript: (text: string, isFinal?: boolean) => void;
   sendVideoFrame: (payload: Blob) => void;
 };
 
 export function useBackendStreaming({
   isActive,
   stream,
-  transcriptText,
-  sendTranscript,
   sendVideoFrame,
 }: UseBackendStreamingOptions) {
-  const textRef = useRef(transcriptText);
-
-  useEffect(() => {
-    textRef.current = transcriptText;
-  }, [transcriptText]);
-
   useEffect(() => {
     if (!isActive || !stream) {
       return;
@@ -55,15 +45,10 @@ export function useBackendStreaming({
       );
     }, 200);
 
-    const transcriptIntervalId = window.setInterval(() => {
-      sendTranscript(textRef.current, true);
-    }, 1200);
-
     return () => {
       window.clearInterval(videoIntervalId);
-      window.clearInterval(transcriptIntervalId);
       video.pause();
       video.srcObject = null;
     };
-  }, [isActive, sendTranscript, sendVideoFrame, stream]);
+  }, [isActive, sendVideoFrame, stream]);
 }

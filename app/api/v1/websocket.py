@@ -17,13 +17,20 @@ from app.realtime.pipeline import SessionPipeline
 router = APIRouter(tags=["realtime"])
 
 
-def _frontend_feedback(event: RealtimeEvent) -> dict[str, Any] | None:
+def _frontend_message(event: RealtimeEvent) -> dict[str, Any] | None:
     if event.event == "error":
         return {
             "type": "error",
             "message": str(event.data.get("message", "실시간 처리 오류가 발생했습니다.")),
         }
-    if event.event != "feedback":
+    if event.event == "script.progress":
+        return {
+            "type": "script.progress",
+            "sessionId": str(event.session_id),
+            "timestamp": event.timestamp_ms,
+            **event.data,
+        }
+    if event.event != "feedback" or event.module == "pronunciation":
         return None
 
     source = str(event.data.get("source", ""))
@@ -91,37 +98,26 @@ def _frontend_feedback(event: RealtimeEvent) -> dict[str, Any] | None:
 
 @router.websocket("/ws/practice-demo")
 async def practice_demo_websocket(websocket: WebSocket) -> None:
-    await websocket.accept()
     settings = websocket.app.state.settings
+    if settings.app_env == "production":
+        await websocket.close(code=4403, reason="demo websocket is disabled in production")
+        return
+    connection_key = "practice-demo"
+    connection_count = websocket.app.state.websocket_counts.get(connection_key, 0)
+    if connection_count >= settings.max_connections_per_session:
+        await websocket.close(code=4429, reason="too many demo connections")
+        return
+    await websocket.accept()
+    websocket.app.state.websocket_counts[connection_key] = connection_count + 1
     session_id = uuid4()
-    try:
-        from app.ai.video_gaze import VideoGazeAdapter
-
-        gaze = VideoGazeAdapter()
-    except Exception:
-        gaze = MockGazeAdapter()
-    pipeline = SessionPipeline(
-        session_id,
-        settings,
-        websocket.app.state.state_store,
-        gaze,
-        MockSpeechAdapter(),
-        {
-            "gaze_enabled": True,
-            "speech_rate_enabled": True,
-            "filler_detection_enabled": True,
-        },
-    )
-    await pipeline.start()
+    pipeline: SessionPipeline | None = None
+    gaze: Any = None
     subscriber_id = f"demo-{uuid4()}"
 
     async def send(event: RealtimeEvent) -> None:
-        feedback = _frontend_feedback(event)
-        if feedback is not None:
-            await websocket.send_json(feedback)
-
-    pipeline.subscribe(subscriber_id, send)
-    await pipeline.emit("session.ready", pipeline.elapsed_ms(), {"transport": "practice-demo"})
+        frontend_message = _frontend_message(event)
+        if frontend_message is not None:
+            await websocket.send_json(frontend_message)
 
     try:
         while True:
@@ -129,10 +125,23 @@ async def practice_demo_websocket(websocket: WebSocket) -> None:
             if message.get("type") == "websocket.disconnect":
                 break
 
+            allowed = await websocket.app.state.state_store.allow_realtime_message(
+                session_id, settings.max_realtime_messages_per_second
+            )
+            if not allowed:
+                if pipeline is not None:
+                    await pipeline.emit_error("RATE_LIMITED", "메시지 전송 속도가 너무 빠릅니다.")
+                continue
+
             raw_bytes = message.get("bytes")
             raw_text = message.get("text")
 
             if raw_bytes is not None:
+                if pipeline is None:
+                    await websocket.send_json(
+                        {"type": "error", "message": "세션 시작 메시지가 먼저 필요합니다."}
+                    )
+                    continue
                 if len(raw_bytes) < 9 or len(raw_bytes) > settings.max_media_message_bytes:
                     await pipeline.emit_error("INVALID_MEDIA", "영상 메시지가 올바르지 않습니다.")
                     continue
@@ -148,22 +157,102 @@ async def practice_demo_websocket(websocket: WebSocket) -> None:
                     )
                 continue
 
-            if raw_text is None:
-                await pipeline.emit_error("INVALID_MESSAGE", "메시지가 올바르지 않습니다.")
+            if raw_text is None or len(raw_text.encode()) > settings.max_json_message_bytes:
+                if pipeline is None:
+                    await websocket.send_json(
+                        {"type": "error", "message": "메시지가 올바르지 않습니다."}
+                    )
+                else:
+                    await pipeline.emit_error("INVALID_MESSAGE", "메시지가 올바르지 않습니다.")
                 continue
 
             try:
                 client_event = ClientEvent.model_validate(json.loads(raw_text))
             except (json.JSONDecodeError, ValidationError):
-                await pipeline.emit_error(
-                    "INVALID_MESSAGE", "JSON 메시지 형식이 올바르지 않습니다."
+                if pipeline is None:
+                    await websocket.send_json(
+                        {"type": "error", "message": "JSON 메시지 형식이 올바르지 않습니다."}
+                    )
+                else:
+                    await pipeline.emit_error(
+                        "INVALID_MESSAGE", "JSON 메시지 형식이 올바르지 않습니다."
+                    )
+                continue
+
+            if pipeline is None:
+                if client_event.event != "session.start":
+                    await websocket.send_json(
+                        {"type": "error", "message": "세션 시작 메시지가 먼저 필요합니다."}
+                    )
+                    continue
+                data = client_event.data
+                frontend_settings = data.get("settings", {})
+                if not isinstance(frontend_settings, dict):
+                    frontend_settings = {}
+                script = data.get("script")
+                time_limit = data.get("timeLimitSeconds")
+                mode = data.get("mode")
+                if mode == "presentation" and (not isinstance(script, str) or not script.strip()):
+                    await websocket.send_json(
+                        {"type": "error", "message": "발표 대본을 입력해 주세요."}
+                    )
+                    continue
+                if isinstance(script, str) and len(script) > settings.max_script_chars:
+                    await websocket.send_json(
+                        {"type": "error", "message": "대본이 허용된 최대 길이를 초과했습니다."}
+                    )
+                    continue
+                valid_time_limit = (
+                    isinstance(time_limit, int)
+                    and not isinstance(time_limit, bool)
+                    and settings.min_time_limit_seconds
+                    <= time_limit
+                    <= settings.max_time_limit_seconds
+                )
+                if mode == "presentation" and not valid_time_limit:
+                    await websocket.send_json(
+                        {"type": "error", "message": "제한시간이 허용 범위를 벗어났습니다."}
+                    )
+                    continue
+                analysis_settings: dict[str, Any] = {
+                    "gaze_enabled": True,
+                    "speech_rate_enabled": True,
+                    "filler_words_enabled": True,
+                    "pronunciation_enabled": True,
+                    "karaoke_guide_enabled": bool(
+                        frontend_settings.get("karaokeGuideEnabled", True)
+                    ),
+                    "style_transfer_enabled": bool(
+                        frontend_settings.get("styleTransferEnabled", True)
+                    ),
+                    "script": script if isinstance(script, str) else None,
+                    "time_limit_seconds": time_limit if valid_time_limit else None,
+                }
+                try:
+                    from app.ai.video_gaze import VideoGazeAdapter
+
+                    gaze = VideoGazeAdapter()
+                except Exception:
+                    gaze = MockGazeAdapter()
+                pipeline = SessionPipeline(
+                    session_id,
+                    settings,
+                    websocket.app.state.state_store,
+                    gaze,
+                    MockSpeechAdapter(),
+                    analysis_settings,
+                )
+                pipeline.subscribe(subscriber_id, send)
+                await pipeline.start()
+                await pipeline.emit(
+                    "session.ready", pipeline.elapsed_ms(), {"transport": "practice-demo"}
                 )
                 continue
 
             if client_event.event == "ping":
                 await pipeline.emit("pong", client_event.timestamp_ms, {})
             elif client_event.event == "session.start":
-                await pipeline.emit("session.started", client_event.timestamp_ms, client_event.data)
+                await pipeline.emit_error("INVALID_SESSION_STATE", "세션이 이미 시작되었습니다.")
             elif client_event.event in {"transcript.partial", "transcript.final"}:
                 text = str(client_event.data.get("text", ""))
                 if len(text) > 10_000:
@@ -173,10 +262,14 @@ async def practice_demo_websocket(websocket: WebSocket) -> None:
     except WebSocketDisconnect:
         pass
     finally:
-        pipeline.unsubscribe(subscriber_id)
-        await pipeline.stop()
-        if hasattr(gaze, "close"):
+        if pipeline is not None:
+            pipeline.unsubscribe(subscriber_id)
+            await pipeline.stop()
+        if gaze is not None and hasattr(gaze, "close"):
             gaze.close()
+        websocket.app.state.websocket_counts[connection_key] = max(
+            0, websocket.app.state.websocket_counts.get(connection_key, 1) - 1
+        )
 
 
 @router.websocket("/ws/sessions/{session_id}")

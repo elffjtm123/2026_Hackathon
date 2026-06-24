@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { analyzeScript, formatTime, transformScript } from "../scriptTools";
+import { analyzeScript, formatTime } from "../scriptTools";
 
 type StyleTransferPanelProps = {
   originalScript: string;
@@ -12,11 +12,15 @@ type StyleTransferPanelProps = {
 };
 
 const styleOptions = [
-  { value: "concise", label: "간결한 발표" },
-  { value: "keynote", label: "키노트형 발표" },
-  { value: "persuasive", label: "설득형 발표" },
-  { value: "story", label: "스토리텔링형 발표" },
+  { value: "visionary_keynote", label: "비전 중심 키노트" },
+  { value: "dream_oratory", label: "희망적 비전 연설" },
+  { value: "wartime_resolve", label: "단호한 결의" },
+  { value: "high_intensity_rally", label: "고강도 호소" },
 ];
+
+const apiBaseUrl =
+  (import.meta.env.VITE_API_BASE_URL as string | undefined) ??
+  "http://127.0.0.1:8000/api/v1";
 
 export function StyleTransferPanel({
   originalScript,
@@ -29,6 +33,9 @@ export function StyleTransferPanel({
 }: StyleTransferPanelProps) {
   const [style, setStyle] = useState(styleOptions[0].value);
   const [preview, setPreview] = useState("");
+  const [isTransforming, setIsTransforming] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [warnings, setWarnings] = useState<string[]>([]);
   const plan = useMemo(
     () => analyzeScript(preview || currentScript, timeLimitSeconds),
     [currentScript, preview, timeLimitSeconds]
@@ -38,14 +45,41 @@ export function StyleTransferPanel({
     return null;
   }
 
-  const handleTransform = () => {
-    const transformed = transformScript(currentScript || originalScript, style);
-    setPreview(transformed);
-    onApply(transformed);
+  const handleTransform = async () => {
+    setIsTransforming(true);
+    setError(null);
+    try {
+      const response = await fetch(`${apiBaseUrl}/scripts/style-transfer/demo`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          script: currentScript || originalScript,
+          time_limit_seconds: timeLimitSeconds,
+          style_vector: { [style]: 1 },
+          intensity: 0.65,
+        }),
+      });
+      const body = (await response.json()) as {
+        transformed_script?: string;
+        warnings?: string[];
+        error?: { message?: string };
+      };
+      if (!response.ok || typeof body.transformed_script !== "string") {
+        throw new Error(body.error?.message || "스타일 변환에 실패했습니다.");
+      }
+      setPreview(body.transformed_script);
+      setWarnings(body.warnings ?? []);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "스타일 변환에 실패했습니다.");
+    } finally {
+      setIsTransforming(false);
+    }
   };
 
   const handleReset = () => {
     setPreview("");
+    setWarnings([]);
+    setError(null);
     onReset();
   };
 
@@ -69,14 +103,29 @@ export function StyleTransferPanel({
               </option>
             ))}
           </select>
-          <button type="button" onClick={handleTransform} disabled={disabled || !currentScript.trim()}>
-            변환
+          <button
+            type="button"
+            onClick={() => void handleTransform()}
+            disabled={disabled || isTransforming || !currentScript.trim()}
+          >
+            {isTransforming ? "변환 중" : "미리보기"}
+          </button>
+          <button
+            type="button"
+            onClick={() => onApply(preview)}
+            disabled={disabled || !preview}
+          >
+            적용
           </button>
           <button type="button" className="secondary-button" onClick={handleReset} disabled={disabled}>
             원상복귀
           </button>
         </div>
       </div>
+      {error ? <p className="error-text">{error}</p> : null}
+      {warnings.map((warning) => (
+        <p className="muted-text" key={warning}>{warning}</p>
+      ))}
       <div className="style-preview">
         <label htmlFor="style-preview">변환된 대본</label>
         <textarea

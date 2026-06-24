@@ -58,6 +58,21 @@ export type PracticeSummary = {
   fillerTotalCount: number;
 };
 
+export type ScriptProgressMessage = {
+  type: "script.progress";
+  sessionId: string;
+  timestamp: number;
+  current_token_index: number;
+  current_sentence_index: number;
+  expected_token_index: number;
+  progress_ratio: number;
+  expected_progress_ratio: number;
+  pace_delta_ms: number;
+  pace_status: "ahead" | "behind" | "on_time";
+  active_text: string;
+  next_text: string;
+};
+
 export type ClientRealtimeMessage =
   | {
       type: "session.start";
@@ -106,6 +121,7 @@ export type BackendClientEvent =
 
 export type ServerRealtimeMessage =
   | RealtimeFeedback
+  | ScriptProgressMessage
   | {
       type: "error";
       message: string;

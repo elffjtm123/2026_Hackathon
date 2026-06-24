@@ -26,7 +26,7 @@ class SessionPipeline:
         state_store: SessionStateStore,
         gaze: GazeAdapter,
         speech: SpeechAdapter,
-        analysis_settings: dict[str, bool],
+        analysis_settings: dict[str, Any],
     ) -> None:
         self.session_id = session_id
         self.settings = settings

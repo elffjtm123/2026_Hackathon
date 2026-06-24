@@ -1,4 +1,4 @@
-from collections import Counter
+from collections import Counter, deque
 from typing import Any
 
 from app.ai.base import AIResult
@@ -9,14 +9,14 @@ class FeedbackAggregator:
         self.gaze_samples = 0
         self.gaze_away_count = 0
         self.gaze_away_duration_ms = 0
-        self.speech_rates: list[float] = []
+        self.speech_rates: deque[float] = deque(maxlen=2_000)
         self.fillers: Counter[str] = Counter()
-        self.transcript_parts: list[str] = []
-        self.timeline: list[dict[str, Any]] = []
-        self.pronunciation_scores: list[float] = []
-        self.pronunciation_confidences: list[float] = []
+        self.transcript_parts: deque[str] = deque(maxlen=500)
+        self.timeline: deque[dict[str, Any]] = deque(maxlen=500)
+        self.pronunciation_scores: deque[float] = deque(maxlen=2_000)
+        self.pronunciation_confidences: deque[float] = deque(maxlen=2_000)
         self.script_progress_ratio = 0.0
-        self.script_pace_deltas: list[int] = []
+        self.script_pace_deltas: deque[int] = deque(maxlen=2_000)
 
     def add(self, result: AIResult) -> None:
         if result.source == "gaze":
@@ -40,8 +40,6 @@ class FeedbackAggregator:
                 "metrics": result.metrics,
             }
         )
-        if len(self.timeline) > 500:
-            self.timeline = self.timeline[-500:]
 
     def snapshot(self) -> dict[str, Any]:
         avg_rate = sum(self.speech_rates) / len(self.speech_rates) if self.speech_rates else 0
@@ -54,7 +52,7 @@ class FeedbackAggregator:
         }
 
     @staticmethod
-    def _average(values: list[float]) -> float | None:
+    def _average(values: list[float] | deque[float]) -> float | None:
         return round(sum(values) / len(values), 1) if values else None
 
     def add_pronunciation(self, result: dict[str, Any], timestamp_ms: int) -> None:
@@ -107,7 +105,7 @@ class FeedbackAggregator:
             "average_syllables_per_minute": round(avg_rate, 1),
             "filler_word_counts": dict(self.fillers),
             "transcript": " ".join(self.transcript_parts) or None,
-            "timeline": self.timeline,
+            "timeline": list(self.timeline),
             "summary": self.snapshot(),
             "pronunciation_clarity_score": pronunciation_score,
             "script_completion_ratio": round(self.script_progress_ratio, 4),

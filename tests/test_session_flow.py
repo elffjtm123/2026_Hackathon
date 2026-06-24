@@ -65,3 +65,36 @@ def test_session_ownership_is_hidden(client: TestClient, auth: dict[str, object]
     response = client.get(f"/api/v1/sessions/{session['id']}", headers=bearer(other))
     assert response.status_code == 404
     assert response.json()["error"]["code"] == "SESSION_NOT_FOUND"
+
+
+def test_demo_websocket_initializes_script_progress_from_start_message(
+    client: TestClient,
+) -> None:
+    with client.websocket_connect("/api/v1/ws/practice-demo") as websocket:
+        websocket.send_json(
+            {
+                "event": "session.start",
+                "timestamp_ms": 0,
+                "data": {
+                    "mode": "presentation",
+                    "script": "안녕하세요 오늘 서비스를 소개합니다",
+                    "timeLimitSeconds": 60,
+                    "settings": {
+                        "karaokeGuideEnabled": True,
+                        "styleTransferEnabled": False,
+                    },
+                },
+            }
+        )
+        websocket.send_json(
+            {
+                "event": "transcript.final",
+                "timestamp_ms": 1_000,
+                "data": {"text": "안녕하세요 오늘 서비스를 소개합니다"},
+            }
+        )
+        feedback = websocket.receive_json()
+        assert feedback["type"] == "feedback"
+        progress = websocket.receive_json()
+        assert progress["type"] == "script.progress"
+        assert progress["current_token_index"] >= 0

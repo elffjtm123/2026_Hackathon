@@ -56,3 +56,13 @@ class StyleTransferResponse(BaseModel):
     style_vector: dict[str, float]
     provider: str
     created_at: datetime
+
+
+class StyleTransferPreviewResponse(BaseModel):
+    transformed_script: str
+    estimated_duration_seconds: int
+    change_summary: list[str]
+    warnings: list[str]
+    safety: dict[str, Any]
+    style_vector: dict[str, float]
+    provider: str

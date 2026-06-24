@@ -6,6 +6,7 @@ import type {
   PracticeMode,
   PresentationFeatureSettings,
   RealtimeFeedback,
+  ScriptProgressMessage,
   ServerRealtimeMessage,
 } from "../types";
 
@@ -47,8 +48,16 @@ export function useFeedbackSocket(
   onFeedback: (feedback: RealtimeFeedback) => void
 ) {
   const socketRef = useRef<WebSocket | null>(null);
+  const sessionStartedAtRef = useRef<number | null>(null);
   const [status, setStatus] = useState<ConnectionStatus>("idle");
   const [error, setError] = useState<string | null>(null);
+  const [scriptProgress, setScriptProgress] =
+    useState<ScriptProgressMessage | null>(null);
+
+  const elapsedTimestamp = useCallback(() => {
+    const startedAt = sessionStartedAtRef.current;
+    return startedAt === null ? 0 : Math.max(0, Math.round(performance.now() - startedAt));
+  }, []);
 
   const send = useCallback((message: ClientRealtimeMessage) => {
     if (socketRef.current?.readyState === WebSocket.OPEN) {
@@ -60,12 +69,12 @@ export function useFeedbackSocket(
     if (socketRef.current?.readyState === WebSocket.OPEN) {
       const event: BackendClientEvent = {
         event: isFinal ? "transcript.final" : "transcript.partial",
-        timestamp_ms: Date.now(),
+        timestamp_ms: elapsedTimestamp(),
         data: { text },
       };
       socketRef.current.send(JSON.stringify(event));
     }
-  }, []);
+  }, [elapsedTimestamp]);
 
   const sendVideoFrame = useCallback((payload: Blob) => {
     if (socketRef.current?.readyState !== WebSocket.OPEN) {
@@ -73,18 +82,19 @@ export function useFeedbackSocket(
     }
 
     void payload.arrayBuffer().then((buffer) => {
-      const timestamp = BigInt(Date.now());
+      const timestamp = BigInt(elapsedTimestamp());
       const bytes = new Uint8Array(9 + buffer.byteLength);
       bytes[0] = 0x01;
       new DataView(bytes.buffer).setBigUint64(1, timestamp, false);
       bytes.set(new Uint8Array(buffer), 9);
       socketRef.current?.send(bytes);
     });
-  }, []);
+  }, [elapsedTimestamp]);
 
   const disconnect = useCallback(() => {
     socketRef.current?.close();
     socketRef.current = null;
+    sessionStartedAtRef.current = null;
     setStatus((current) => (current === "idle" ? current : "disconnected"));
   }, []);
 
@@ -104,6 +114,8 @@ export function useFeedbackSocket(
 
       setStatus("connecting");
       setError(null);
+      setScriptProgress(null);
+      sessionStartedAtRef.current = performance.now();
 
       const socket = new WebSocket(feedbackWsUrl);
       socketRef.current = socket;
@@ -117,7 +129,7 @@ export function useFeedbackSocket(
           settings,
           script,
           timeLimitSeconds,
-          timestamp: Date.now(),
+          timestamp: 0,
         });
       };
 
@@ -126,6 +138,11 @@ export function useFeedbackSocket(
           const message = JSON.parse(String(event.data)) as ServerRealtimeMessage;
           if (message.type === "feedback") {
             onFeedback(message);
+            return;
+          }
+
+          if (message.type === "script.progress") {
+            setScriptProgress(message);
             return;
           }
 
@@ -161,5 +178,6 @@ export function useFeedbackSocket(
     send,
     sendTranscript,
     sendVideoFrame,
+    scriptProgress,
   };
 }

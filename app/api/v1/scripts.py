@@ -14,6 +14,7 @@ from app.schemas.script import (
     ScriptAnalyzeRequest,
     ScriptAnalyzeResponse,
     StylePresetResponse,
+    StyleTransferPreviewResponse,
     StyleTransferRequest,
     StyleTransferResponse,
 )
@@ -56,6 +57,38 @@ async def script_analyze(
 async def style_presets(user: CurrentUser) -> list[dict[str, object]]:
     del user
     return list(PRESETS.values())
+
+
+@router.post("/scripts/style-transfer/demo", response_model=StyleTransferPreviewResponse)
+async def demo_style_transfer(
+    payload: StyleTransferRequest, request: Request
+) -> StyleTransferPreviewResponse:
+    if request.app.state.settings.app_env == "production":
+        raise AppError("UNAUTHORIZED", "운영 환경에서는 데모 변환을 사용할 수 없습니다.", 403)
+    script = validate_script(payload.script, payload.time_limit_seconds, request)
+    unknown = set(payload.style_vector) - set(PRESETS)
+    if unknown:
+        raise AppError("INVALID_STYLE_PRESET", "지원하지 않는 스타일 preset이 있습니다.", 422)
+    vector = normalize_weights(payload.style_vector)
+    result = await MockStyleTransferProvider().transform(
+        script, payload.time_limit_seconds, vector, payload.intensity
+    )
+    if not result["safety"]["passed"]:
+        raise AppError(
+            "STYLE_SAFETY_REJECTED",
+            "안전 정책을 통과하지 못해 스타일 변환을 거부했습니다.",
+            422,
+            result["safety"],
+        )
+    return StyleTransferPreviewResponse(
+        transformed_script=result["script"],
+        estimated_duration_seconds=result["estimated_duration_seconds"],
+        change_summary=result["change_summary"],
+        warnings=result["warnings"],
+        safety=result["safety"],
+        style_vector=vector,
+        provider="mock",
+    )
 
 
 def job_response(job: StyleTransferJob) -> StyleTransferResponse:

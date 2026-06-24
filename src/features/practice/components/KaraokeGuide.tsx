@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import { analyzeScript, formatTime } from "../scriptTools";
+import type { ScriptProgressMessage } from "../types";
 
 type KaraokeGuideProps = {
   script: string;
@@ -7,6 +8,7 @@ type KaraokeGuideProps = {
   elapsedSeconds: number;
   karaokeEnabled: boolean;
   keywordHintEnabled: boolean;
+  backendProgress: ScriptProgressMessage | null;
 };
 
 export function KaraokeGuide({
@@ -15,6 +17,7 @@ export function KaraokeGuide({
   elapsedSeconds,
   karaokeEnabled,
   keywordHintEnabled,
+  backendProgress,
 }: KaraokeGuideProps) {
   const plan = useMemo(
     () => analyzeScript(script, timeLimitSeconds),
@@ -24,8 +27,16 @@ export function KaraokeGuide({
   const activeIndex = plan.timeline.findIndex(
     (item) => elapsedMs >= item.targetStartMs && elapsedMs < item.targetEndMs
   );
-  const currentIndex =
-    activeIndex >= 0 ? activeIndex : elapsedMs >= timeLimitSeconds * 1000 ? plan.timeline.length - 1 : 0;
+  const clockIndex =
+    activeIndex >= 0
+      ? activeIndex
+      : elapsedMs >= timeLimitSeconds * 1000
+        ? plan.timeline.length - 1
+        : 0;
+  const currentIndex = Math.min(
+    Math.max(backendProgress?.current_token_index ?? clockIndex, 0),
+    Math.max(plan.timeline.length - 1, 0)
+  );
   const current = plan.timeline[currentIndex];
   const progress = Math.min(100, Math.round((elapsedSeconds / Math.max(timeLimitSeconds, 1)) * 100));
   const remainingSeconds = Math.max(0, timeLimitSeconds - elapsedSeconds);
@@ -96,6 +107,11 @@ export function KaraokeGuide({
         <span>{formatTime(elapsedSeconds)} / {formatTime(timeLimitSeconds)}</span>
         <span>남은 시간 {formatTime(remainingSeconds)}</span>
         <span>목표 속도 {plan.targetSyllablesPerMinute} 음절/분</span>
+        {backendProgress ? (
+          <span>
+            실제 진행 {Math.round(backendProgress.progress_ratio * 100)}% · {backendProgress.pace_status}
+          </span>
+        ) : null}
       </div>
     </section>
   );

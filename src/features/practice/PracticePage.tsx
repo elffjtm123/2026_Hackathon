@@ -28,11 +28,6 @@ export function PracticePage() {
     "음 저는 오늘 프로젝트의 핵심 기능을 소개하겠습니다."
   );
   const socket = useFeedbackSocket(session.receiveFeedback);
-  const transcriptText =
-    session.mode === "presentation"
-      ? activePresentationScript
-      : interviewTranscriptText;
-
   const isMockMode = useMemo(
     () =>
       session.isRunning &&
@@ -49,8 +44,6 @@ export function PracticePage() {
   useBackendStreaming({
     isActive: session.isRunning && socket.status === "connected",
     stream: media.stream,
-    transcriptText,
-    sendTranscript: socket.sendTranscript,
     sendVideoFrame: socket.sendVideoFrame,
   });
 
@@ -131,7 +124,7 @@ export function PracticePage() {
           />
           <FeatureToggles
             settings={session.featureSettings}
-            disabled={false}
+            disabled={session.isRunning || isStarting}
             onChange={session.setFeatureEnabled}
           />
         </>
@@ -153,6 +146,7 @@ export function PracticePage() {
               elapsedSeconds={session.elapsedSeconds}
               karaokeEnabled={session.featureSettings.karaokeGuideEnabled}
               keywordHintEnabled={session.featureSettings.keywordHintEnabled}
+              backendProgress={socket.scriptProgress}
             />
           ) : null}
         </section>
@@ -173,7 +167,20 @@ export function PracticePage() {
             value={interviewTranscriptText}
             onChange={(event) => setInterviewTranscriptText(event.target.value)}
             rows={3}
+            disabled={!session.isRunning || socket.status !== "connected"}
           />
+          <button
+            type="button"
+            className="primary-button"
+            disabled={
+              !session.isRunning ||
+              socket.status !== "connected" ||
+              !interviewTranscriptText.trim()
+            }
+            onClick={() => socket.sendTranscript(interviewTranscriptText, true)}
+          >
+            현재 텍스트 분석
+          </button>
         </section>
       ) : null}
 
@@ -185,7 +192,7 @@ export function PracticePage() {
           currentScript={activePresentationScript}
           timeLimitSeconds={timeLimitSeconds}
           disabled={session.isRunning || isStarting}
-          enabled
+          enabled={session.featureSettings.styleTransferEnabled}
           onApply={setActivePresentationScript}
           onReset={() => setActivePresentationScript(presentationScript)}
         />

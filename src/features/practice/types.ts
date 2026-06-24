@@ -8,6 +8,7 @@ export type {
   PresentationFeatureSettings,
   PracticeSummary,
   RealtimeFeedback,
+  ScriptProgressMessage,
   ServerRealtimeMessage,
   SpeechPaceStatus,
 } from "../../lib/realtimeProtocol";
