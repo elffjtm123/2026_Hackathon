@@ -28,6 +28,7 @@ from collections import Counter, deque
 import csv
 import cv2
 import numpy as np
+from PIL import Image, ImageDraw, ImageFont
 from tqdm import tqdm
 
 try:
@@ -56,6 +57,26 @@ OUTPUT_DIR = r"C:\Users\yoonh\OneDrive\바탕 화면\2026_Hackathon\Sample\outpu
 MODEL_PATH = os.path.join(OUTPUT_DIR, "gaze_model_v3.pkl")
 LABEL_ENCODER_PATH = os.path.join(OUTPUT_DIR, "gaze_label_encoder_v3.pkl")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+# 한글 폰트 탐색 및 캐시
+_FONT_CACHE: Dict[int, Any] = {}
+_KOREAN_FONT_PATH: Optional[str] = None
+for _fp in [
+    r"C:\Windows\Fonts\malgun.ttf",
+    r"C:\Windows\Fonts\gulim.ttc",
+    r"C:\Windows\Fonts\batang.ttc",
+]:
+    if os.path.exists(_fp):
+        _KOREAN_FONT_PATH = _fp
+        break
+
+def _get_pil_font(size: int):
+    if size not in _FONT_CACHE:
+        if _KOREAN_FONT_PATH:
+            _FONT_CACHE[size] = ImageFont.truetype(_KOREAN_FONT_PATH, size)
+        else:
+            _FONT_CACHE[size] = ImageFont.load_default()
+    return _FONT_CACHE[size]
 
 # AI Hub 원천 데이터셋 경로 (없으면 건너뜀)
 _BASE_DIR = r"C:\Users\yoonh\OneDrive\바탕 화면\2026_Hackathon\Sample"
@@ -948,39 +969,47 @@ def draw_overlay(frame: np.ndarray, state: Dict, model_mode: str, debug_text: st
     side = state["side_ratio"] * 100
     no_face = state["no_face_ratio"] * 100
     elapsed = state["elapsed_seconds"]
+    duration = state.get("non_center_duration", 0.0)
     feedback = make_feedback(state)
 
     if gaze == "CENTER":
-        color = (0, 200, 0)
+        color_bgr = (0, 200, 0)
     elif gaze == "NO_FACE":
-        color = (0, 0, 255)
+        color_bgr = (0, 0, 255)
     elif gaze in ("UP", "DOWN"):
-        color = (255, 180, 0)
+        color_bgr = (255, 180, 0)
     else:
-        color = (0, 165, 255)
+        color_bgr = (0, 165, 255)
 
     cv2.rectangle(img, (10, 10), (630, 265), (0, 0, 0), -1)
-    cv2.rectangle(img, (10, 10), (630, 265), color, 2)
+    cv2.rectangle(img, (10, 10), (630, 265), color_bgr, 2)
 
-    cv2.putText(img, f"Gaze: {gaze}", (25, 45), cv2.FONT_HERSHEY_SIMPLEX, 0.85, color, 2)
-    cv2.putText(img, f"Mode: {model_mode}", (25, 78), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (200, 200, 200), 2)
-    cv2.putText(
-        img,
-        f"Center:{center:.1f}% | Down:{down:.1f}% | Up:{up:.1f}% | Side:{side:.1f}% | NoFace:{no_face:.1f}%",
-        (25, 110), cv2.FONT_HERSHEY_SIMPLEX, 0.50, (255, 255, 255), 2,
-    )
-    duration = state.get("non_center_duration", 0.0)
+    fb_color_bgr = (0, 255, 0) if gaze == "CENTER" else (0, 255, 255) if duration < 2.0 else (0, 100, 255)
     dur_text = f" | 비중심 {duration:.1f}s" if duration > 0 else ""
-    cv2.putText(img, f"Time:{elapsed:.1f}s | Frames:{state['total_frames']}{dur_text}",
-                (25, 143), cv2.FONT_HERSHEY_SIMPLEX, 0.50, (255, 255, 255), 2)
-    fb_color = (0, 255, 0) if gaze == "CENTER" else (0, 255, 255) if duration < 2.0 else (0, 100, 255)
-    cv2.putText(img, f"Feedback: {feedback}",
-                (25, 176), cv2.FONT_HERSHEY_SIMPLEX, 0.58, fb_color, 2)
-    cv2.putText(img, debug_text,
-                (25, 210), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (180, 180, 180), 1)
-    cv2.putText(img, "Start: look CENTER for 2 sec | Press Q to quit",
-                (25, 242), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (200, 200, 200), 1)
-    return img
+
+    def bgr2rgb(c):
+        return (c[2], c[1], c[0])
+
+    img_pil = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+    draw = ImageDraw.Draw(img_pil)
+
+    draw.text((25, 18),  f"Gaze: {gaze}",
+              font=_get_pil_font(22), fill=bgr2rgb(color_bgr))
+    draw.text((25, 56),  f"Mode: {model_mode}",
+              font=_get_pil_font(15), fill=(200, 200, 200))
+    draw.text((25, 86),
+              f"Center:{center:.1f}% | Down:{down:.1f}% | Up:{up:.1f}% | Side:{side:.1f}% | NoFace:{no_face:.1f}%",
+              font=_get_pil_font(13), fill=(255, 255, 255))
+    draw.text((25, 116), f"Time:{elapsed:.1f}s | Frames:{state['total_frames']}{dur_text}",
+              font=_get_pil_font(13), fill=(255, 255, 255))
+    draw.text((25, 146), f"Feedback: {feedback}",
+              font=_get_pil_font(16), fill=bgr2rgb(fb_color_bgr))
+    draw.text((25, 188), debug_text,
+              font=_get_pil_font(12), fill=(180, 180, 180))
+    draw.text((25, 218), "정면을 2초간 바라봐 주세요 | 종료: Q키",
+              font=_get_pil_font(12), fill=(200, 200, 200))
+
+    return cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
 
 
 # ============================================================
