@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 import jwt
 from fastapi import APIRouter, Request
@@ -87,7 +87,7 @@ async def refresh(payload: RefreshRequest, request: Request, db: DBSession) -> T
             RefreshToken.revoked.is_(False),
         )
     )
-    if stored is None or claims.expires_at <= datetime.now(UTC):
+    if stored is None or claims.expires_at <= datetime.now(timezone.utc):
         raise AppError("INVALID_REFRESH_TOKEN", "폐기되었거나 만료된 refresh token입니다.", 401)
     user = await db.get(User, claims.subject)
     if user is None:

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
+  BackendClientEvent,
   ClientRealtimeMessage,
   ConnectionStatus,
   PracticeMode,
@@ -7,9 +8,36 @@ import type {
   ServerRealtimeMessage,
 } from "../types";
 
-const feedbackWsUrl = import.meta.env.VITE_FEEDBACK_WS_URL as
-  | string
-  | undefined;
+const feedbackWsUrl =
+  (import.meta.env.VITE_FEEDBACK_WS_URL as string | undefined) ??
+  "ws://127.0.0.1:8000/api/v1/ws/practice-demo";
+
+function toBackendEvent(message: ClientRealtimeMessage): BackendClientEvent {
+  if (message.type === "session.start") {
+    return {
+      event: "session.start",
+      timestamp_ms: message.timestamp,
+      data: {
+        sessionId: message.sessionId,
+        mode: message.mode,
+      },
+    };
+  }
+
+  if (message.type === "client.ping") {
+    return {
+      event: "ping",
+      timestamp_ms: message.timestamp,
+      data: {},
+    };
+  }
+
+  return {
+    event: "ping",
+    timestamp_ms: message.timestamp,
+    data: {},
+  };
+}
 
 export function useFeedbackSocket(
   onFeedback: (feedback: RealtimeFeedback) => void
@@ -20,8 +48,34 @@ export function useFeedbackSocket(
 
   const send = useCallback((message: ClientRealtimeMessage) => {
     if (socketRef.current?.readyState === WebSocket.OPEN) {
-      socketRef.current.send(JSON.stringify(message));
+      socketRef.current.send(JSON.stringify(toBackendEvent(message)));
     }
+  }, []);
+
+  const sendTranscript = useCallback((text: string, isFinal = true) => {
+    if (socketRef.current?.readyState === WebSocket.OPEN) {
+      const event: BackendClientEvent = {
+        event: isFinal ? "transcript.final" : "transcript.partial",
+        timestamp_ms: Date.now(),
+        data: { text },
+      };
+      socketRef.current.send(JSON.stringify(event));
+    }
+  }, []);
+
+  const sendVideoFrame = useCallback((payload: Blob) => {
+    if (socketRef.current?.readyState !== WebSocket.OPEN) {
+      return;
+    }
+
+    void payload.arrayBuffer().then((buffer) => {
+      const timestamp = BigInt(Date.now());
+      const bytes = new Uint8Array(9 + buffer.byteLength);
+      bytes[0] = 0x01;
+      new DataView(bytes.buffer).setBigUint64(1, timestamp, false);
+      bytes.set(new Uint8Array(buffer), 9);
+      socketRef.current?.send(bytes);
+    });
   }, []);
 
   const disconnect = useCallback(() => {
@@ -92,5 +146,7 @@ export function useFeedbackSocket(
     connect,
     disconnect,
     send,
+    sendTranscript,
+    sendVideoFrame,
   };
 }

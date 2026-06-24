@@ -9,12 +9,12 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base import Base
 
 
-class PracticeType(enum.StrEnum):
+class PracticeType(str, enum.Enum):
     presentation = "presentation"
     interview = "interview"
 
 
-class SessionStatus(enum.StrEnum):
+class SessionStatus(str, enum.Enum):
     created = "created"
     active = "active"
     processing = "processing"

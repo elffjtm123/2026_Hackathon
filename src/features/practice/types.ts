@@ -1,4 +1,5 @@
 export type {
+  BackendClientEvent,
   ClientRealtimeMessage,
   ConnectionStatus,
   FeedbackSeverity,

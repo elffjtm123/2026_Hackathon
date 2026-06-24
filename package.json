@@ -2,6 +2,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:backend": "MPLCONFIGDIR=.matplotlib-cache .venv310/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000",
     "lint": "eslint .",
     "typecheck": "tsc -b",
     "build": "tsc -b && vite build"

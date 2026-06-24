@@ -205,7 +205,8 @@ button:disabled {
 }
 
 .side-panel,
-.summary-panel {
+.summary-panel,
+.speech-input-panel {
   border: 1px solid #dde4e6;
   border-radius: 8px;
   background: #ffffff;
@@ -302,6 +303,28 @@ button:disabled {
 .summary-panel {
   margin-top: 18px;
   padding: 18px;
+}
+
+.speech-input-panel {
+  display: grid;
+  gap: 10px;
+  margin-top: 18px;
+  padding: 18px;
+}
+
+.speech-input-panel label {
+  color: #3f5157;
+  font-weight: 800;
+}
+
+.speech-input-panel textarea {
+  width: 100%;
+  resize: vertical;
+  border: 1px solid #cfd9dc;
+  border-radius: 8px;
+  padding: 12px;
+  color: #172026;
+  font: inherit;
 }
 
 .summary-grid {

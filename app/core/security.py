@@ -1,7 +1,7 @@
 import hashlib
 import secrets
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Literal
 from uuid import UUID, uuid4
 
@@ -30,7 +30,7 @@ def verify_password(password: str, encoded: str) -> bool:
 
 
 def _create_token(user_id: UUID, token_type: str, lifetime: timedelta, settings: Settings) -> str:
-    now = datetime.now(UTC)
+    now = datetime.now(timezone.utc)
     payload = {
         "sub": str(user_id),
         "type": token_type,
@@ -65,7 +65,7 @@ def decode_token(token: str, expected_type: str, settings: Settings) -> TokenCla
         subject=UUID(payload["sub"]),
         token_type=payload["type"],
         jti=UUID(payload["jti"]),
-        expires_at=datetime.fromtimestamp(payload["exp"], UTC),
+        expires_at=datetime.fromtimestamp(payload["exp"], timezone.utc),
     )
 
 

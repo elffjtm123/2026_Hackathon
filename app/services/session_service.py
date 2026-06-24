@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
@@ -44,7 +44,7 @@ async def list_owned_sessions(
 async def activate_session(db: AsyncSession, session: PracticeSession) -> None:
     if session.status == SessionStatus.created:
         session.status = SessionStatus.active
-        session.started_at = datetime.now(UTC)
+        session.started_at = datetime.now(timezone.utc)
         await db.commit()
 
 
@@ -64,12 +64,12 @@ async def complete_session(
     if session.status not in {SessionStatus.created, SessionStatus.active}:
         raise AppError("INVALID_SESSION_STATE", "현재 상태에서는 세션을 종료할 수 없습니다.", 409)
     session.status = SessionStatus.processing
-    ended_at = datetime.now(UTC)
+    ended_at = datetime.now(timezone.utc)
     session.ended_at = ended_at
     if session.started_at:
         started_at = session.started_at
         if started_at.tzinfo is None:
-            started_at = started_at.replace(tzinfo=UTC)
+            started_at = started_at.replace(tzinfo=timezone.utc)
         session.duration_ms = max(0, int((ended_at - started_at).total_seconds() * 1000))
     else:
         session.duration_ms = fallback_duration_ms

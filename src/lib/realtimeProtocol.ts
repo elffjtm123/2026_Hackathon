@@ -69,6 +69,28 @@ export type ClientRealtimeMessage =
       timestamp: number;
     };
 
+export type BackendClientEvent =
+  | {
+      event: "session.start";
+      timestamp_ms: number;
+      data: {
+        sessionId: string;
+        mode: PracticeMode;
+      };
+    }
+  | {
+      event: "transcript.partial" | "transcript.final";
+      timestamp_ms: number;
+      data: {
+        text: string;
+      };
+    }
+  | {
+      event: "ping";
+      timestamp_ms: number;
+      data: Record<string, never>;
+    };
+
 export type ServerRealtimeMessage =
   | RealtimeFeedback
   | {

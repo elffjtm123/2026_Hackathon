@@ -4,6 +4,7 @@ import { FeedbackPanel } from "./components/FeedbackPanel";
 import { SessionControls } from "./components/SessionControls";
 import { SessionSummary } from "./components/SessionSummary";
 import { VideoPreview } from "./components/VideoPreview";
+import { useBackendStreaming } from "./hooks/useBackendStreaming";
 import { useFeedbackSocket } from "./hooks/useFeedbackSocket";
 import { useMockFeedback } from "./hooks/useMockFeedback";
 import { usePracticeSession } from "./hooks/usePracticeSession";
@@ -13,6 +14,9 @@ export function PracticePage() {
   const session = usePracticeSession();
   const media = useUserMedia();
   const [isStarting, setIsStarting] = useState(false);
+  const [transcriptText, setTranscriptText] = useState(
+    "음 저는 오늘 프로젝트의 핵심 기능을 소개하겠습니다."
+  );
   const socket = useFeedbackSocket(session.receiveFeedback);
 
   const isMockMode = useMemo(
@@ -27,6 +31,14 @@ export function PracticePage() {
     session.sessionId,
     session.receiveFeedback
   );
+
+  useBackendStreaming({
+    isActive: session.isRunning && socket.status === "connected",
+    stream: media.stream,
+    transcriptText,
+    sendTranscript: socket.sendTranscript,
+    sendVideoFrame: socket.sendVideoFrame,
+  });
 
   const handleStart = useCallback(async () => {
     setIsStarting(true);
@@ -95,6 +107,16 @@ export function PracticePage() {
           isMockMode={isMockMode}
         />
       </div>
+
+      <section className="speech-input-panel" aria-label="백엔드 발화 분석 입력">
+        <label htmlFor="transcript-text">백엔드로 보낼 발화 텍스트</label>
+        <textarea
+          id="transcript-text"
+          value={transcriptText}
+          onChange={(event) => setTranscriptText(event.target.value)}
+          rows={3}
+        />
+      </section>
 
       <SessionSummary summary={session.summary} />
     </main>

@@ -1,4 +1,6 @@
 import json
+import time
+from typing import Any
 from uuid import UUID, uuid4
 
 import jwt
@@ -6,11 +8,174 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
 from sqlalchemy import select
 
+from app.ai.mock import MockGazeAdapter, MockSpeechAdapter
 from app.core.security import decode_token
 from app.db.models.session import PracticeSession, SessionStatus
 from app.realtime.events import ClientEvent, RealtimeEvent
+from app.realtime.pipeline import SessionPipeline
 
 router = APIRouter(tags=["realtime"])
+
+
+def _frontend_feedback(event: RealtimeEvent) -> dict[str, Any] | None:
+    if event.event == "error":
+        return {
+            "type": "error",
+            "message": str(event.data.get("message", "실시간 처리 오류가 발생했습니다.")),
+        }
+    if event.event != "feedback":
+        return None
+
+    source = str(event.data.get("source", ""))
+    level = str(event.data.get("level", "info"))
+    metrics = event.data.get("metrics", {})
+    if not isinstance(metrics, dict):
+        metrics = {}
+
+    severity = "danger" if level == "danger" else "warning" if level == "warning" else "info"
+    gaze_status = "unknown"
+    speech_pace = "unknown"
+    syllables_per_second = None
+    filler_words: dict[str, int] = {}
+
+    if source == "gaze":
+        direction = str(metrics.get("direction", "unknown"))
+        gaze_status = "away" if metrics.get("away") else direction
+        if gaze_status not in {"center", "left", "right", "up", "down", "away"}:
+            gaze_status = "unknown"
+        speech_pace = "normal"
+
+    if source == "speech_rate":
+        gaze_status = "center"
+        syllables_per_minute = float(metrics.get("syllables_per_minute", 0) or 0)
+        syllables_per_second = round(syllables_per_minute / 60, 2)
+        if syllables_per_minute == 0:
+            speech_pace = "unknown"
+        elif syllables_per_minute > 360:
+            speech_pace = "fast"
+        elif syllables_per_minute < 140:
+            speech_pace = "slow"
+        else:
+            speech_pace = "normal"
+        for item in metrics.get("filler_words", []):
+            if isinstance(item, dict):
+                word = str(item.get("word", ""))
+                count = int(item.get("count", 0) or 0)
+                if word:
+                    filler_words[word] = count
+
+    return {
+        "type": "feedback",
+        "sessionId": str(event.session_id),
+        "timestamp": event.timestamp_ms or int(time.time() * 1000),
+        "severity": severity,
+        "gaze": {
+            "status": gaze_status,
+            "confidence": metrics.get("confidence"),
+            "message": event.data.get("message") if source == "gaze" else None,
+        },
+        "speech": {
+            "pace": speech_pace,
+            "syllablesPerSecond": syllables_per_second,
+            "message": event.data.get("message") if source == "speech_rate" else None,
+        },
+        "filler": {
+            "latestWord": next(iter(filler_words), None),
+            "totalCount": sum(filler_words.values()),
+            "counts": filler_words,
+        },
+        "message": str(event.data.get("message", "")),
+    }
+
+
+@router.websocket("/ws/practice-demo")
+async def practice_demo_websocket(websocket: WebSocket) -> None:
+    await websocket.accept()
+    settings = websocket.app.state.settings
+    session_id = uuid4()
+    try:
+        from app.ai.video_gaze import VideoGazeAdapter
+
+        gaze = VideoGazeAdapter()
+    except Exception:
+        gaze = MockGazeAdapter()
+    pipeline = SessionPipeline(
+        session_id,
+        settings,
+        websocket.app.state.state_store,
+        gaze,
+        MockSpeechAdapter(),
+        {
+            "gaze_enabled": True,
+            "speech_rate_enabled": True,
+            "filler_detection_enabled": True,
+        },
+    )
+    await pipeline.start()
+    subscriber_id = f"demo-{uuid4()}"
+
+    async def send(event: RealtimeEvent) -> None:
+        feedback = _frontend_feedback(event)
+        if feedback is not None:
+            await websocket.send_json(feedback)
+
+    pipeline.subscribe(subscriber_id, send)
+    await pipeline.emit("session.ready", pipeline.elapsed_ms(), {"transport": "practice-demo"})
+
+    try:
+        while True:
+            message = await websocket.receive()
+            if message.get("type") == "websocket.disconnect":
+                break
+
+            raw_bytes = message.get("bytes")
+            raw_text = message.get("text")
+
+            if raw_bytes is not None:
+                if len(raw_bytes) < 9 or len(raw_bytes) > settings.max_media_message_bytes:
+                    await pipeline.emit_error("INVALID_MEDIA", "영상 메시지가 올바르지 않습니다.")
+                    continue
+                payload_type = raw_bytes[0]
+                timestamp_ms = int.from_bytes(raw_bytes[1:9], "big", signed=False)
+                if payload_type == 0x01:
+                    await pipeline.push_video(timestamp_ms, raw_bytes[9:])
+                elif payload_type == 0x02:
+                    await pipeline.push_audio(timestamp_ms, raw_bytes[9:])
+                else:
+                    await pipeline.emit_error(
+                        "INVALID_PAYLOAD_TYPE", "지원하지 않는 미디어 타입입니다."
+                    )
+                continue
+
+            if raw_text is None:
+                await pipeline.emit_error("INVALID_MESSAGE", "메시지가 올바르지 않습니다.")
+                continue
+
+            try:
+                client_event = ClientEvent.model_validate(json.loads(raw_text))
+            except (json.JSONDecodeError, ValidationError):
+                await pipeline.emit_error(
+                    "INVALID_MESSAGE", "JSON 메시지 형식이 올바르지 않습니다."
+                )
+                continue
+
+            if client_event.event == "ping":
+                await pipeline.emit("pong", client_event.timestamp_ms, {})
+            elif client_event.event == "session.start":
+                await pipeline.emit("session.started", client_event.timestamp_ms, client_event.data)
+            elif client_event.event in {"transcript.partial", "transcript.final"}:
+                text = str(client_event.data.get("text", ""))
+                if len(text) > 10_000:
+                    await pipeline.emit_error("TRANSCRIPT_TOO_LARGE", "텍스트가 너무 깁니다.")
+                else:
+                    await pipeline.push_audio(client_event.timestamp_ms, text.encode())
+    except WebSocketDisconnect:
+        pass
+    finally:
+        pipeline.unsubscribe(subscriber_id)
+        await pipeline.stop()
+        if hasattr(gaze, "close"):
+            gaze.close()
 
 
 @router.websocket("/ws/sessions/{session_id}")

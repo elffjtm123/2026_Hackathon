@@ -1,6 +1,6 @@
 import asyncio
 from dataclasses import dataclass
-from typing import TypeVar
+from typing import Generic, TypeVar
 
 T = TypeVar("T")
 
@@ -10,7 +10,7 @@ class QueueStats:
     dropped: int = 0
 
 
-class DropOldestQueue[T]:
+class DropOldestQueue(Generic[T]):
     def __init__(self, maxsize: int) -> None:
         self.queue: asyncio.Queue[T] = asyncio.Queue(maxsize=maxsize)
         self.stats = QueueStats()
