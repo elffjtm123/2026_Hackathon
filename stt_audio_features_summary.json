@@ -1,0 +1,9 @@
+{
+  "total_rows": 2604,
+  "valid_audio_rows": 2603,
+  "missing_or_error_rows": 1,
+  "total_audio_hours": 31.832,
+  "avg_duration_sec": 44.024,
+  "max_duration_sec": 91.78,
+  "min_duration_sec": 4.26
+}
