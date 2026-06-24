@@ -1,2 +1,11 @@
+.env
+.venv/
+__pycache__/
+*.py[cod]
+*.db
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
 node_modules/
 dist/
