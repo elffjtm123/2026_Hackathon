@@ -32,19 +32,19 @@ export function SessionControls({
       <div className="mode-tabs" role="tablist" aria-label="연습 모드">
         <button
           type="button"
-          className={mode === "interview" ? "active" : ""}
-          onClick={() => onModeChange("interview")}
-          disabled={isRunning || isStarting}
-        >
-          면접
-        </button>
-        <button
-          type="button"
           className={mode === "presentation" ? "active" : ""}
           onClick={() => onModeChange("presentation")}
           disabled={isRunning || isStarting}
         >
           발표
+        </button>
+        <button
+          type="button"
+          className={mode === "interview" ? "active" : ""}
+          onClick={() => onModeChange("interview")}
+          disabled={isRunning || isStarting}
+        >
+          면접
         </button>
       </div>
 

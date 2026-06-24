@@ -18,10 +18,11 @@ function createSessionId() {
 }
 
 export function usePracticeSession() {
-  const [mode, setMode] = useState<PracticeMode>("interview");
+  const [mode, setMode] = useState<PracticeMode>("presentation");
   const [featureSettings, setFeatureSettings] =
     useState<PresentationFeatureSettings>({
       karaokeGuideEnabled: true,
+      keywordHintEnabled: false,
       styleTransferEnabled: true,
     });
   const [sessionId, setSessionId] = useState<string | null>(null);

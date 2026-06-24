@@ -15,6 +15,7 @@ export type PracticeMode = "interview" | "presentation";
 
 export type PresentationFeatureSettings = {
   karaokeGuideEnabled: boolean;
+  keywordHintEnabled: boolean;
   styleTransferEnabled: boolean;
 };
 
@@ -62,6 +63,8 @@ export type ClientRealtimeMessage =
       sessionId: string;
       mode: PracticeMode;
       settings: PresentationFeatureSettings;
+      script?: string;
+      timeLimitSeconds?: number;
       timestamp: number;
     }
   | {
@@ -82,6 +85,9 @@ export type BackendClientEvent =
       data: {
         sessionId: string;
         mode: PracticeMode;
+        settings?: PresentationFeatureSettings;
+        script?: string;
+        timeLimitSeconds?: number;
       };
     }
   | {

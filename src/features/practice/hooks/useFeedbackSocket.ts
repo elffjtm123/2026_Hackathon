@@ -21,6 +21,9 @@ function toBackendEvent(message: ClientRealtimeMessage): BackendClientEvent {
       data: {
         sessionId: message.sessionId,
         mode: message.mode,
+        settings: message.settings,
+        script: message.script,
+        timeLimitSeconds: message.timeLimitSeconds,
       },
     };
   }
@@ -89,7 +92,9 @@ export function useFeedbackSocket(
     (
       sessionId: string,
       mode: PracticeMode,
-      settings: PresentationFeatureSettings
+      settings: PresentationFeatureSettings,
+      script?: string,
+      timeLimitSeconds?: number
     ) => {
       if (!feedbackWsUrl) {
         setStatus("disconnected");
@@ -110,6 +115,8 @@ export function useFeedbackSocket(
           sessionId,
           mode,
           settings,
+          script,
+          timeLimitSeconds,
           timestamp: Date.now(),
         });
       };

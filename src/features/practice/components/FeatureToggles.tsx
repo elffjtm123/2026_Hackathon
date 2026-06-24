@@ -67,6 +67,13 @@ export function FeatureToggles({
           onChange={(enabled) => onChange("karaokeGuideEnabled", enabled)}
         />
         <FeatureToggle
+          title="주요 단어 힌트"
+          description="전문 대신 현재 문장의 핵심 단어만 같은 위치에 표시합니다."
+          checked={settings.keywordHintEnabled}
+          disabled={disabled}
+          onChange={(enabled) => onChange("keywordHintEnabled", enabled)}
+        />
+        <FeatureToggle
           title="대본 스타일 전이"
           description="여러 발표 스타일의 수사적 특성을 혼합해 대본 변환을 허용합니다."
           checked={settings.styleTransferEnabled}
