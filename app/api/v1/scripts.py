@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Request
@@ -109,7 +109,7 @@ async def style_transfer(
         safety_result=result["safety"],
         provider="mock",
         provider_model="rules-v1",
-        completed_at=datetime.now(UTC),
+        completed_at=datetime.now(timezone.utc),
     )
     db.add(job)
     await db.commit()
