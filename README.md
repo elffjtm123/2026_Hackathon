@@ -12,6 +12,12 @@ cp .env.example .env
 docker compose up --build
 ```
 
+## 서버 실행: 2개의 터미널에서 각각 실행
+```bash
+npm run dev:backend
+npm run dev
+```
+
 API 문서는 `http://localhost:8000/docs`, 상태 확인은
 `http://localhost:8000/health/ready`에서 볼 수 있습니다. Docker 시작 시 Alembic
 migration이 자동 적용됩니다.
