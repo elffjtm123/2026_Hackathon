@@ -72,6 +72,18 @@ def estimate_stt_pronunciation_accuracy(
     avg_logprob: float | None = None,
     no_speech_prob: float | None = None,
 ) -> dict[str, Any]:
+    if reference_text is None and (avg_logprob is None or no_speech_prob is None):
+        return {
+            "status": "insufficient_signal",
+            "pronunciation_clarity_score": None,
+            "confidence": 0.0,
+            "expected": None,
+            "recognized": recognized,
+            "difficult_units": [],
+            "method": "unavailable",
+            "message": "현재 STT 결과만으로 발음 명료도를 추정할 수 없습니다.",
+        }
+
     from stt import ClarityAnalyzer
 
     stt_result = {

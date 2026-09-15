@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 
 from app.ai.base import GazeAdapter, SpeechAdapter
 from app.ai.http import HTTPGazeAdapter, HTTPSpeechAdapter
-from app.ai.local_stt import create_local_whisper_speech_adapter
+from app.ai.local_stt import create_local_qwen_speech_adapter
 from app.ai.mock import MockGazeAdapter, MockSpeechAdapter
 from app.api.health import router as health_router
 from app.api.v1.auth import router as auth_router
@@ -63,17 +63,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             http_clients = [http_gaze.client, http_speech.client]
         else:
             gaze = MockGazeAdapter()
-            if settings.stt_provider == "whisper":
+            if settings.stt_provider == "qwen3_asr":
                 try:
-                    speech = create_local_whisper_speech_adapter()
+                    speech = create_local_qwen_speech_adapter(
+                        settings.stt_model,
+                        settings.stt_device,
+                        settings.stt_context,
+                        settings.stt_silence_rms_threshold,
+                    )
                 except RuntimeError as exc:
-                    logger.warning("local_whisper_unavailable", extra={"reason": str(exc)})
+                    logger.warning("local_qwen_unavailable", extra={"reason": str(exc)})
                     speech = MockSpeechAdapter()
             else:
                 speech = MockSpeechAdapter()
         app.state.settings = settings
         app.state.database = database
         app.state.state_store = state_store
+        app.state.speech = speech
         app.state.pipelines = PipelineRegistry(settings, state_store, gaze, speech)
         app.state.webrtc = WebRTCManager(settings)
         app.state.websocket_counts = {}

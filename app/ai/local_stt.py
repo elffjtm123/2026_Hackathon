@@ -1,21 +1,25 @@
 import asyncio
 import importlib.util
+import io
 import json
 import re
-import tempfile
 import time
-from pathlib import Path
 from typing import Any
 
 from app.ai.base import AIResult, MediaPayload
 
 
-def _decode_text_payload(payload: bytes) -> tuple[str, float | None]:
-    raw = payload.decode("utf-8", errors="ignore").strip()
+def _decode_text_payload(payload: bytes) -> tuple[str, float | None] | None:
+    try:
+        raw = payload.decode("utf-8").strip()
+    except UnicodeDecodeError:
+        return None
+    if any(ord(char) < 32 and char not in "\t\n\r" for char in raw):
+        return None
     try:
         data: Any = json.loads(raw)
     except json.JSONDecodeError:
-        return raw, None
+        return (raw, None) if raw else None
     if not isinstance(data, dict):
         return raw, None
     text = str(data.get("text", "")).strip()
@@ -28,56 +32,91 @@ def _decode_text_payload(payload: bytes) -> tuple[str, float | None]:
     return text, duration_sec
 
 
-class LocalWhisperSpeechAdapter:
-    def __init__(self, model_size: str = "small") -> None:
-        if importlib.util.find_spec("faster_whisper") is None and importlib.util.find_spec(
-            "whisper"
-        ) is None:
-            raise RuntimeError("Whisper STT package is not installed")
+class LocalQwenSpeechAdapter:
+    def __init__(
+        self,
+        model_name: str = "Qwen/Qwen3-ASR-0.6B",
+        device: str = "auto",
+        context: str = "",
+        silence_rms_threshold: float = 0.003,
+    ) -> None:
+        if importlib.util.find_spec("qwen_asr") is None:
+            raise RuntimeError("qwen-asr package is not installed")
 
-        from stt import ClarityAnalyzer, FillerWordAnalyzer, SpeechRateAnalyzer, STTEngine
+        import numpy as np
+        import soundfile as sf
+        import torch
+        from qwen_asr import Qwen3ASRModel
 
-        self.stt = STTEngine(model_size=model_size, language="ko")
+        from stt import FillerWordAnalyzer, SpeechRateAnalyzer
+
+        resolved_device = (
+            "mps" if device == "auto" and torch.backends.mps.is_available() else device
+        )
+        if resolved_device == "auto":
+            resolved_device = "cpu"
+        dtype = torch.float16 if resolved_device == "mps" else torch.float32
+
+        self.np = np
+        self.sf = sf
+        self.context = context
+        self.silence_rms_threshold = silence_rms_threshold
+        self.stt = Qwen3ASRModel.from_pretrained(
+            model_name,
+            device_map=resolved_device,
+            dtype=dtype,
+            max_inference_batch_size=1,
+            max_new_tokens=128,
+        )
         self.rate = SpeechRateAnalyzer()
         self.filler = FillerWordAnalyzer()
-        self.clarity = ClarityAnalyzer()
 
     async def infer(self, media: MediaPayload) -> AIResult:
         started = time.perf_counter()
         return await asyncio.to_thread(self._infer_sync, media, started)
 
     def _infer_sync(self, media: MediaPayload, started: float) -> AIResult:
-        if not media.payload.startswith(b"RIFF"):
-            transcript, duration = _decode_text_payload(media.payload)
+        text_payload = _decode_text_payload(media.payload)
+        if text_payload is not None and not media.payload.startswith(b"RIFF"):
+            transcript, duration = text_payload
             duration = duration or max(1.0, len(re.findall(r"[가-힣]", transcript)) / 5)
-            stt_result = {
-                "transcript": transcript,
-                "duration": duration,
-                "avg_logprob": -0.35 if transcript else -1.0,
-                "no_speech_prob": 0.1 if transcript else 1.0,
-            }
-            return self._analyze_result(media, stt_result, started)
+            return self._analyze_result(media, transcript, duration, started)
 
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
-            temp_file.write(media.payload)
-            temp_path = Path(temp_file.name)
+        if media.payload.startswith(b"RIFF"):
+            audio, sample_rate = self.sf.read(
+                io.BytesIO(media.payload), dtype="float32", always_2d=False
+            )
+            if audio.ndim > 1:
+                audio = audio.mean(axis=1)
+        else:
+            sample_rate = 16_000
+            audio = self.np.frombuffer(media.payload, dtype="<i2").astype(self.np.float32)
+            audio /= 32768.0
 
-        try:
-            stt_result = self.stt.transcribe_file(str(temp_path))
-        finally:
-            temp_path.unlink(missing_ok=True)
+        duration = len(audio) / sample_rate
+        rms = float(self.np.sqrt(self.np.mean(self.np.square(audio)))) if len(audio) else 0.0
+        if duration < 0.5 or rms < self.silence_rms_threshold:
+            return self._analyze_result(media, "", duration, started, rms=rms)
 
-        return self._analyze_result(media, stt_result, started)
+        result = self.stt.transcribe(
+            audio=(audio, sample_rate),
+            context=self.context,
+            language="Korean",
+        )[0]
+        return self._analyze_result(media, result.text, duration, started, rms=rms)
 
     def _analyze_result(
-        self, media: MediaPayload, stt_result: dict[str, Any], started: float
+        self,
+        media: MediaPayload,
+        transcript: str,
+        duration: float,
+        started: float,
+        *,
+        rms: float | None = None,
     ) -> AIResult:
-        transcript = str(stt_result.get("transcript", "")).strip()
-        duration = float(stt_result.get("duration", 0) or 0)
+        transcript = transcript.strip()
         speech_rate = self.rate.analyze(transcript, duration)
         fillers = self.filler.analyze(transcript)
-        clarity = self.clarity.analyze(transcript, stt_result)
-        syllables_per_minute = float(speech_rate.get("cpm", 0) or 0)
         filler_counts = dict(fillers.get("counts", {}))
         level = "warning" if speech_rate.get("level") in {"FAST", "SLOW"} else "info"
 
@@ -85,16 +124,18 @@ class LocalWhisperSpeechAdapter:
             source="speech_rate",
             timestamp_ms=media.timestamp_ms,
             level=level,
-            message=str(speech_rate.get("feedback", "발화 분석이 완료되었습니다.")),
+            message=(
+                str(speech_rate.get("feedback", "발화 분석이 완료되었습니다."))
+                if transcript
+                else "음성이 감지되지 않았습니다."
+            ),
             metrics={
-                "syllables_per_minute": syllables_per_minute,
+                "syllables_per_minute": float(speech_rate.get("cpm", 0) or 0),
                 "filler_words": [
                     {"word": word, "count": count} for word, count in filler_counts.items()
                 ],
                 "duration_sec": duration,
-                "avg_logprob": stt_result.get("avg_logprob"),
-                "no_speech_prob": stt_result.get("no_speech_prob"),
-                "clarity": clarity,
+                "rms": rms,
             },
             transcript=transcript or None,
             is_final=True,
@@ -102,5 +143,10 @@ class LocalWhisperSpeechAdapter:
         )
 
 
-def create_local_whisper_speech_adapter(model_size: str = "small") -> LocalWhisperSpeechAdapter:
-    return LocalWhisperSpeechAdapter(model_size=model_size)
+def create_local_qwen_speech_adapter(
+    model_name: str = "Qwen/Qwen3-ASR-0.6B",
+    device: str = "auto",
+    context: str = "",
+    silence_rms_threshold: float = 0.003,
+) -> LocalQwenSpeechAdapter:
+    return LocalQwenSpeechAdapter(model_name, device, context, silence_rms_threshold)

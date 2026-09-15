@@ -3,6 +3,7 @@ from uuid import uuid4
 
 import pytest
 
+from app.ai.base import AIResult
 from app.ai.mock import MockSpeechAdapter
 from app.core.config import Settings
 from app.realtime.pipeline import SessionPipeline
@@ -18,6 +19,24 @@ def test_video_queue_drops_oldest() -> None:
     assert queue.stats.dropped == 1
     assert queue.queue.get_nowait() == 2
     assert queue.queue.get_nowait() == 3
+
+
+@pytest.mark.asyncio
+async def test_transcript_without_confidence_skips_pronunciation_feedback() -> None:
+    settings = Settings(jwt_secret="test-secret-that-is-definitely-long-enough", redis_url=None)
+    pipeline = SessionPipeline(
+        uuid4(), settings, SessionStateStore(None), object(), MockSpeechAdapter(), {}
+    )
+    events = []
+
+    async def collect(event: object) -> None:
+        events.append(event)
+
+    pipeline.subscribe("test", collect)  # type: ignore[arg-type]
+    await pipeline._handle_transcript_analysis(
+        AIResult("speech_rate", 100, "info", "ok", {}, "안녕하세요", True)
+    )
+    assert events == []
 
 
 @pytest.mark.asyncio

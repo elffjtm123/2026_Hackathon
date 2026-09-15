@@ -1,6 +1,9 @@
 from fastapi.testclient import TestClient
 
-from app.modules.pronunciation.service import estimate_pronunciation_clarity
+from app.modules.pronunciation.service import (
+    estimate_pronunciation_clarity,
+    estimate_stt_pronunciation_accuracy,
+)
 from app.modules.script_sync.service import ScriptSyncService, analyze_script
 from app.modules.style_transfer.service import normalize_weights, safety_check
 from tests.conftest import bearer
@@ -29,6 +32,12 @@ def test_pronunciation_is_an_estimate_and_handles_weak_signal() -> None:
     weak = estimate_pronunciation_clarity("안녕", "안", 0.2)
     assert weak["status"] == "insufficient_signal"
     assert weak["pronunciation_clarity_score"] is None
+
+
+def test_pronunciation_requires_reference_or_stt_confidence() -> None:
+    result = estimate_stt_pronunciation_accuracy("안녕하세요")
+    assert result["status"] == "insufficient_signal"
+    assert result["pronunciation_clarity_score"] is None
 
 
 def test_script_api_and_session_fields(client: TestClient, auth: dict[str, object]) -> None:

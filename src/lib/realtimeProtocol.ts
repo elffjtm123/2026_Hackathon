@@ -45,6 +45,7 @@ export type RealtimeFeedback = {
     message?: string | null;
     method?: string | null;
   };
+  transcript?: string | null;
   message?: string;
 };
 

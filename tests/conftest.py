@@ -19,6 +19,7 @@ def client(tmp_path: object) -> Iterator[TestClient]:
         jwt_secret="test-secret-that-is-definitely-long-enough",
         cors_origins=["http://testserver"],
         ai_mode="mock",
+        stt_provider="mock",
     )
     with TestClient(create_app(settings)) as test_client:
         yield test_client

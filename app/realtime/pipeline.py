@@ -179,7 +179,7 @@ class SessionPipeline:
                 )
                 await self.emit_error(
                     "SPEECH_AI_UNAVAILABLE",
-                    "Whisper 음성 분석에 실패했습니다. "
+                    "음성 분석에 실패했습니다. "
                     "백엔드 로그와 STT 모델 설치 상태를 확인하세요.",
                 )
             finally:
@@ -196,6 +196,7 @@ class SessionPipeline:
                 "level": result.level,
                 "message": result.message,
                 "metrics": result.metrics,
+                "transcript": result.transcript,
                 "ai_latency_ms": result.latency_ms,
             },
             module=result.source,
@@ -242,6 +243,8 @@ class SessionPipeline:
             avg_logprob=result.metrics.get("avg_logprob"),
             no_speech_prob=result.metrics.get("no_speech_prob"),
         )
+        if pronunciation.get("pronunciation_clarity_score") is None:
+            return
         self.aggregator.add_pronunciation(pronunciation, result.timestamp_ms)
         level = (
             "warning"

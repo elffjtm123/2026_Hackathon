@@ -44,6 +44,12 @@ export function FeedbackPanel({
             <strong>{feedback.speech.pace}</strong>
             <p>{feedback.speech.message}</p>
           </div>
+          {feedback.transcript ? (
+            <div>
+              <span className="label">인식된 음성</span>
+              <p>{feedback.transcript}</p>
+            </div>
+          ) : null}
         </div>
       ) : (
         <p className="muted-text">세션을 시작하면 피드백이 표시됩니다.</p>

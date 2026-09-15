@@ -8,7 +8,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
 from sqlalchemy import select
 
-from app.ai.mock import MockGazeAdapter, MockSpeechAdapter
+from app.ai.mock import MockGazeAdapter
 from app.core.security import decode_token
 from app.db.models.session import PracticeSession, SessionStatus
 from app.realtime.events import ClientEvent, RealtimeEvent
@@ -100,6 +100,7 @@ def _frontend_feedback(event: RealtimeEvent) -> dict[str, Any] | None:
             "message": pronunciation_message,
             "method": pronunciation_method,
         },
+        "transcript": event.data.get("transcript"),
         "message": str(event.data.get("message", "")),
     }
 
@@ -115,16 +116,7 @@ async def practice_demo_websocket(websocket: WebSocket) -> None:
         gaze = VideoGazeAdapter()
     except Exception:
         gaze = MockGazeAdapter()
-    try:
-        from app.ai.local_stt import create_local_whisper_speech_adapter
-
-        speech = (
-            create_local_whisper_speech_adapter()
-            if settings.stt_provider == "whisper"
-            else MockSpeechAdapter()
-        )
-    except RuntimeError:
-        speech = MockSpeechAdapter()
+    speech = websocket.app.state.speech
     pipeline = SessionPipeline(
         session_id,
         settings,
