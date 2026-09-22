@@ -71,10 +71,8 @@ def _frontend_feedback(event: RealtimeEvent) -> dict[str, Any] | None:
         gaze_status = "away" if metrics.get("away") else direction
         if gaze_status not in {"center", "left", "right", "up", "down", "away"}:
             gaze_status = "unknown"
-        speech_pace = "normal"
 
     if source == "speech_rate":
-        gaze_status = "center"
         syllables_per_minute = float(metrics.get("syllables_per_minute", 0) or 0)
         syllables_per_second = round(syllables_per_minute / 60, 2)
         if syllables_per_minute == 0:
@@ -99,35 +97,39 @@ def _frontend_feedback(event: RealtimeEvent) -> dict[str, Any] | None:
         pronunciation_message = str(metrics.get("message", event.data.get("message", "")))
         pronunciation_method = metrics.get("method")
 
-    return {
+    feedback: dict[str, Any] = {
         "type": "feedback",
         "sessionId": str(event.session_id),
         "source": source,
         "timestamp": event.timestamp_ms or int(time.time() * 1000),
         "severity": severity,
-        "gaze": {
-            "status": gaze_status,
-            "confidence": metrics.get("confidence"),
-            "message": event.data.get("message") if source == "gaze" else None,
-        },
-        "speech": {
-            "pace": speech_pace,
-            "syllablesPerSecond": syllables_per_second,
-            "message": event.data.get("message") if source == "speech_rate" else None,
-        },
-        "filler": {
-            "latestWord": next(iter(filler_words), None),
-            "totalCount": sum(filler_words.values()),
-            "counts": filler_words,
-        },
-        "pronunciation": {
-            "accuracy": pronunciation_accuracy,
-            "message": pronunciation_message,
-            "method": pronunciation_method,
-        },
         "transcript": event.data.get("transcript"),
         "message": str(event.data.get("message", "")),
     }
+    if source == "gaze":
+        feedback["gaze"] = {
+            "status": gaze_status,
+            "confidence": metrics.get("confidence"),
+            "message": event.data.get("message"),
+        }
+    elif source == "speech_rate":
+        feedback["speech"] = {
+            "pace": speech_pace,
+            "syllablesPerSecond": syllables_per_second,
+            "message": event.data.get("message"),
+        }
+        feedback["filler"] = {
+            "latestWord": next(iter(filler_words), None),
+            "totalCount": sum(filler_words.values()),
+            "counts": filler_words,
+        }
+    elif source == "pronunciation":
+        feedback["pronunciation"] = {
+            "accuracy": pronunciation_accuracy,
+            "message": pronunciation_message,
+            "method": pronunciation_method,
+        }
+    return feedback
 
 
 @router.websocket("/ws/practice-demo")

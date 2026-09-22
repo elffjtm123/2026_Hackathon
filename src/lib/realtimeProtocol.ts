@@ -24,17 +24,17 @@ export type RealtimeFeedback = {
   source?: string;
   timestamp: number;
   severity: FeedbackSeverity;
-  gaze: {
+  gaze?: {
     status: GazeStatus;
     confidence?: number;
     message?: string;
   };
-  speech: {
+  speech?: {
     pace: SpeechPaceStatus;
     syllablesPerSecond?: number;
     message?: string;
   };
-  filler: {
+  filler?: {
     latestWord?: string;
     totalCount: number;
     counts?: Record<string, number>;
@@ -61,7 +61,10 @@ export type PracticeSummary = {
   gazeAwayRatio: number;
   pronunciationAccuracy: number | null;
   speechPaceWarningCount: number;
+  averageSyllablesPerMinute: number;
+  fillerWordCounts: Record<string, number>;
   transcript: string | null;
+  incomplete: boolean;
 };
 
 export type SessionCompletionReport = {

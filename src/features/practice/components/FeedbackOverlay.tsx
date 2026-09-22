@@ -1,11 +1,11 @@
-import type { RealtimeFeedback } from "../types";
+import type { FeedbackState } from "../feedbackState";
 
 type FeedbackOverlayProps = {
-  feedback: RealtimeFeedback | null;
+  feedback: FeedbackState;
 };
 
 export function FeedbackOverlay({ feedback }: FeedbackOverlayProps) {
-  if (!feedback) {
+  if (!feedback.gaze && !feedback.speech) {
     return (
       <div className="feedback-overlay feedback-overlay--empty">
         피드백 대기 중
@@ -13,21 +13,32 @@ export function FeedbackOverlay({ feedback }: FeedbackOverlayProps) {
     );
   }
 
+  const severity =
+    feedback.gaze?.severity === "danger" ||
+    feedback.speech?.severity === "danger"
+      ? "danger"
+      : feedback.gaze?.severity === "warning" ||
+          feedback.speech?.severity === "warning"
+        ? "warning"
+        : "info";
+  const message =
+    feedback.gaze?.gaze?.message ?? feedback.speech?.speech?.message;
+
   return (
     <div
-      className={`feedback-overlay feedback-overlay--${feedback.severity}`}
+      className={`feedback-overlay feedback-overlay--${severity}`}
       aria-live="polite"
     >
       <div className="overlay-row">
         <span>시선</span>
-        <strong>{feedback.gaze.status}</strong>
+        <strong>{feedback.gaze?.gaze?.status ?? "분석 대기"}</strong>
       </div>
       <div className="overlay-row">
         <span>속도</span>
-        <strong>{feedback.speech.pace}</strong>
+        <strong>{feedback.speech?.speech?.pace ?? "분석 대기"}</strong>
       </div>
-      {feedback.message ? (
-        <p className="overlay-message">{feedback.message}</p>
+      {message ? (
+        <p className="overlay-message">{message}</p>
       ) : null}
     </div>
   );

@@ -70,18 +70,20 @@ export function PracticePage() {
     }
   }, []);
 
-  const handleEnd = useCallback(() => {
-    if (session.sessionId) {
-      socket.send({
-        type: "session.end",
-        sessionId: session.sessionId,
-        timestamp: Date.now(),
-      });
+  const handleEnd = useCallback(async () => {
+    if (!session.sessionId) {
+      return;
     }
 
-    socket.disconnect();
-    media.stopMedia();
-    session.endSession();
+    try {
+      const report = await socket.finish(session.sessionId);
+      session.completeSession(report);
+    } catch {
+      session.endSession();
+    } finally {
+      socket.disconnect();
+      media.stopMedia();
+    }
   }, [media, session, socket]);
 
   useEffect(() => {
@@ -144,7 +146,7 @@ export function PracticePage() {
           {!media.stream ? (
             <div className="video-placeholder">카메라 프리뷰</div>
           ) : null}
-          <FeedbackOverlay feedback={session.latestFeedback} />
+          <FeedbackOverlay feedback={session.feedbackState} />
           {session.mode === "presentation" ? (
             <KaraokeGuide
               script={presentationScript}
@@ -158,7 +160,7 @@ export function PracticePage() {
 
         <FeedbackPanel
           connectionStatus={socket.status}
-          feedback={session.latestFeedback}
+          feedback={session.feedbackState}
           socketError={socket.error}
           isMockMode={isMockMode}
         />

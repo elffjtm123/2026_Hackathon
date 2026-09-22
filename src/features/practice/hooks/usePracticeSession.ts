@@ -4,7 +4,13 @@ import type {
   PracticeSummary,
   PresentationFeatureSettings,
   RealtimeFeedback,
+  SessionCompletionReport,
 } from "../types";
+import {
+  emptyFeedbackState,
+  reduceFeedback,
+  type FeedbackState,
+} from "../feedbackState";
 import { appendTranscript } from "../scriptTools";
 
 const gazeAwayStatuses = new Set(["away", "left", "right", "up", "down"]);
@@ -29,8 +35,11 @@ export function usePracticeSession() {
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [endedAt, setEndedAt] = useState<number | null>(null);
   const [now, setNow] = useState(Date.now());
-  const [latestFeedback, setLatestFeedback] =
-    useState<RealtimeFeedback | null>(null);
+  const [feedbackState, setFeedbackState] = useState<FeedbackState>(
+    emptyFeedbackState
+  );
+  const [completionReport, setCompletionReport] =
+    useState<SessionCompletionReport | null>(null);
   const [gazeAwayDurationMs, setGazeAwayDurationMs] = useState(0);
   const [pronunciationAccuracy, setPronunciationAccuracy] = useState<
     number | null
@@ -68,7 +77,8 @@ export function usePracticeSession() {
     setStartedAt(Date.now());
     setEndedAt(null);
     setNow(Date.now());
-    setLatestFeedback(null);
+    setFeedbackState(emptyFeedbackState);
+    setCompletionReport(null);
     setGazeAwayDurationMs(0);
     setPronunciationAccuracy(null);
     setSpeechPaceWarningCount(0);
@@ -101,7 +111,7 @@ export function usePracticeSession() {
   );
 
   const receiveFeedback = useCallback((feedback: RealtimeFeedback) => {
-    setLatestFeedback(feedback);
+    setFeedbackState((current) => reduceFeedback(current, feedback));
 
     if (feedback.transcript) {
       transcriptRef.current = appendTranscript(
@@ -120,7 +130,9 @@ export function usePracticeSession() {
       }
 
       lastGazeSampleAtRef.current = observedAt;
-      lastGazeWasAwayRef.current = gazeAwayStatuses.has(feedback.gaze.status);
+      lastGazeWasAwayRef.current = gazeAwayStatuses.has(
+        feedback.gaze?.status ?? "unknown"
+      );
     }
 
     const accuracy = feedback.pronunciation?.accuracy;
@@ -138,10 +150,17 @@ export function usePracticeSession() {
 
     if (
       (feedback.source === undefined || feedback.source === "speech_rate") &&
-      speechWarningStatuses.has(feedback.speech.pace)
+      speechWarningStatuses.has(feedback.speech?.pace ?? "unknown")
     ) {
       setSpeechPaceWarningCount((count) => count + 1);
     }
+  }, []);
+
+  const completeSession = useCallback((report: SessionCompletionReport) => {
+    setCompletionReport(report);
+    gazeAwayDurationMsRef.current = report.gaze.awayDurationMs;
+    setGazeAwayDurationMs(report.gaze.awayDurationMs);
+    setEndedAt(Date.now());
   }, []);
 
   const summary: PracticeSummary | null =
@@ -151,14 +170,23 @@ export function usePracticeSession() {
           durationSeconds: elapsedSeconds,
           gazeAwayRatio:
             elapsedSeconds > 0
-              ? Math.min(1, gazeAwayDurationMs / (elapsedSeconds * 1000))
+              ? Math.min(
+                  1,
+                  (completionReport?.gaze.awayDurationMs ?? gazeAwayDurationMs) /
+                    (elapsedSeconds * 1000)
+                )
               : 0,
           pronunciationAccuracy:
             pronunciationAccuracy === null
               ? null
               : Math.round(pronunciationAccuracy * 10) / 10,
           speechPaceWarningCount,
-          transcript: transcriptRef.current || null,
+          averageSyllablesPerMinute:
+            completionReport?.speech.averageSyllablesPerMinute ?? 0,
+          fillerWordCounts: completionReport?.filler.counts ?? {},
+          transcript:
+            completionReport?.transcript ?? (transcriptRef.current || null),
+          incomplete: completionReport?.incomplete ?? true,
         }
       : null;
 
@@ -170,10 +198,11 @@ export function usePracticeSession() {
     sessionId,
     isRunning,
     elapsedSeconds,
-    latestFeedback,
+    feedbackState,
     summary,
     startSession,
     endSession,
+    completeSession,
     receiveFeedback,
   };
 }

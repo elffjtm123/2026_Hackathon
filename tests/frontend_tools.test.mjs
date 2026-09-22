@@ -3,6 +3,7 @@ import test from "node:test";
 
 import * as scriptTools from "../src/features/practice/scriptTools.ts";
 import * as socketTools from "../src/features/practice/hooks/useFeedbackSocket.ts";
+import * as feedbackState from "../src/features/practice/feedbackState.ts";
 
 test("받아쓰기 청크를 중복 없이 순서대로 누적한다", () => {
   assert.equal(typeof scriptTools.appendTranscript, "function");
@@ -56,4 +57,31 @@ test("session.end를 ping이 아닌 백엔드 종료 이벤트로 변환한다",
       data: { sessionId: "session-1" },
     }
   );
+});
+
+test("발화 피드백이 마지막 시선 상태를 덮어쓰지 않는다", () => {
+  const gaze = {
+    type: "feedback",
+    sessionId: "s",
+    source: "gaze",
+    timestamp: 1,
+    severity: "warning",
+    gaze: { status: "left", message: "왼쪽" },
+  };
+  const speech = {
+    type: "feedback",
+    sessionId: "s",
+    source: "speech_rate",
+    timestamp: 2,
+    severity: "info",
+    speech: { pace: "normal", message: "적절" },
+    filler: { totalCount: 0, counts: {} },
+  };
+  const afterGaze = feedbackState.reduceFeedback(
+    feedbackState.emptyFeedbackState,
+    gaze
+  );
+  const afterSpeech = feedbackState.reduceFeedback(afterGaze, speech);
+  assert.equal(afterSpeech.gaze?.gaze?.status, "left");
+  assert.equal(afterSpeech.speech?.speech?.pace, "normal");
 });

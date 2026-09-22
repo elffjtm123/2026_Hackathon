@@ -43,7 +43,22 @@ export function SessionSummary({ summary }: SessionSummaryProps) {
           <dt>속도 경고</dt>
           <dd>{summary.speechPaceWarningCount}회</dd>
         </div>
+        <div>
+          <dt>평균 발화 속도</dt>
+          <dd>{Math.round(summary.averageSyllablesPerMinute)}음절/분</dd>
+        </div>
+        <div>
+          <dt>습관어</dt>
+          <dd>
+            {Object.entries(summary.fillerWordCounts)
+              .map(([word, count]) => `${word} ${count}회`)
+              .join(", ") || "없음"}
+          </dd>
+        </div>
       </dl>
+      {summary.incomplete ? (
+        <p className="error-text">일부 분석이 완료되지 않아 현재까지의 결과만 표시합니다.</p>
+      ) : null}
       <div className="transcript-summary">
         <h3>받아쓰기 결과</h3>
         <p>{summary.transcript ?? "인식된 음성이 없습니다."}</p>

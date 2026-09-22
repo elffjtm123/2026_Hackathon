@@ -1,8 +1,9 @@
-import type { ConnectionStatus, RealtimeFeedback } from "../types";
+import type { FeedbackState } from "../feedbackState";
+import type { ConnectionStatus } from "../types";
 
 type FeedbackPanelProps = {
   connectionStatus: ConnectionStatus;
-  feedback: RealtimeFeedback | null;
+  feedback: FeedbackState;
   socketError: string | null;
   isMockMode: boolean;
 };
@@ -32,22 +33,22 @@ export function FeedbackPanel({
 
       {socketError ? <p className="error-text">{socketError}</p> : null}
 
-      {feedback ? (
+      {feedback.gaze || feedback.speech ? (
         <div className="feedback-detail">
           <div>
             <span className="label">시선 상태</span>
-            <strong>{feedback.gaze.status}</strong>
-            <p>{feedback.gaze.message}</p>
+            <strong>{feedback.gaze?.gaze?.status ?? "분석 대기"}</strong>
+            <p>{feedback.gaze?.gaze?.message}</p>
           </div>
           <div>
             <span className="label">발화 속도</span>
-            <strong>{feedback.speech.pace}</strong>
-            <p>{feedback.speech.message}</p>
+            <strong>{feedback.speech?.speech?.pace ?? "분석 대기"}</strong>
+            <p>{feedback.speech?.speech?.message}</p>
           </div>
-          {feedback.transcript ? (
+          {feedback.speech?.transcript ? (
             <div>
               <span className="label">인식된 음성</span>
-              <p>{feedback.transcript}</p>
+              <p>{feedback.speech.transcript}</p>
             </div>
           ) : null}
         </div>
