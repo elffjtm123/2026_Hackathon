@@ -23,6 +23,13 @@ export function FeedbackOverlay({ feedback }: FeedbackOverlayProps) {
         : "info";
   const message =
     feedback.gaze?.gaze?.message ?? feedback.speech?.speech?.message;
+  const gazeStatus = feedback.gaze?.gaze
+    ? feedback.gaze.gaze.calibrated
+      ? feedback.gaze.gaze.faceDetected && feedback.gaze.gaze.quality >= 0.5
+        ? feedback.gaze.gaze.status
+        : "판단 어려움"
+      : "보정 중"
+    : "분석 대기";
 
   return (
     <div
@@ -31,7 +38,7 @@ export function FeedbackOverlay({ feedback }: FeedbackOverlayProps) {
     >
       <div className="overlay-row">
         <span>시선</span>
-        <strong>{feedback.gaze?.gaze?.status ?? "분석 대기"}</strong>
+        <strong>{gazeStatus}</strong>
       </div>
       <div className="overlay-row">
         <span>속도</span>

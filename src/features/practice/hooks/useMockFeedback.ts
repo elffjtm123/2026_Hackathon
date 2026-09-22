@@ -61,7 +61,13 @@ export function useMockFeedback(
         severity,
         gaze: {
           status: gaze,
+          faceDetected: true,
+          headPose: { yaw: 0, pitch: 0, roll: 0 },
+          direction: gaze === "away" ? "unknown" : gaze,
+          attentionState: gaze === "center" ? "camera" : "away",
+          quality: 0.9,
           confidence: Number((0.72 + Math.random() * 0.24).toFixed(2)),
+          calibrated: true,
           message:
             gaze === "center"
               ? "시선이 안정적입니다."

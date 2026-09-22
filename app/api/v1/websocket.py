@@ -8,6 +8,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
 from sqlalchemy import select
 
+from app.ai.base import GazeAdapter
 from app.ai.mock import MockGazeAdapter
 from app.core.security import decode_token
 from app.db.models.session import PracticeSession, SessionStatus
@@ -65,10 +66,13 @@ def _frontend_feedback(event: RealtimeEvent) -> dict[str, Any] | None:
     pronunciation_accuracy = None
     pronunciation_message = None
     pronunciation_method = None
+    direction = "unknown"
+    attention_state = "unknown"
 
     if source == "gaze":
-        direction = str(metrics.get("direction", "unknown"))
-        gaze_status = "away" if metrics.get("away") else direction
+        direction = str(metrics.get("gaze_direction", "unknown"))
+        attention_state = str(metrics.get("attention_state", "unknown"))
+        gaze_status = "away" if attention_state == "away" else direction
         if gaze_status not in {"center", "left", "right", "up", "down", "away"}:
             gaze_status = "unknown"
 
@@ -109,7 +113,13 @@ def _frontend_feedback(event: RealtimeEvent) -> dict[str, Any] | None:
     if source == "gaze":
         feedback["gaze"] = {
             "status": gaze_status,
+            "faceDetected": bool(metrics.get("face_detected", False)),
+            "headPose": metrics.get("head_pose", {}),
+            "direction": direction,
+            "attentionState": attention_state,
+            "quality": float(metrics.get("quality", 0) or 0),
             "confidence": metrics.get("confidence"),
+            "calibrated": bool(metrics.get("calibrated", False)),
             "message": event.data.get("message"),
         }
     elif source == "speech_rate":
@@ -137,6 +147,7 @@ async def practice_demo_websocket(websocket: WebSocket) -> None:
     await websocket.accept()
     settings = websocket.app.state.settings
     session_id = uuid4()
+    gaze: GazeAdapter
     try:
         from app.ai.video_gaze import VideoGazeAdapter
 
@@ -231,7 +242,7 @@ async def practice_demo_websocket(websocket: WebSocket) -> None:
                 if len(text) > 10_000:
                     await pipeline.emit_error("TRANSCRIPT_TOO_LARGE", "텍스트가 너무 깁니다.")
                 else:
-                    payload = {"text": text}
+                    payload: dict[str, Any] = {"text": text}
                     if isinstance(duration_ms, int | float):
                         payload["duration_ms"] = duration_ms
                     await pipeline.push_audio(
@@ -347,7 +358,7 @@ async def session_websocket(websocket: WebSocket, session_id: UUID, token: str) 
                 if len(text) > 10_000:
                     await pipeline.emit_error("TRANSCRIPT_TOO_LARGE", "텍스트가 너무 깁니다.")
                 else:
-                    payload = {"text": text}
+                    payload: dict[str, Any] = {"text": text}
                     if isinstance(duration_ms, int | float):
                         payload["duration_ms"] = duration_ms
                     await pipeline.push_audio(

@@ -7,6 +7,7 @@ from uuid import UUID
 
 from app.ai.base import AIResult, GazeAdapter, MediaPayload, SpeechAdapter
 from app.core.config import Settings
+from app.modules.gaze.service import GazeStabilizer
 from app.modules.pronunciation.service import estimate_stt_pronunciation_accuracy
 from app.modules.script_sync.service import ScriptSyncService, analyze_script
 from app.realtime.aggregator import FeedbackAggregator
@@ -37,6 +38,7 @@ class SessionPipeline:
         self.video_queue: DropOldestQueue[MediaPayload] = DropOldestQueue(settings.video_queue_size)
         self.audio_queue: asyncio.Queue[MediaPayload] = asyncio.Queue(settings.audio_queue_size)
         self.aggregator = FeedbackAggregator()
+        self.gaze_stabilizer = GazeStabilizer(calibration_frames=16)
         self.subscribers: dict[str, Subscriber] = {}
         self.tasks: list[asyncio.Task[None]] = []
         self.running = False
@@ -169,6 +171,7 @@ class SessionPipeline:
             try:
                 if self.analysis_settings.get("gaze_enabled", True):
                     result = await self.gaze.infer(media)
+                    result = self.gaze_stabilizer.update(result)
                     await self._handle_result(result)
             except asyncio.CancelledError:
                 raise

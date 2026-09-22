@@ -13,6 +13,8 @@ class FeedbackAggregator:
         self.gaze_samples = 0
         self.gaze_away_count = 0
         self.gaze_away_duration_ms = 0
+        self.last_gaze_timestamp_ms: int | None = None
+        self.last_gaze_was_away = False
         self.speech_rates: list[float] = []
         self.fillers: Counter[str] = Counter()
         self.transcript = ""
@@ -25,9 +27,17 @@ class FeedbackAggregator:
     def add(self, result: AIResult) -> None:
         if result.source == "gaze":
             self.gaze_samples += 1
-            if result.metrics.get("away"):
+            if self.last_gaze_was_away and self.last_gaze_timestamp_ms is not None:
+                self.gaze_away_duration_ms += max(
+                    0, result.timestamp_ms - self.last_gaze_timestamp_ms
+                )
+            current_away = bool(result.metrics.get("away")) and bool(
+                result.metrics.get("face_detected")
+            ) and float(result.metrics.get("quality", 0) or 0) >= 0.5
+            if current_away and not self.last_gaze_was_away:
                 self.gaze_away_count += 1
-                self.gaze_away_duration_ms += 333
+            self.last_gaze_timestamp_ms = result.timestamp_ms
+            self.last_gaze_was_away = current_away
         if result.source == "speech_rate" and result.is_final:
             rate = float(result.metrics.get("syllables_per_minute", 0))
             if rate:

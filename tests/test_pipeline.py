@@ -10,6 +10,7 @@ from app.realtime.aggregator import FeedbackAggregator
 from app.realtime.pipeline import SessionPipeline
 from app.realtime.queues import DropOldestQueue
 from app.realtime.state import SessionStateStore
+from tests.test_gaze_service import gaze_result
 
 
 def test_video_queue_drops_oldest() -> None:
@@ -51,6 +52,15 @@ def test_overlapping_final_transcripts_are_merged_once() -> None:
 
     assert report["transcript"] == "음 저는 백엔드 개발자입니다"
     assert report["filler_word_counts"] == {"음": 1}
+
+
+def test_gaze_away_duration_uses_sample_timestamps() -> None:
+    aggregator = FeedbackAggregator()
+    aggregator.add(gaze_result(1000, True, "left"))
+    aggregator.add(gaze_result(1750, True, "left"))
+    aggregator.add(gaze_result(2500, True, "center"))
+
+    assert aggregator.report()["gaze_away_duration_ms"] == 1500
 
 
 @pytest.mark.asyncio

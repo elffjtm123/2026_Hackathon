@@ -16,6 +16,20 @@ const statusLabels: Record<ConnectionStatus, string> = {
   error: "오류",
 };
 
+function gazeLabel(feedback: FeedbackState) {
+  const gaze = feedback.gaze?.gaze;
+  if (!gaze) {
+    return "분석 대기";
+  }
+  if (!gaze.calibrated) {
+    return "보정 중";
+  }
+  if (!gaze.faceDetected || gaze.quality < 0.5) {
+    return "판단 어려움";
+  }
+  return gaze.attentionState === "away" ? `시선 이탈 (${gaze.direction})` : gaze.direction;
+}
+
 export function FeedbackPanel({
   connectionStatus,
   feedback,
@@ -37,8 +51,13 @@ export function FeedbackPanel({
         <div className="feedback-detail">
           <div>
             <span className="label">시선 상태</span>
-            <strong>{feedback.gaze?.gaze?.status ?? "분석 대기"}</strong>
+            <strong>{gazeLabel(feedback)}</strong>
             <p>{feedback.gaze?.gaze?.message}</p>
+            {feedback.gaze?.gaze?.calibrated ? (
+              <small>
+                신뢰도 {Math.round((feedback.gaze.gaze.confidence ?? 0) * 100)}%
+              </small>
+            ) : null}
           </div>
           <div>
             <span className="label">발화 속도</span>

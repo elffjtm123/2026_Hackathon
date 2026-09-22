@@ -26,7 +26,17 @@ export type RealtimeFeedback = {
   severity: FeedbackSeverity;
   gaze?: {
     status: GazeStatus;
+    faceDetected: boolean;
+    headPose: {
+      yaw: number | null;
+      pitch: number | null;
+      roll: number | null;
+    };
+    direction: GazeStatus;
+    attentionState: "unknown" | "camera" | "screen" | "away";
+    quality: number;
     confidence?: number;
+    calibrated: boolean;
     message?: string;
   };
   speech?: {
