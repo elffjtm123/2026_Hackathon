@@ -272,8 +272,8 @@ class STTEngine:
     def __init__(self, model_size: str = "small", language: str = "ko"):
         self.language   = language
         self.model_size = model_size
-        self._model     = None
-        self._backend   = None
+        self._model: Any = None
+        self._backend: str | None = None
 
     def _load(self):
         if self._model is not None:

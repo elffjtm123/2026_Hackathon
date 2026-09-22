@@ -81,4 +81,5 @@ def test_style_transfer_routes_are_removed(
 ) -> None:
     headers = bearer(auth)
     assert client.get("/api/v1/styles/presets", headers=headers).status_code == 404
-    assert client.post("/api/v1/scripts/style-transfer", headers=headers, json={}).status_code == 404
+    response = client.post("/api/v1/scripts/style-transfer", headers=headers, json={})
+    assert response.status_code == 404

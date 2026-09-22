@@ -6,6 +6,7 @@ import pytest
 from app.ai.base import AIResult
 from app.ai.mock import MockSpeechAdapter
 from app.core.config import Settings
+from app.realtime.aggregator import FeedbackAggregator
 from app.realtime.pipeline import SessionPipeline
 from app.realtime.queues import DropOldestQueue
 from app.realtime.state import SessionStateStore
@@ -19,6 +20,37 @@ def test_video_queue_drops_oldest() -> None:
     assert queue.stats.dropped == 1
     assert queue.queue.get_nowait() == 2
     assert queue.queue.get_nowait() == 3
+
+
+def test_overlapping_final_transcripts_are_merged_once() -> None:
+    aggregator = FeedbackAggregator()
+    aggregator.add(
+        AIResult(
+            "speech_rate",
+            1000,
+            "info",
+            "ok",
+            {"syllables_per_minute": 200, "duration_sec": 2},
+            "음 저는 백엔드",
+            True,
+        )
+    )
+    aggregator.add(
+        AIResult(
+            "speech_rate",
+            2750,
+            "info",
+            "ok",
+            {"syllables_per_minute": 220, "duration_sec": 2},
+            "백엔드 개발자입니다",
+            True,
+        )
+    )
+
+    report = aggregator.report()
+
+    assert report["transcript"] == "음 저는 백엔드 개발자입니다"
+    assert report["filler_word_counts"] == {"음": 1}
 
 
 @pytest.mark.asyncio
@@ -71,6 +103,46 @@ async def test_slow_failing_gaze_does_not_stop_speech() -> None:
         event.event == "feedback" and event.data["source"] == "speech_rate" for event in events
     )
     assert report["filler_word_counts"] == {"음": 1}
+
+
+@pytest.mark.asyncio
+async def test_failing_speech_does_not_stop_gaze() -> None:
+    class WorkingGaze:
+        async def infer(self, media: object) -> AIResult:
+            return AIResult("gaze", 100, "info", "ok", {"away": False})
+
+    class FailingSpeech:
+        async def infer(self, media: object) -> object:
+            raise RuntimeError("boom")
+
+    settings = Settings(jwt_secret="test-secret-that-is-definitely-long-enough", redis_url=None)
+    pipeline = SessionPipeline(
+        uuid4(),
+        settings,
+        SessionStateStore(None),
+        WorkingGaze(),  # type: ignore[arg-type]
+        FailingSpeech(),  # type: ignore[arg-type]
+        {"gaze_enabled": True, "speech_rate_enabled": True},
+    )
+    events = []
+
+    async def collect(event: object) -> None:
+        events.append(event)
+
+    pipeline.subscribe("test", collect)  # type: ignore[arg-type]
+    await pipeline.start()
+    await pipeline.push_audio(100, b"audio")
+    await pipeline.push_video(100, b"jpeg")
+    await asyncio.sleep(0.05)
+    await pipeline.stop()
+
+    assert any(
+        event.event == "error" and event.data["code"] == "SPEECH_AI_UNAVAILABLE"
+        for event in events
+    )
+    assert any(
+        event.event == "feedback" and event.data["source"] == "gaze" for event in events
+    )
 
 
 @pytest.mark.asyncio

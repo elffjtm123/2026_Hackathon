@@ -9,6 +9,30 @@ from typing import Any
 from app.ai.base import AIResult, MediaPayload
 
 
+def active_speech_duration(
+    audio: Any,
+    sample_rate: int,
+    threshold: float,
+    frame_ms: int = 30,
+) -> float:
+    import numpy as np
+
+    if sample_rate <= 0 or len(audio) == 0:
+        return 0.0
+    frame_size = max(1, round(sample_rate * frame_ms / 1000))
+    active_samples = 0
+    for start in range(0, len(audio), frame_size):
+        frame = audio[start : start + frame_size]
+        if len(frame) == 0:
+            continue
+        rms = float(np.sqrt(np.mean(np.square(frame))))
+        if rms >= threshold:
+            active_samples += len(frame)
+    if active_samples == 0:
+        return 0.0
+    return max(0.5, active_samples / sample_rate)
+
+
 def _decode_text_payload(payload: bytes) -> tuple[str, float | None] | None:
     try:
         raw = payload.decode("utf-8").strip()
@@ -103,7 +127,12 @@ class LocalQwenSpeechAdapter:
             context=self.context,
             language="Korean",
         )[0]
-        return self._analyze_result(media, result.text, duration, started, rms=rms)
+        speech_duration = active_speech_duration(
+            audio, sample_rate, self.silence_rms_threshold
+        )
+        return self._analyze_result(
+            media, result.text, speech_duration, started, rms=rms
+        )
 
     def _analyze_result(
         self,

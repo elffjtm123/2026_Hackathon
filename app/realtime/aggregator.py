@@ -1,7 +1,11 @@
+import re
 from collections import Counter
 from typing import Any
 
 from app.ai.base import AIResult
+from app.modules.speech.text import merge_transcript
+
+FILLER_PATTERN = re.compile(r"(?<!\S)(어|음|그|저기|그러니까)(?!\S)")
 
 
 class FeedbackAggregator:
@@ -11,7 +15,7 @@ class FeedbackAggregator:
         self.gaze_away_duration_ms = 0
         self.speech_rates: list[float] = []
         self.fillers: Counter[str] = Counter()
-        self.transcript_parts: list[str] = []
+        self.transcript = ""
         self.timeline: list[dict[str, Any]] = []
         self.pronunciation_scores: list[float] = []
         self.pronunciation_confidences: list[float] = []
@@ -24,14 +28,15 @@ class FeedbackAggregator:
             if result.metrics.get("away"):
                 self.gaze_away_count += 1
                 self.gaze_away_duration_ms += 333
-        if result.source == "speech_rate":
+        if result.source == "speech_rate" and result.is_final:
             rate = float(result.metrics.get("syllables_per_minute", 0))
             if rate:
                 self.speech_rates.append(rate)
-            for item in result.metrics.get("filler_words", []):
-                self.fillers[str(item["word"])] += int(item["count"])
-            if result.transcript and result.is_final:
-                self.transcript_parts.append(result.transcript)
+            if result.transcript:
+                self.transcript, novel = merge_transcript(
+                    self.transcript, result.transcript
+                )
+                self.fillers.update(FILLER_PATTERN.findall(novel))
         self.timeline.append(
             {
                 "timestamp_ms": result.timestamp_ms,
@@ -106,7 +111,7 @@ class FeedbackAggregator:
             "gaze_away_duration_ms": self.gaze_away_duration_ms,
             "average_syllables_per_minute": round(avg_rate, 1),
             "filler_word_counts": dict(self.fillers),
-            "transcript": " ".join(self.transcript_parts) or None,
+            "transcript": self.transcript or None,
             "timeline": self.timeline,
             "summary": self.snapshot(),
             "pronunciation_clarity_score": pronunciation_score,

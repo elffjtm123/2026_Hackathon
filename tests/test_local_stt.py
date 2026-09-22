@@ -4,7 +4,21 @@ from uuid import uuid4
 import numpy as np
 
 from app.ai.base import MediaPayload
-from app.ai.local_stt import LocalQwenSpeechAdapter, _decode_text_payload
+from app.ai.local_stt import (
+    LocalQwenSpeechAdapter,
+    _decode_text_payload,
+    active_speech_duration,
+)
+
+
+def test_active_speech_duration_excludes_silence() -> None:
+    silence = np.zeros(16_000, dtype=np.float32)
+    speech = np.full(16_000, 0.1, dtype=np.float32)
+    audio = np.concatenate([silence, speech, silence])
+
+    duration = active_speech_duration(audio, 16_000, 0.003)
+
+    assert 0.9 <= duration <= 1.1
 
 
 def test_pcm_silence_skips_qwen_inference() -> None:
