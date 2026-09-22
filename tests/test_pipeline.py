@@ -71,3 +71,35 @@ async def test_slow_failing_gaze_does_not_stop_speech() -> None:
         event.event == "feedback" and event.data["source"] == "speech_rate" for event in events
     )
     assert report["filler_word_counts"] == {"음": 1}
+
+
+@pytest.mark.asyncio
+async def test_stop_drains_audio_and_emits_completion_once() -> None:
+    settings = Settings(
+        jwt_secret="test-secret-that-is-definitely-long-enough",
+        redis_url=None,
+        pipeline_grace_seconds=1,
+    )
+    pipeline = SessionPipeline(
+        uuid4(),
+        settings,
+        SessionStateStore(None),
+        object(),  # type: ignore[arg-type]
+        MockSpeechAdapter(),
+        {"speech_rate_enabled": True, "pronunciation_enabled": False},
+    )
+    events = []
+
+    async def collect(event: object) -> None:
+        events.append(event)
+
+    pipeline.subscribe("test", collect)  # type: ignore[arg-type]
+    await pipeline.start()
+    await pipeline.push_audio(100, "마지막 문장입니다".encode())
+    first = await pipeline.stop()
+    second = await pipeline.stop()
+
+    assert first["transcript"] == "마지막 문장입니다"
+    assert second == first
+    assert [event.event for event in events].count("session.completed") == 1
+    assert events[-1].data["report"]["incomplete"] is False

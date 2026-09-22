@@ -44,6 +44,8 @@ class SessionPipeline:
         self.sequence = 0
         self.started_monotonic = time.monotonic()
         self._sequence_lock = asyncio.Lock()
+        self._stop_lock = asyncio.Lock()
+        self.completed_report: dict[str, Any] | None = None
         script = analysis_settings.get("script")
         time_limit = analysis_settings.get("time_limit_seconds")
         self.script_sync: ScriptSyncService | None = None
@@ -94,25 +96,41 @@ class SessionPipeline:
             return False
 
     async def stop(self) -> dict[str, Any]:
-        if not self.running:
-            return self.aggregator.report()
-        self.accepting = False
-        try:
-            await asyncio.wait_for(
-                asyncio.gather(self.video_queue.queue.join(), self.audio_queue.join()),
-                timeout=self.settings.pipeline_grace_seconds,
+        async with self._stop_lock:
+            if self.completed_report is not None:
+                return self.completed_report
+
+            self.accepting = False
+            incomplete = False
+            if self.running:
+                try:
+                    await asyncio.wait_for(
+                        asyncio.gather(
+                            self.video_queue.queue.join(),
+                            self.audio_queue.join(),
+                        ),
+                        timeout=self.settings.pipeline_grace_seconds,
+                    )
+                except asyncio.TimeoutError:
+                    incomplete = True
+                    logger.warning(
+                        "pipeline_grace_timeout",
+                        extra={"session_id": self.session_id},
+                    )
+                for task in self.tasks:
+                    task.cancel()
+                await asyncio.gather(*self.tasks, return_exceptions=True)
+                self.tasks.clear()
+                self.running = False
+
+            report = {**self.aggregator.report(), "incomplete": incomplete}
+            self.completed_report = report
+            await self.state_store.set(
+                self.session_id,
+                {"status": "completed", **self.metrics()},
             )
-        except TimeoutError:
-            logger.warning("pipeline_grace_timeout", extra={"session_id": self.session_id})
-        for task in self.tasks:
-            task.cancel()
-        await asyncio.gather(*self.tasks, return_exceptions=True)
-        self.tasks.clear()
-        self.running = False
-        report = self.aggregator.report()
-        await self.state_store.set(self.session_id, {"status": "completed", **self.metrics()})
-        await self.emit("session.completed", self.elapsed_ms(), {"report": report["summary"]})
-        return report
+            await self.emit("session.completed", self.elapsed_ms(), {"report": report})
+            return report
 
     async def emit(
         self,

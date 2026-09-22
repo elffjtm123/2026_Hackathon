@@ -6,14 +6,15 @@ import type {
   PracticeMode,
   PresentationFeatureSettings,
   RealtimeFeedback,
+  SessionCompletionReport,
   ServerRealtimeMessage,
 } from "../types";
 
 const feedbackWsUrl =
-  (import.meta.env.VITE_FEEDBACK_WS_URL as string | undefined) ??
+  (import.meta.env?.VITE_FEEDBACK_WS_URL as string | undefined) ??
   "ws://127.0.0.1:8000/api/v1/ws/practice-demo";
 
-function toBackendEvent(message: ClientRealtimeMessage): BackendClientEvent {
+export function toBackendEvent(message: ClientRealtimeMessage): BackendClientEvent {
   if (message.type === "session.start") {
     return {
       event: "session.start",
@@ -37,9 +38,9 @@ function toBackendEvent(message: ClientRealtimeMessage): BackendClientEvent {
   }
 
   return {
-    event: "ping",
+    event: "session.end",
     timestamp_ms: message.timestamp,
-    data: {},
+    data: { sessionId: message.sessionId },
   };
 }
 
@@ -47,6 +48,11 @@ export function useFeedbackSocket(
   onFeedback: (feedback: RealtimeFeedback) => void
 ) {
   const socketRef = useRef<WebSocket | null>(null);
+  const completionRef = useRef<{
+    resolve: (report: SessionCompletionReport) => void;
+    reject: (error: Error) => void;
+    timeoutId: number;
+  } | null>(null);
   const [status, setStatus] = useState<ConnectionStatus>("idle");
   const [error, setError] = useState<string | null>(null);
 
@@ -101,7 +107,35 @@ export function useFeedbackSocket(
     });
   }, []);
 
+  const finish = useCallback((sessionId: string) => {
+    return new Promise<SessionCompletionReport>((resolve, reject) => {
+      if (socketRef.current?.readyState !== WebSocket.OPEN) {
+        reject(new Error("WebSocket이 연결되어 있지 않습니다."));
+        return;
+      }
+      const timeoutId = window.setTimeout(() => {
+        completionRef.current = null;
+        reject(new Error("세션 분석 완료 응답 시간이 초과되었습니다."));
+      }, 10_000);
+      completionRef.current = { resolve, reject, timeoutId };
+      socketRef.current.send(
+        JSON.stringify(
+          toBackendEvent({
+            type: "session.end",
+            sessionId,
+            timestamp: Date.now(),
+          })
+        )
+      );
+    });
+  }, []);
+
   const disconnect = useCallback(() => {
+    if (completionRef.current) {
+      window.clearTimeout(completionRef.current.timeoutId);
+      completionRef.current.reject(new Error("세션 완료 전에 연결이 종료되었습니다."));
+      completionRef.current = null;
+    }
     socketRef.current?.close();
     socketRef.current = null;
     setStatus((current) => (current === "idle" ? current : "disconnected"));
@@ -148,6 +182,16 @@ export function useFeedbackSocket(
             return;
           }
 
+          if (message.type === "session.completed") {
+            const pending = completionRef.current;
+            if (pending) {
+              window.clearTimeout(pending.timeoutId);
+              completionRef.current = null;
+              pending.resolve(message.report);
+            }
+            return;
+          }
+
           setError(message.message);
         } catch {
           setError("알 수 없는 WebSocket 메시지를 수신했습니다.");
@@ -181,5 +225,6 @@ export function useFeedbackSocket(
     sendTranscript,
     sendVideoFrame,
     sendAudioChunk,
+    finish,
   };
 }

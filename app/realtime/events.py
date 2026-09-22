@@ -31,6 +31,12 @@ class RealtimeEvent(BaseModel):
 
 
 class ClientEvent(BaseModel):
-    event: Literal["ping", "session.start", "transcript.partial", "transcript.final"]
+    event: Literal[
+        "ping",
+        "session.start",
+        "session.end",
+        "transcript.partial",
+        "transcript.final",
+    ]
     timestamp_ms: int = Field(default=0, ge=0)
     data: dict[str, Any] = Field(default_factory=dict)

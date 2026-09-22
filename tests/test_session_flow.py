@@ -44,6 +44,13 @@ def test_websocket_feedback_complete_and_report(
         assert feedback["data"]["source"] == "speech_rate"
         transcript = websocket.receive_json()
         assert transcript["event"] == "transcript.final"
+        websocket.send_json({"event": "session.end", "timestamp_ms": 1100, "data": {}})
+        completed = websocket.receive_json()
+        if completed["event"] == "feedback":
+            completed = websocket.receive_json()
+        assert completed["event"] == "session.completed"
+        assert completed["data"]["report"]["transcript"] == "음 저는 백엔드 개발자입니다"
+        assert completed["data"]["report"]["incomplete"] is False
 
     completed = client.post(f"/api/v1/sessions/{session['id']}/complete", headers=bearer(auth))
     assert completed.status_code == 200

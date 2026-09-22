@@ -64,6 +64,28 @@ export type PracticeSummary = {
   transcript: string | null;
 };
 
+export type SessionCompletionReport = {
+  transcript: string | null;
+  gaze: {
+    awayCount: number;
+    awayDurationMs: number;
+  };
+  speech: {
+    averageSyllablesPerMinute: number;
+  };
+  filler: {
+    counts: Record<string, number>;
+  };
+  incomplete: boolean;
+};
+
+export type SessionCompletionMessage = {
+  type: "session.completed";
+  sessionId: string;
+  timestamp: number;
+  report: SessionCompletionReport;
+};
+
 export type ClientRealtimeMessage =
   | {
       type: "session.start";
@@ -98,6 +120,13 @@ export type BackendClientEvent =
       };
     }
   | {
+      event: "session.end";
+      timestamp_ms: number;
+      data: {
+        sessionId: string;
+      };
+    }
+  | {
       event: "transcript.partial" | "transcript.final";
       timestamp_ms: number;
       data: {
@@ -113,6 +142,7 @@ export type BackendClientEvent =
 
 export type ServerRealtimeMessage =
   | RealtimeFeedback
+  | SessionCompletionMessage
   | {
       type: "error";
       message: string;

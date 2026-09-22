@@ -73,7 +73,8 @@ async def complete_session(
         session.duration_ms = max(0, int((ended_at - started_at).total_seconds() * 1000))
     else:
         session.duration_ms = fallback_duration_ms
-    report = SessionReport(session_id=session.id, **report_data)
+    persisted_report = {key: value for key, value in report_data.items() if key != "incomplete"}
+    report = SessionReport(session_id=session.id, **persisted_report)
     db.add(report)
     session.status = SessionStatus.completed
     await db.commit()

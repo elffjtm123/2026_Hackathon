@@ -23,6 +23,31 @@ def _frontend_feedback(event: RealtimeEvent) -> dict[str, Any] | None:
             "type": "error",
             "message": str(event.data.get("message", "실시간 처리 오류가 발생했습니다.")),
         }
+    if event.event == "session.completed":
+        report = event.data.get("report", {})
+        if not isinstance(report, dict):
+            report = {}
+        return {
+            "type": "session.completed",
+            "sessionId": str(event.session_id),
+            "timestamp": event.timestamp_ms or int(time.time() * 1000),
+            "report": {
+                "transcript": report.get("transcript"),
+                "gaze": {
+                    "awayCount": int(report.get("gaze_away_count", 0) or 0),
+                    "awayDurationMs": int(report.get("gaze_away_duration_ms", 0) or 0),
+                },
+                "speech": {
+                    "averageSyllablesPerMinute": float(
+                        report.get("average_syllables_per_minute", 0) or 0
+                    ),
+                },
+                "filler": {
+                    "counts": report.get("filler_word_counts", {}),
+                },
+                "incomplete": bool(report.get("incomplete", False)),
+            },
+        }
     if event.event != "feedback":
         return None
 
@@ -195,6 +220,9 @@ async def practice_demo_websocket(websocket: WebSocket) -> None:
                     }
                 )
                 await pipeline.emit("session.started", client_event.timestamp_ms, client_event.data)
+            elif client_event.event == "session.end":
+                await pipeline.stop()
+                break
             elif client_event.event in {"transcript.partial", "transcript.final"}:
                 text = str(client_event.data.get("text", ""))
                 duration_ms = client_event.data.get("durationMs")
@@ -308,6 +336,9 @@ async def session_websocket(websocket: WebSocket, session_id: UUID, token: str) 
                 continue
             if client_event.event == "ping":
                 await pipeline.emit("pong", client_event.timestamp_ms, {})
+            elif client_event.event == "session.end":
+                await pipeline.stop()
+                break
             elif client_event.event in {"transcript.partial", "transcript.final"}:
                 text = str(client_event.data.get("text", ""))
                 duration_ms = client_event.data.get("durationMs")

@@ -8,6 +8,8 @@ export type {
   PresentationFeatureSettings,
   PracticeSummary,
   RealtimeFeedback,
+  SessionCompletionMessage,
+  SessionCompletionReport,
   ServerRealtimeMessage,
   SpeechPaceStatus,
 } from "../../lib/realtimeProtocol";

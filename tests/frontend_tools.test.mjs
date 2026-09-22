@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import * as scriptTools from "../src/features/practice/scriptTools.ts";
+import * as socketTools from "../src/features/practice/hooks/useFeedbackSocket.ts";
 
 test("받아쓰기 청크를 중복 없이 순서대로 누적한다", () => {
   assert.equal(typeof scriptTools.appendTranscript, "function");
@@ -40,4 +41,19 @@ test("인사말과 일반적인 서술어는 주요 단어에서 제외한다", 
     "이 서비스는 시선과 발화 속도를 분석합니다.";
 
   assert.equal(scriptTools.selectAttentionKeyword(sentence, script), "실시간");
+});
+
+test("session.end를 ping이 아닌 백엔드 종료 이벤트로 변환한다", () => {
+  assert.deepEqual(
+    socketTools.toBackendEvent({
+      type: "session.end",
+      sessionId: "session-1",
+      timestamp: 1234,
+    }),
+    {
+      event: "session.end",
+      timestamp_ms: 1234,
+      data: { sessionId: "session-1" },
+    }
+  );
 });
