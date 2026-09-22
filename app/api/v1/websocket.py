@@ -8,8 +8,6 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
 from sqlalchemy import select
 
-from app.ai.base import GazeAdapter
-from app.ai.mock import MockGazeAdapter
 from app.core.security import decode_token
 from app.db.models.session import PracticeSession, SessionStatus
 from app.realtime.events import ClientEvent, RealtimeEvent
@@ -147,13 +145,7 @@ async def practice_demo_websocket(websocket: WebSocket) -> None:
     await websocket.accept()
     settings = websocket.app.state.settings
     session_id = uuid4()
-    gaze: GazeAdapter
-    try:
-        from app.ai.video_gaze import VideoGazeAdapter
-
-        gaze = VideoGazeAdapter()
-    except Exception:
-        gaze = MockGazeAdapter()
+    gaze = websocket.app.state.gaze
     speech = websocket.app.state.speech
     pipeline = SessionPipeline(
         session_id,
@@ -254,8 +246,6 @@ async def practice_demo_websocket(websocket: WebSocket) -> None:
     finally:
         pipeline.unsubscribe(subscriber_id)
         await pipeline.stop()
-        if hasattr(gaze, "close"):
-            gaze.close()
 
 
 @router.websocket("/ws/sessions/{session_id}")

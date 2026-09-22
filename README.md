@@ -27,7 +27,7 @@ migration이 자동 적용됩니다.
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install -e '.[dev]'
+pip install -e '.[dev,ai]'
 alembic upgrade head
 uvicorn app.main:app --reload
 ```
@@ -71,10 +71,31 @@ AI 연동 계약과 모든 이벤트 schema는 `/docs` 및
 
 ## AI 모델과 라이선스
 
-기본 설정은 규칙 기반 Mock provider만 사용하므로 별도 모델 파일이나 학습
-데이터셋이 필요하지 않습니다. 외부 AI 서버를 연결할 경우 사용하려는 모델/API의
-상업적 사용 조건, 개인정보 처리 조건, 결과 품질을 배포자가 별도로 확인해야
-합니다. 현재 저장소는 특정 사전학습 모델 가중치를 배포하지 않습니다.
+로컬 시선 분석의 기본값은 `VISION_PROVIDER=uniface`입니다. UniFace의
+RetinaFace와 MobileGaze를 사용하며 Apple Silicon에서는 CoreML, 그 외에서는
+CPU ONNX provider로 실행됩니다. 최초 실행 시 모델 가중치가 다운로드될 수
+있습니다. 모델 없이 통신 흐름만 확인할 때는 `.env`에
+`VISION_PROVIDER=mock`을 설정합니다. 설치나 로드에 실패하면 Mock으로 숨은
+전환을 하지 않고 `GAZE_AI_UNAVAILABLE` 오류를 보냅니다.
+
+L2CS-Net은 공식 실행 절차에서 별도의 가중치 파일을 요구하므로 현재 기본
+의존성에서 제외했습니다. UniFace 역시 실제 카메라 환경에서 성능을 확인해야
+하며, 저장소는 사전학습 모델 가중치나 평가 영상을 배포하지 않습니다.
+
+라벨 CSV는 `frame,direction` 형식을 사용합니다. 평가 영상과 라벨을 로컬에
+준비한 뒤 다음과 같이 실행하면 F1과 지연 시간 JSON을 만듭니다.
+
+```bash
+python scripts/benchmark_gaze.py \
+  --provider uniface \
+  --input /path/to/gaze-test.mov \
+  --labels /path/to/gaze-labels.csv \
+  --output /tmp/gaze-benchmark.json
+```
+
+참고: [UniFace quickstart](https://yakhyo.github.io/uniface/quickstart/),
+[UniFace execution providers](https://yakhyo.github.io/uniface/concepts/execution-providers/),
+[L2CS-Net 공식 저장소](https://github.com/Ahmednull/L2CS-Net)
 
 ## 개발 검증
 

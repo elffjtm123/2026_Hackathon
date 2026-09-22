@@ -12,6 +12,7 @@ from app.ai.base import GazeAdapter, SpeechAdapter
 from app.ai.http import HTTPGazeAdapter, HTTPSpeechAdapter
 from app.ai.local_stt import create_local_qwen_speech_adapter
 from app.ai.mock import MockGazeAdapter, MockSpeechAdapter
+from app.ai.uniface_gaze import UnavailableGazeAdapter
 from app.api.health import router as health_router
 from app.api.v1.auth import router as auth_router
 from app.api.v1.scripts import router as scripts_router
@@ -27,6 +28,23 @@ from app.realtime.state import SessionStateStore
 from app.realtime.webrtc import WebRTCManager
 
 logger = logging.getLogger(__name__)
+
+
+def create_local_gaze_adapter(settings: Settings) -> GazeAdapter:
+    if settings.vision_provider == "mock":
+        return MockGazeAdapter()
+    try:
+        if settings.vision_provider == "legacy":
+            from app.ai.video_gaze import VideoGazeAdapter
+
+            return VideoGazeAdapter()
+        from app.ai.uniface_gaze import UniFaceGazeAdapter
+
+        return UniFaceGazeAdapter()
+    except Exception as exc:
+        reason = f"{settings.vision_provider} gaze provider unavailable: {exc}"
+        logger.warning("local_gaze_unavailable", extra={"reason": reason})
+        return UnavailableGazeAdapter(reason)
 
 
 def error_body(
@@ -62,7 +80,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             speech = http_speech
             http_clients = [http_gaze.client, http_speech.client]
         else:
-            gaze = MockGazeAdapter()
+            gaze = create_local_gaze_adapter(settings)
             if settings.stt_provider == "qwen3_asr":
                 try:
                     speech = create_local_qwen_speech_adapter(
@@ -79,6 +97,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.settings = settings
         app.state.database = database
         app.state.state_store = state_store
+        app.state.gaze = gaze
         app.state.speech = speech
         app.state.pipelines = PipelineRegistry(settings, state_store, gaze, speech)
         app.state.webrtc = WebRTCManager(settings)
@@ -88,6 +107,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         yield
         await app.state.webrtc.close()
         await app.state.pipelines.close()
+        if hasattr(gaze, "close"):
+            gaze.close()  # type: ignore[attr-defined]
         await state_store.close()
         for client in http_clients:
             await client.aclose()  # type: ignore[attr-defined]

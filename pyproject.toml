@@ -32,6 +32,7 @@ ai = [
   "qwen-asr==0.0.6",
   "scikit-learn>=1.5,<2",
   "tqdm>=4.67,<5",
+  "uniface[cpu]>=4,<5",
 ]
 dev = [
   "aiosqlite>=0.20,<1",
@@ -68,3 +69,7 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 module = "redis.*"
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "video"
+ignore_errors = true

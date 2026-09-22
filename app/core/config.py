@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     ai_connect_timeout_seconds: float = 1.0
     ai_read_timeout_seconds: float = 2.0
     ai_max_retries: int = 2
-    vision_provider: str = "mock"
+    vision_provider: Literal["legacy", "uniface", "mock"] = "uniface"
     stt_provider: str = "qwen3_asr"
     stt_model: str = "Qwen/Qwen3-ASR-0.6B"
     stt_device: str = "auto"
