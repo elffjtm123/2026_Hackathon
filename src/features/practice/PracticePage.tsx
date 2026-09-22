@@ -12,11 +12,13 @@ import { useFeedbackSocket } from "./hooks/useFeedbackSocket";
 import { useMockFeedback } from "./hooks/useMockFeedback";
 import { usePracticeSession } from "./hooks/usePracticeSession";
 import { useUserMedia } from "./hooks/useUserMedia";
+import { completePracticeSession } from "./sessionLifecycle";
 
 export function PracticePage() {
   const session = usePracticeSession();
   const media = useUserMedia();
   const [isStarting, setIsStarting] = useState(false);
+  const [isStopping, setIsStopping] = useState(false);
   const [presentationScript, setPresentationScript] = useState(
     "안녕하세요. 오늘은 실시간 발표 피드백 서비스의 핵심 기능을 소개하겠습니다. 이 서비스는 시선, 발화 속도, 발음 정확도를 확인해 발표자가 더 안정적으로 연습할 수 있도록 돕습니다."
   );
@@ -35,7 +37,7 @@ export function PracticePage() {
     session.receiveFeedback
   );
 
-  useBackendStreaming({
+  const streaming = useBackendStreaming({
     isActive: session.isRunning && socket.status === "connected",
     stream: media.stream,
     sendVideoFrame: socket.sendVideoFrame,
@@ -71,20 +73,25 @@ export function PracticePage() {
   }, []);
 
   const handleEnd = useCallback(async () => {
-    if (!session.sessionId) {
+    if (!session.sessionId || isStopping) {
       return;
     }
 
+    setIsStopping(true);
     try {
-      const report = await socket.finish(session.sessionId);
+      const report = await completePracticeSession({
+        flushMedia: streaming.stopStreaming,
+        closeMedia: media.stopMedia,
+        requestCompletion: () => socket.finish(session.sessionId!),
+        closeSocket: socket.disconnect,
+      });
       session.completeSession(report);
     } catch {
       session.endSession();
     } finally {
-      socket.disconnect();
-      media.stopMedia();
+      setIsStopping(false);
     }
-  }, [media, session, socket]);
+  }, [isStopping, media, session, socket, streaming.stopStreaming]);
 
   useEffect(() => {
     if (
@@ -92,7 +99,7 @@ export function PracticePage() {
       session.isRunning &&
       session.elapsedSeconds >= timeLimitSeconds
     ) {
-      handleEnd();
+      void handleEnd();
     }
   }, [
     handleEnd,
@@ -115,6 +122,7 @@ export function PracticePage() {
         mode={session.mode}
         isRunning={session.isRunning}
         isStarting={isStarting}
+        isStopping={isStopping}
         elapsedSeconds={session.elapsedSeconds}
         onModeChange={session.setMode}
         onStart={handleStart}

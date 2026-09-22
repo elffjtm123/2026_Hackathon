@@ -77,34 +77,40 @@ export function useFeedbackSocket(
     }
   }, []);
 
-  const sendVideoFrame = useCallback((payload: Blob) => {
+  const sendVideoFrame = useCallback(async (payload: Blob) => {
     if (socketRef.current?.readyState !== WebSocket.OPEN) {
-      return;
+      return false;
     }
 
-    void payload.arrayBuffer().then((buffer) => {
-      const timestamp = BigInt(Date.now());
-      const bytes = new Uint8Array(9 + buffer.byteLength);
-      bytes[0] = 0x01;
-      new DataView(bytes.buffer).setBigUint64(1, timestamp, false);
-      bytes.set(new Uint8Array(buffer), 9);
-      socketRef.current?.send(bytes);
-    });
+    const buffer = await payload.arrayBuffer();
+    if (socketRef.current?.readyState !== WebSocket.OPEN) {
+      return false;
+    }
+    const timestamp = BigInt(Date.now());
+    const bytes = new Uint8Array(9 + buffer.byteLength);
+    bytes[0] = 0x01;
+    new DataView(bytes.buffer).setBigUint64(1, timestamp, false);
+    bytes.set(new Uint8Array(buffer), 9);
+    socketRef.current.send(bytes);
+    return true;
   }, []);
 
-  const sendAudioChunk = useCallback((payload: Blob) => {
+  const sendAudioChunk = useCallback(async (payload: Blob) => {
     if (socketRef.current?.readyState !== WebSocket.OPEN) {
-      return;
+      return false;
     }
 
-    void payload.arrayBuffer().then((buffer) => {
-      const timestamp = BigInt(Date.now());
-      const bytes = new Uint8Array(9 + buffer.byteLength);
-      bytes[0] = 0x02;
-      new DataView(bytes.buffer).setBigUint64(1, timestamp, false);
-      bytes.set(new Uint8Array(buffer), 9);
-      socketRef.current?.send(bytes);
-    });
+    const buffer = await payload.arrayBuffer();
+    if (socketRef.current?.readyState !== WebSocket.OPEN) {
+      return false;
+    }
+    const timestamp = BigInt(Date.now());
+    const bytes = new Uint8Array(9 + buffer.byteLength);
+    bytes[0] = 0x02;
+    new DataView(bytes.buffer).setBigUint64(1, timestamp, false);
+    bytes.set(new Uint8Array(buffer), 9);
+    socketRef.current.send(bytes);
+    return true;
   }, []);
 
   const finish = useCallback((sessionId: string) => {

@@ -42,7 +42,7 @@ class Settings(BaseSettings):
     llm_api_key: str | None = None
     llm_model: str | None = None
 
-    video_queue_size: int = 3
+    video_queue_size: int = 1
     audio_queue_size: int = 8
     audio_queue_wait_seconds: float = 0.1
     pipeline_grace_seconds: float = 2.0

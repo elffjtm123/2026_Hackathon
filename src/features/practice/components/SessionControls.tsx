@@ -4,6 +4,7 @@ type SessionControlsProps = {
   mode: PracticeMode;
   isRunning: boolean;
   isStarting: boolean;
+  isStopping: boolean;
   elapsedSeconds: number;
   onModeChange: (mode: PracticeMode) => void;
   onStart: () => void;
@@ -22,6 +23,7 @@ export function SessionControls({
   mode,
   isRunning,
   isStarting,
+  isStopping,
   elapsedSeconds,
   onModeChange,
   onStart,
@@ -34,7 +36,7 @@ export function SessionControls({
           type="button"
           className={mode === "presentation" ? "active" : ""}
           onClick={() => onModeChange("presentation")}
-          disabled={isRunning || isStarting}
+          disabled={isRunning || isStarting || isStopping}
         >
           발표
         </button>
@@ -42,7 +44,7 @@ export function SessionControls({
           type="button"
           className={mode === "interview" ? "active" : ""}
           onClick={() => onModeChange("interview")}
-          disabled={isRunning || isStarting}
+          disabled={isRunning || isStarting || isStopping}
         >
           면접
         </button>
@@ -57,7 +59,7 @@ export function SessionControls({
           type="button"
           className="primary-button"
           onClick={onStart}
-          disabled={isRunning || isStarting}
+          disabled={isRunning || isStarting || isStopping}
         >
           {isStarting ? "시작 중" : "시작"}
         </button>
@@ -65,9 +67,9 @@ export function SessionControls({
           type="button"
           className="secondary-button"
           onClick={onEnd}
-          disabled={!isRunning}
+          disabled={!isRunning || isStopping}
         >
-          종료
+          {isStopping ? "분석 중" : "종료"}
         </button>
       </div>
     </section>
