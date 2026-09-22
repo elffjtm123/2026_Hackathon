@@ -44,6 +44,10 @@ export function SessionSummary({ summary }: SessionSummaryProps) {
           <dd>{summary.speechPaceWarningCount}회</dd>
         </div>
       </dl>
+      <div className="transcript-summary">
+        <h3>받아쓰기 결과</h3>
+        <p>{summary.transcript ?? "인식된 음성이 없습니다."}</p>
+      </div>
     </section>
   );
 }

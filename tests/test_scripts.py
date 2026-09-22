@@ -5,7 +5,6 @@ from app.modules.pronunciation.service import (
     estimate_stt_pronunciation_accuracy,
 )
 from app.modules.script_sync.service import ScriptSyncService, analyze_script
-from app.modules.style_transfer.service import normalize_weights, safety_check
 from tests.conftest import bearer
 
 
@@ -77,85 +76,9 @@ def test_script_api_and_session_fields(client: TestClient, auth: dict[str, objec
     assert unrealistic.json()["error"]["code"] == "UNREALISTIC_TARGET_PACE"
 
 
-def test_style_transfer_preview_and_apply(client: TestClient, auth: dict[str, object]) -> None:
-    session = client.post(
-        "/api/v1/sessions",
-        headers=bearer(auth),
-        json={
-            "type": "presentation",
-            "title": "스타일 테스트",
-            "script": "저희 서비스는 발표 연습을 도와줍니다.",
-            "time_limit_seconds": 60,
-        },
-    ).json()
-    preview = client.post(
-        "/api/v1/scripts/style-transfer",
-        headers=bearer(auth),
-        json={
-            "script": session["active_script"],
-            "time_limit_seconds": 60,
-            "style_vector": {"visionary_keynote": 2, "dream_oratory": 1},
-            "session_id": session["id"],
-        },
-    )
-    assert preview.status_code == 201
-    assert round(sum(preview.json()["style_vector"].values()), 5) == 1
-    assert preview.json()["provider"] == "mock"
-    applied = client.post(
-        f"/api/v1/scripts/style-transfer/{preview.json()['job_id']}/apply",
-        headers=bearer(auth),
-    )
-    assert applied.status_code == 200
-    assert applied.json()["status"] == "applied"
-
-
-def test_style_helpers() -> None:
-    assert normalize_weights({"a": 2, "b": 1}) == {"a": 0.666667, "b": 0.333333}
-    assert safety_check("특정 민족을 제거해야 한다")["passed"] is False
-
-
-def test_unsafe_style_transfer_is_rejected(client: TestClient, auth: dict[str, object]) -> None:
-    response = client.post(
-        "/api/v1/scripts/style-transfer",
-        headers=bearer(auth),
-        json={
-            "script": "특정 민족을 제거해야 한다는 폭력을 선동합니다.",
-            "time_limit_seconds": 60,
-            "style_vector": {"high_intensity_rally": 1},
-        },
-    )
-    assert response.status_code == 422
-    assert response.json()["error"]["code"] == "STYLE_SAFETY_REJECTED"
-
-
-def test_presentation_features_can_be_disabled(client: TestClient, auth: dict[str, object]) -> None:
-    session = client.post(
-        "/api/v1/sessions",
-        headers=bearer(auth),
-        json={
-            "type": "presentation",
-            "title": "기능 비활성화 테스트",
-            "script": "발표 기능을 선택해서 사용할 수 있습니다.",
-            "time_limit_seconds": 60,
-            "settings": {
-                "karaoke_guide_enabled": False,
-                "style_transfer_enabled": False,
-            },
-        },
-    )
-    assert session.status_code == 201
-    assert session.json()["settings"]["karaoke_guide_enabled"] is False
-    assert session.json()["settings"]["style_transfer_enabled"] is False
-
-    preview = client.post(
-        "/api/v1/scripts/style-transfer",
-        headers=bearer(auth),
-        json={
-            "script": session.json()["active_script"],
-            "time_limit_seconds": 60,
-            "style_vector": {"visionary_keynote": 1},
-            "session_id": session.json()["id"],
-        },
-    )
-    assert preview.status_code == 409
-    assert preview.json()["error"]["code"] == "FEATURE_DISABLED"
+def test_style_transfer_routes_are_removed(
+    client: TestClient, auth: dict[str, object]
+) -> None:
+    headers = bearer(auth)
+    assert client.get("/api/v1/styles/presets", headers=headers).status_code == 404
+    assert client.post("/api/v1/scripts/style-transfer", headers=headers, json={}).status_code == 404

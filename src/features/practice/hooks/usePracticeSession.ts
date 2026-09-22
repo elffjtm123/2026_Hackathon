@@ -5,6 +5,7 @@ import type {
   PresentationFeatureSettings,
   RealtimeFeedback,
 } from "../types";
+import { appendTranscript } from "../scriptTools";
 
 const gazeAwayStatuses = new Set(["away", "left", "right", "up", "down"]);
 const speechWarningStatuses = new Set(["fast", "slow"]);
@@ -23,7 +24,6 @@ export function usePracticeSession() {
     useState<PresentationFeatureSettings>({
       karaokeGuideEnabled: true,
       keywordHintEnabled: false,
-      styleTransferEnabled: true,
     });
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [startedAt, setStartedAt] = useState<number | null>(null);
@@ -40,6 +40,7 @@ export function usePracticeSession() {
   const lastGazeSampleAtRef = useRef<number | null>(null);
   const lastGazeWasAwayRef = useRef(false);
   const pronunciationScoresRef = useRef<number[]>([]);
+  const transcriptRef = useRef("");
 
   const isRunning = startedAt !== null && endedAt === null;
 
@@ -75,6 +76,7 @@ export function usePracticeSession() {
     lastGazeSampleAtRef.current = null;
     lastGazeWasAwayRef.current = false;
     pronunciationScoresRef.current = [];
+    transcriptRef.current = "";
     return nextSessionId;
   }, []);
 
@@ -100,6 +102,13 @@ export function usePracticeSession() {
 
   const receiveFeedback = useCallback((feedback: RealtimeFeedback) => {
     setLatestFeedback(feedback);
+
+    if (feedback.transcript) {
+      transcriptRef.current = appendTranscript(
+        transcriptRef.current,
+        feedback.transcript
+      );
+    }
 
     if (feedback.source === undefined || feedback.source === "gaze") {
       const observedAt = feedback.timestamp || Date.now();
@@ -149,6 +158,7 @@ export function usePracticeSession() {
               ? null
               : Math.round(pronunciationAccuracy * 10) / 10,
           speechPaceWarningCount,
+          transcript: transcriptRef.current || null,
         }
       : null;
 

@@ -6,7 +6,6 @@ import { KaraokeGuide } from "./components/KaraokeGuide";
 import { PresentationSetup } from "./components/PresentationSetup";
 import { SessionControls } from "./components/SessionControls";
 import { SessionSummary } from "./components/SessionSummary";
-import { StyleTransferPanel } from "./components/StyleTransferPanel";
 import { VideoPreview } from "./components/VideoPreview";
 import { useBackendStreaming } from "./hooks/useBackendStreaming";
 import { useFeedbackSocket } from "./hooks/useFeedbackSocket";
@@ -21,8 +20,6 @@ export function PracticePage() {
   const [presentationScript, setPresentationScript] = useState(
     "안녕하세요. 오늘은 실시간 발표 피드백 서비스의 핵심 기능을 소개하겠습니다. 이 서비스는 시선, 발화 속도, 발음 정확도를 확인해 발표자가 더 안정적으로 연습할 수 있도록 돕습니다."
   );
-  const [activePresentationScript, setActivePresentationScript] =
-    useState(presentationScript);
   const [timeLimitSeconds, setTimeLimitSeconds] = useState(180);
   const socket = useFeedbackSocket(session.receiveFeedback);
   const isMockMode = useMemo(
@@ -55,7 +52,7 @@ export function PracticePage() {
         nextSessionId,
         session.mode,
         session.featureSettings,
-        activePresentationScript,
+        presentationScript,
         timeLimitSeconds
       );
     } catch {
@@ -65,12 +62,7 @@ export function PracticePage() {
     } finally {
       setIsStarting(false);
     }
-  }, [activePresentationScript, media, session, socket, timeLimitSeconds]);
-
-  const handlePresentationScriptChange = useCallback((script: string) => {
-    setPresentationScript(script);
-    setActivePresentationScript(script);
-  }, []);
+  }, [media, presentationScript, session, socket, timeLimitSeconds]);
 
   const handleTimeLimitChange = useCallback((seconds: number) => {
     if (Number.isFinite(seconds)) {
@@ -133,7 +125,7 @@ export function PracticePage() {
             script={presentationScript}
             timeLimitSeconds={timeLimitSeconds}
             disabled={session.isRunning || isStarting}
-            onScriptChange={handlePresentationScriptChange}
+            onScriptChange={setPresentationScript}
             onTimeLimitChange={handleTimeLimitChange}
           />
           <FeatureToggles
@@ -155,7 +147,7 @@ export function PracticePage() {
           <FeedbackOverlay feedback={session.latestFeedback} />
           {session.mode === "presentation" ? (
             <KaraokeGuide
-              script={activePresentationScript}
+              script={presentationScript}
               timeLimitSeconds={timeLimitSeconds}
               elapsedSeconds={session.elapsedSeconds}
               karaokeEnabled={session.featureSettings.karaokeGuideEnabled}
@@ -173,18 +165,6 @@ export function PracticePage() {
       </div>
 
       <SessionSummary summary={session.summary} />
-
-      {session.mode === "presentation" ? (
-        <StyleTransferPanel
-          originalScript={presentationScript}
-          currentScript={activePresentationScript}
-          timeLimitSeconds={timeLimitSeconds}
-          disabled={session.isRunning || isStarting}
-          enabled
-          onApply={setActivePresentationScript}
-          onReset={() => setActivePresentationScript(presentationScript)}
-        />
-      ) : null}
     </main>
   );
 }

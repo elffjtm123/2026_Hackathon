@@ -41,8 +41,6 @@ uvicorn app.main:app --reload
 - WebSocket: `WS /api/v1/ws/sessions/{id}?token=<access_token>`
 - 리포트: `GET /api/v1/sessions/{id}/report`
 - 대본 분석: `POST /api/v1/scripts/analyze`
-- 스타일 preset: `GET /api/v1/styles/presets`
-- 스타일 변환: `POST /api/v1/scripts/style-transfer`, `GET/POST .../{job_id}[/apply]`
 
 발표 세션은 선택적으로 `script`와 `time_limit_seconds`를 함께 받을 수 있습니다.
 대본이 있으면 문장부호의 쉼 가중치를 반영한 목표 타임라인과 목표 발화 속도를
@@ -53,15 +51,8 @@ uvicorn app.main:app --reload
 일치도를 사용한 `pronunciation_clarity_score`입니다. 신호가 짧거나 신뢰도가 낮으면
 점수를 0으로 만들지 않고 `insufficient_signal`로 반환합니다.
 
-스타일 변환은 preset의 수사적 특성만 사용하며 특정 발표자의 문장을 복제하지
-않습니다. 기본 `LLM_PROVIDER=mock`에서는 원문을 바꾸지 않고 개발용 경고를 포함한
-preview를 반환합니다. 실제 결과도 `/apply` 호출 전에는 세션 대본을 덮어쓰지
-않습니다.
-
-프론트의 발표 모드에서는 노래방식 진행 가이드와 대본 스타일 전이를 각각
-ON/OFF할 수 있습니다. 백엔드 세션 생성 시에는 `settings.karaoke_guide_enabled`와
-`settings.style_transfer_enabled`로 저장되며, 스타일 전이가 꺼진 세션은 preview와
-apply API 모두 `FEATURE_DISABLED`로 거부됩니다.
+프론트의 발표 모드에서는 노래방식 진행 가이드와 주요 단어 힌트를 선택할 수
+있습니다.
 
 WebSocket은 JSON 제어 메시지와 바이너리 미디어를 받습니다. 바이너리 헤더는
 `payload type 1 byte + timestamp_ms 8 byte(big-endian)`이며 타입 `0x01`은 JPEG,

@@ -16,7 +16,6 @@ export type PracticeMode = "interview" | "presentation";
 export type PresentationFeatureSettings = {
   karaokeGuideEnabled: boolean;
   keywordHintEnabled: boolean;
-  styleTransferEnabled: boolean;
 };
 
 export type RealtimeFeedback = {
@@ -62,6 +61,7 @@ export type PracticeSummary = {
   gazeAwayRatio: number;
   pronunciationAccuracy: number | null;
   speechPaceWarningCount: number;
+  transcript: string | null;
 };
 
 export type ClientRealtimeMessage =

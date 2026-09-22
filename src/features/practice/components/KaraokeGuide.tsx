@@ -47,7 +47,8 @@ export function KaraokeGuide({
     Math.min(plan.timeline.length, sentenceEnd)
   );
   const keywordHint = selectAttentionKeyword(
-    sentenceTokens.map((item) => item.text)
+    sentenceTokens.map((item) => item.text),
+    plan.normalizedScript
   );
 
   if ((!karaokeEnabled && !keywordHintEnabled) || !plan.normalizedScript) {

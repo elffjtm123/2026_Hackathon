@@ -73,13 +73,6 @@ export function FeatureToggles({
           disabled={disabled}
           onChange={(enabled) => onChange("keywordHintEnabled", enabled)}
         />
-        <FeatureToggle
-          title="대본 스타일 전이"
-          description="여러 발표 스타일의 수사적 특성을 혼합해 대본 변환을 허용합니다."
-          checked={settings.styleTransferEnabled}
-          disabled={disabled}
-          onChange={(enabled) => onChange("styleTransferEnabled", enabled)}
-        />
       </div>
     </section>
   );

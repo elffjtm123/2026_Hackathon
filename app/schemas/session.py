@@ -13,7 +13,6 @@ class AnalysisSettings(BaseModel):
     filler_words_enabled: bool = True
     pronunciation_enabled: bool = True
     karaoke_guide_enabled: bool = True
-    style_transfer_enabled: bool = True
 
 
 class SessionCreate(BaseModel):

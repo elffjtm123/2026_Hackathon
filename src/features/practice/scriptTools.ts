@@ -26,6 +26,7 @@ const keywordStopwords = new Set([
   "제가",
   "우리",
   "오늘",
+  "안녕하세요",
   "이것",
   "그것",
   "있는",
@@ -37,10 +38,50 @@ const keywordStopwords = new Set([
   "통해",
   "대한",
   "위해",
+  "것입니다",
 ]);
+const keywordParticles = [
+  "에서",
+  "으로",
+  "부터",
+  "까지",
+  "은",
+  "는",
+  "이",
+  "가",
+  "을",
+  "를",
+  "과",
+  "와",
+  "의",
+  "에",
+  "로",
+  "도",
+  "만",
+];
+const genericEndingPattern = /(겠습니다|습니다|습니다|어요|아요|예요)$/;
 
 export function normalizeScript(text: string) {
   return text.trim().split(/\s+/).filter(Boolean).join(" ");
+}
+
+export function appendTranscript(current: string, next: string) {
+  const currentText = normalizeScript(current);
+  const nextText = normalizeScript(next);
+  if (!nextText || currentText.endsWith(nextText)) {
+    return currentText;
+  }
+  if (!currentText || nextText.startsWith(currentText)) {
+    return nextText;
+  }
+
+  const maxOverlap = Math.min(currentText.length, nextText.length);
+  for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
+    if (currentText.endsWith(nextText.slice(0, overlap))) {
+      return `${currentText}${nextText.slice(overlap)}`;
+    }
+  }
+  return `${currentText} ${nextText}`;
 }
 
 function countSpokenUnits(text: string) {
@@ -98,81 +139,61 @@ export function analyzeScript(script: string, timeLimitSeconds: number): ScriptP
   };
 }
 
-export function transformScript(script: string, style: string) {
-  const normalized = normalizeScript(script);
-  if (!normalized) {
-    return "";
-  }
-
-  const openings: Record<string, string> = {
-    concise: "핵심부터 말씀드리겠습니다.",
-    keynote: "오늘 이 자리에서 우리가 확인할 변화는 분명합니다.",
-    persuasive: "여러분께 꼭 설득력 있게 전하고 싶은 점이 있습니다.",
-    story: "짧은 장면 하나로 이야기를 시작해보겠습니다.",
-  };
-  const closings: Record<string, string> = {
-    concise: "결론적으로 이 프로젝트는 실시간 피드백을 더 빠르게 만듭니다.",
-    keynote: "이 경험이 발표와 면접 준비의 기준을 바꿀 수 있습니다.",
-    persuasive: "그래서 지금 이 기능은 충분히 시도할 가치가 있습니다.",
-    story: "이제 발표자는 혼자가 아니라, 화면 속 코치와 함께 연습합니다.",
-  };
-
-  const opening = openings[style] ?? openings.concise;
-  const closing = closings[style] ?? closings.concise;
-  return `${opening} ${normalized} ${closing}`;
-}
-
 function cleanKeywordToken(token: string) {
-  return token.replace(/[^\w가-힣]/g, "");
-}
-
-function characterNgrams(text: string) {
-  if (text.length <= 2) {
-    return new Set([text]);
+  let text = token.replace(/[^\w가-힣]/g, "");
+  for (const particle of keywordParticles) {
+    if (text.length > particle.length + 1 && text.endsWith(particle)) {
+      text = text.slice(0, -particle.length);
+      break;
+    }
   }
-
-  const grams = new Set<string>();
-  for (let index = 0; index <= text.length - 2; index += 1) {
-    grams.add(text.slice(index, index + 2));
-  }
-  return grams;
+  return text;
 }
 
-function attentionSimilarity(left: Set<string>, right: Set<string>) {
-  const overlap = [...left].filter((gram) => right.has(gram)).length;
-  return overlap / Math.sqrt(Math.max(1, left.size * right.size));
+function keywordTokens(text: string) {
+  return text
+    .split(/\s+/)
+    .map(cleanKeywordToken)
+    .filter(
+      (token) =>
+        token.length >= 2 &&
+        !keywordStopwords.has(token) &&
+        !genericEndingPattern.test(token)
+    );
 }
 
-export function selectAttentionKeyword(tokens: string[]) {
-  const candidates = tokens
-    .map((token, sentenceIndex) => ({
-      sentenceIndex,
-      text: cleanKeywordToken(token),
-    }))
-    .filter(({ text }) => text.length >= 2 && !keywordStopwords.has(text));
+export function selectAttentionKeyword(tokens: string[], script = tokens.join(" ")) {
+  const candidates = keywordTokens(tokens.join(" "));
 
   if (!candidates.length) {
     return null;
   }
 
-  const vectors = candidates.map(({ text }) => characterNgrams(text));
-  const scored = candidates.map((candidate, index) => {
-    const attention = vectors.reduce((sum, vector, otherIndex) => {
-      if (index === otherIndex) {
-        return sum;
-      }
+  const documents = script
+    .split(/[.!?。！？]+/)
+    .map(keywordTokens)
+    .filter((document) => document.length > 0);
+  const frequencies = new Map<string, number>();
+  for (const candidate of candidates) {
+    frequencies.set(candidate, (frequencies.get(candidate) ?? 0) + 1);
+  }
 
-      return sum + attentionSimilarity(vectors[index], vector);
-    }, 0);
-    const lengthBonus = Math.min(candidate.text.length / 8, 1);
-    const positionBonus = 1 - candidate.sentenceIndex / Math.max(tokens.length, 1) * 0.2;
-    return {
-      ...candidate,
-      score: attention + lengthBonus + positionBonus,
-    };
-  });
-
-  return scored.sort((left, right) => right.score - left.score)[0]?.text ?? null;
+  let best = candidates[0];
+  let bestScore = -1;
+  for (const candidate of new Set(candidates)) {
+    const documentFrequency = documents.filter((document) =>
+      document.includes(candidate)
+    ).length;
+    const termFrequency = (frequencies.get(candidate) ?? 0) / candidates.length;
+    const inverseDocumentFrequency =
+      Math.log((documents.length + 1) / (documentFrequency + 1)) + 1;
+    const score = termFrequency * inverseDocumentFrequency;
+    if (score > bestScore) {
+      best = candidate;
+      bestScore = score;
+    }
+  }
+  return best;
 }
 
 export function formatTime(seconds: number) {

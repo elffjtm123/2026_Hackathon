@@ -141,15 +141,13 @@ button:disabled {
   background: #ffffff;
 }
 
-.presentation-setup label,
-.style-preview label {
+.presentation-setup label {
   color: #3f5157;
   font-weight: 800;
 }
 
 .presentation-setup__time,
-.presentation-setup__script,
-.style-preview {
+.presentation-setup__script {
   display: grid;
   gap: 10px;
 }
@@ -161,9 +159,7 @@ button:disabled {
 }
 
 .time-input-row input,
-.presentation-setup textarea,
-.style-transfer-panel textarea,
-.style-actions select {
+.presentation-setup textarea {
   width: 100%;
   border: 1px solid #cfd9dc;
   border-radius: 8px;
@@ -177,8 +173,7 @@ button:disabled {
   max-width: 130px;
 }
 
-.presentation-setup textarea,
-.style-transfer-panel textarea {
+.presentation-setup textarea {
   resize: vertical;
   line-height: 1.55;
 }
@@ -323,14 +318,6 @@ button:disabled {
   background: rgb(9 14 15 / 0.82);
   color: #ffffff;
   backdrop-filter: blur(10px);
-}
-
-.style-transfer-panel__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 14px;
 }
 
 .karaoke-next,
@@ -604,36 +591,6 @@ button:disabled {
   padding: 18px;
 }
 
-.style-transfer-panel {
-  margin-top: 18px;
-  border: 1px solid #dde4e6;
-  border-radius: 8px;
-  padding: 18px;
-  background: #ffffff;
-}
-
-.style-actions {
-  display: grid;
-  grid-template-columns: minmax(180px, 1fr) auto auto;
-  gap: 8px;
-  align-items: center;
-}
-
-.style-actions button {
-  min-height: 42px;
-  border-radius: 8px;
-  padding: 0 16px;
-  background: #1c6b68;
-  color: #ffffff;
-  cursor: pointer;
-  font-weight: 800;
-}
-
-.style-actions .secondary-button {
-  background: #ece7df;
-  color: #3d3329;
-}
-
 .speech-input-panel {
   display: grid;
   gap: 10px;
@@ -682,6 +639,19 @@ button:disabled {
   font-weight: 800;
 }
 
+.transcript-summary {
+  margin-top: 16px;
+  border-radius: 8px;
+  padding: 16px;
+  background: #f5f7f8;
+}
+
+.transcript-summary p {
+  margin: 8px 0 0;
+  white-space: pre-wrap;
+  line-height: 1.65;
+}
+
 @media (max-width: 860px) {
   .controls-bar,
   .practice-layout,
@@ -691,18 +661,13 @@ button:disabled {
     grid-template-columns: 1fr;
   }
 
-  .karaoke-guide__header,
-  .style-transfer-panel__header {
+  .karaoke-guide__header {
     align-items: stretch;
     flex-direction: column;
   }
 
   .karaoke-guide__time {
     justify-items: start;
-  }
-
-  .style-actions {
-    grid-template-columns: 1fr;
   }
 
   .control-actions {
