@@ -144,7 +144,6 @@ class GazeStabilizer:
         if (
             observation.face_detected
             and observation.quality >= self.minimum_quality
-            and observation.gaze_direction == "center"
             and yaw is not None
             and pitch is not None
         ):

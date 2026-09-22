@@ -47,6 +47,15 @@ def test_calibration_requires_sixteen_good_center_frames() -> None:
     assert calibrated.metrics["calibrated"] is True
 
 
+def test_calibration_accepts_unclassified_uniface_angles() -> None:
+    stabilizer = GazeStabilizer(calibration_frames=2)
+    first = gaze_result(0, True, "unknown")
+    second = gaze_result(125, True, "unknown")
+
+    assert stabilizer.update(first).metrics["calibrated"] is False
+    assert stabilizer.update(second).metrics["calibrated"] is True
+
+
 def test_gaze_warning_requires_sustained_away_state() -> None:
     stabilizer = GazeStabilizer(warning_after_ms=2000)
 
