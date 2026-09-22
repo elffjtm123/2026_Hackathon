@@ -18,6 +18,12 @@ npm run dev:backend
 npm run dev
 ```
 
+프론트는 `http://localhost:5173`, 백엔드는 `http://127.0.0.1:8000`에서
+실행된다. Qwen3-ASR과 UniFace를 처음 사용할 때는 각 모델 가중치 다운로드로
+시작이 느려질 수 있다. 통신만 먼저 검사할 때는 `.env`의
+`VISION_PROVIDER=mock`, `STT_PROVIDER=mock`을 사용한다. 모델 로드·추론 오류는
+백엔드 터미널과 화면의 **최신 피드백** 패널에서 확인할 수 있다.
+
 API 문서는 `http://localhost:8000/docs`, 상태 확인은
 `http://localhost:8000/health/ready`에서 볼 수 있습니다. Docker 시작 시 Alembic
 migration이 자동 적용됩니다.

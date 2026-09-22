@@ -14,6 +14,7 @@ def create_session(client: TestClient, auth: dict[str, object]) -> dict[str, obj
                 "gaze_enabled": True,
                 "speech_rate_enabled": True,
                 "filler_words_enabled": True,
+                "pronunciation_enabled": False,
             },
         },
     )
@@ -32,6 +33,23 @@ def test_websocket_feedback_complete_and_report(
         assert ready["event"] == "session.ready"
         websocket.send_json({"event": "ping", "timestamp_ms": 10})
         assert websocket.receive_json()["event"] == "pong"
+
+        for index in range(16):
+            timestamp_ms = index * 125
+            websocket.send_bytes(
+                b"\x01" + timestamp_ms.to_bytes(8, "big") + b"jpeg"
+            )
+            gaze_feedback = websocket.receive_json()
+            assert gaze_feedback["event"] == "feedback"
+            assert gaze_feedback["data"]["source"] == "gaze"
+
+        websocket.send_bytes(b"\x01" + (6000).to_bytes(8, "big") + b"jpeg")
+        away_feedback = websocket.receive_json()
+        assert away_feedback["data"]["metrics"]["gaze_direction"] == "left"
+        websocket.send_bytes(b"\x01" + (7500).to_bytes(8, "big") + b"jpeg")
+        center_feedback = websocket.receive_json()
+        assert center_feedback["data"]["metrics"]["gaze_direction"] == "center"
+
         websocket.send_json(
             {
                 "event": "transcript.final",
@@ -49,8 +67,11 @@ def test_websocket_feedback_complete_and_report(
         if completed["event"] == "feedback":
             completed = websocket.receive_json()
         assert completed["event"] == "session.completed"
-        assert completed["data"]["report"]["transcript"] == "음 저는 백엔드 개발자입니다"
-        assert completed["data"]["report"]["incomplete"] is False
+        completion_report = completed["data"]["report"]
+        assert completion_report["transcript"] == "음 저는 백엔드 개발자입니다"
+        assert completion_report["filler_word_counts"] == {"음": 1}
+        assert completion_report["gaze_away_duration_ms"] == 1500
+        assert completion_report["incomplete"] is False
 
     completed = client.post(f"/api/v1/sessions/{session['id']}/complete", headers=bearer(auth))
     assert completed.status_code == 200

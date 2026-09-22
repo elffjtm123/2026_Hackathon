@@ -6,6 +6,7 @@ import * as socketTools from "../src/features/practice/hooks/useFeedbackSocket.t
 import * as feedbackState from "../src/features/practice/feedbackState.ts";
 import * as audioTools from "../src/features/practice/audioTools.ts";
 import * as lifecycle from "../src/features/practice/sessionLifecycle.ts";
+import * as mediaTools from "../src/features/practice/hooks/useUserMedia.ts";
 
 test("받아쓰기 청크를 중복 없이 순서대로 누적한다", () => {
   assert.equal(typeof scriptTools.appendTranscript, "function");
@@ -68,7 +69,17 @@ test("발화 피드백이 마지막 시선 상태를 덮어쓰지 않는다", ()
     source: "gaze",
     timestamp: 1,
     severity: "warning",
-    gaze: { status: "left", message: "왼쪽" },
+    gaze: {
+      status: "left",
+      faceDetected: true,
+      headPose: { yaw: -18, pitch: 0, roll: 0 },
+      direction: "left",
+      attentionState: "away",
+      quality: 0.9,
+      confidence: 0.88,
+      calibrated: true,
+      message: "왼쪽",
+    },
   };
   const speech = {
     type: "feedback",
@@ -85,6 +96,7 @@ test("발화 피드백이 마지막 시선 상태를 덮어쓰지 않는다", ()
   );
   const afterSpeech = feedbackState.reduceFeedback(afterGaze, speech);
   assert.equal(afterSpeech.gaze?.gaze?.status, "left");
+  assert.equal(afterSpeech.gaze?.gaze?.calibrated, true);
   assert.equal(afterSpeech.speech?.speech?.pace, "normal");
 });
 
@@ -151,4 +163,13 @@ test("세션 종료는 미디어 flush 후 완료 응답을 기다린다", async
 
   assert.deepEqual(calls, ["flush", "media", "complete", "socket"]);
   assert.equal(result, report);
+});
+
+test("카메라 권한 거부를 사용자가 이해할 수 있게 알린다", () => {
+  assert.equal(
+    mediaTools.mediaErrorMessage(
+      new DOMException("Permission denied", "NotAllowedError")
+    ),
+    "카메라와 마이크 권한이 필요합니다. 브라우저 설정에서 권한을 허용해 주세요."
+  );
 });
