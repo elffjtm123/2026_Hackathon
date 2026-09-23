@@ -28,13 +28,10 @@ class Settings(BaseSettings):
     ai_read_timeout_seconds: float = 2.0
     ai_max_retries: int = 2
     vision_provider: Literal["legacy", "uniface", "mock"] = "uniface"
-    stt_provider: str = "qwen3_asr"
+    stt_provider: Literal["qwen3_asr", "mock"] = "qwen3_asr"
     stt_model: str = "Qwen/Qwen3-ASR-0.6B"
     stt_device: str = "auto"
-    stt_context: str = (
-        "한국어 개발자 면접 또는 발표입니다. 주요 용어: WebRTC, FastAPI. "
-        "습관어와 반복 표현을 생략하지 마세요."
-    )
+    stt_context: str = ""
     stt_silence_rms_threshold: float = 0.003
     pronunciation_provider: str = "alignment"
     llm_provider: str = "mock"

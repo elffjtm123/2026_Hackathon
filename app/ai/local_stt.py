@@ -33,6 +33,27 @@ def active_speech_duration(
     return max(0.5, active_samples / sample_rate)
 
 
+def has_speech(audio: Any, sample_rate: int) -> bool:
+    import numpy as np
+    import webrtcvad
+
+    if sample_rate <= 0 or len(audio) == 0:
+        return False
+    if sample_rate not in {8_000, 16_000, 32_000, 48_000}:
+        positions = np.arange(0, len(audio), sample_rate / 16_000)
+        audio = np.interp(positions, np.arange(len(audio)), audio)
+        sample_rate = 16_000
+
+    pcm = np.clip(np.asarray(audio) * 32768, -32768, 32767).astype("<i2").tobytes()
+    frame_bytes = sample_rate // 50 * 2  # 20 ms, mono PCM16
+    vad = webrtcvad.Vad(2)
+    voiced_frames = sum(
+        vad.is_speech(pcm[offset : offset + frame_bytes], sample_rate)
+        for offset in range(0, len(pcm) - frame_bytes + 1, frame_bytes)
+    )
+    return voiced_frames >= 8  # 160 ms rejects short noise bursts
+
+
 def _decode_text_payload(payload: bytes) -> tuple[str, float | None] | None:
     try:
         raw = payload.decode("utf-8").strip()
@@ -119,7 +140,7 @@ class LocalQwenSpeechAdapter:
 
         duration = len(audio) / sample_rate
         rms = float(self.np.sqrt(self.np.mean(self.np.square(audio)))) if len(audio) else 0.0
-        if duration < 0.5 or rms < self.silence_rms_threshold:
+        if duration < 0.5 or rms < self.silence_rms_threshold or not has_speech(audio, sample_rate):
             return self._analyze_result(media, "", duration, started, rms=rms)
 
         result = self.stt.transcribe(
@@ -147,7 +168,9 @@ class LocalQwenSpeechAdapter:
         speech_rate = self.rate.analyze(transcript, duration)
         fillers = self.filler.analyze(transcript)
         filler_counts = dict(fillers.get("counts", {}))
-        level = "warning" if speech_rate.get("level") in {"FAST", "SLOW"} else "info"
+        level = (
+            "warning" if transcript and speech_rate.get("level") in {"FAST", "SLOW"} else "info"
+        )
 
         return AIResult(
             source="speech_rate",

@@ -66,7 +66,7 @@ class UniFaceGazeAdapter:
         area_ratio = ((x2 - x1) * (y2 - y1)) / max(1, frame_width * frame_height)
         detector_confidence = float(getattr(face, "confidence", 0.0))
         quality = round(
-            max(0.0, min(1.0, detector_confidence * min(1.0, area_ratio / 0.2))),
+            max(0.0, min(1.0, detector_confidence * min(1.0, area_ratio / 0.04))),
             3,
         )
         pitch = math.degrees(float(estimate.pitch))

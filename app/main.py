@@ -82,16 +82,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         else:
             gaze = create_local_gaze_adapter(settings)
             if settings.stt_provider == "qwen3_asr":
-                try:
-                    speech = create_local_qwen_speech_adapter(
-                        settings.stt_model,
-                        settings.stt_device,
-                        settings.stt_context,
-                        settings.stt_silence_rms_threshold,
-                    )
-                except RuntimeError as exc:
-                    logger.warning("local_qwen_unavailable", extra={"reason": str(exc)})
-                    speech = MockSpeechAdapter()
+                speech = create_local_qwen_speech_adapter(
+                    settings.stt_model,
+                    settings.stt_device,
+                    settings.stt_context,
+                    settings.stt_silence_rms_threshold,
+                )
             else:
                 speech = MockSpeechAdapter()
         app.state.settings = settings

@@ -33,6 +33,7 @@ ai = [
   "scikit-learn>=1.5,<2",
   "tqdm>=4.67,<5",
   "uniface[cpu]>=4,<5",
+  "webrtcvad-wheels>=2.0.14,<3",
 ]
 dev = [
   "aiosqlite>=0.20,<1",

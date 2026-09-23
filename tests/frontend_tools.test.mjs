@@ -100,6 +100,22 @@ test("발화 피드백이 마지막 시선 상태를 덮어쓰지 않는다", ()
   assert.equal(afterSpeech.speech?.speech?.pace, "normal");
 });
 
+test("출처 없는 임의 피드백은 실제 분석 상태를 바꾸지 않는다", () => {
+  const fake = {
+    type: "feedback",
+    sessionId: "s",
+    timestamp: 1,
+    severity: "warning",
+    gaze: { status: "away" },
+    speech: { pace: "fast" },
+  };
+
+  assert.deepEqual(
+    feedbackState.reduceFeedback(feedbackState.emptyFeedbackState, fake),
+    feedbackState.emptyFeedbackState
+  );
+});
+
 test("48 kHz mono 입력을 16 kHz WAV로 변환한다", async () => {
   const input = Float32Array.from({ length: 48_000 }, (_, index) =>
     Math.sin(index / 20)

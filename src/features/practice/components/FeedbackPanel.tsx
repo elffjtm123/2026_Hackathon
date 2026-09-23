@@ -5,7 +5,6 @@ type FeedbackPanelProps = {
   connectionStatus: ConnectionStatus;
   feedback: FeedbackState;
   socketError: string | null;
-  isMockMode: boolean;
 };
 
 const statusLabels: Record<ConnectionStatus, string> = {
@@ -34,14 +33,13 @@ export function FeedbackPanel({
   connectionStatus,
   feedback,
   socketError,
-  isMockMode,
 }: FeedbackPanelProps) {
   return (
     <section className="side-panel" aria-label="최신 피드백">
       <div className="panel-header">
         <h2>최신 피드백</h2>
         <span className={`status-pill status-pill--${connectionStatus}`}>
-          {isMockMode ? "Mock" : statusLabels[connectionStatus]}
+          {statusLabels[connectionStatus]}
         </span>
       </div>
 

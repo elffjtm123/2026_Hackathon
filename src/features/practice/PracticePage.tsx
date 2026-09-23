@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { FeedbackOverlay } from "./components/FeedbackOverlay";
 import { FeedbackPanel } from "./components/FeedbackPanel";
 import { FeatureToggles } from "./components/FeatureToggles";
@@ -9,7 +9,6 @@ import { SessionSummary } from "./components/SessionSummary";
 import { VideoPreview } from "./components/VideoPreview";
 import { useBackendStreaming } from "./hooks/useBackendStreaming";
 import { useFeedbackSocket } from "./hooks/useFeedbackSocket";
-import { useMockFeedback } from "./hooks/useMockFeedback";
 import { usePracticeSession } from "./hooks/usePracticeSession";
 import { useUserMedia } from "./hooks/useUserMedia";
 import { completePracticeSession } from "./sessionLifecycle";
@@ -24,19 +23,6 @@ export function PracticePage() {
   );
   const [timeLimitSeconds, setTimeLimitSeconds] = useState(180);
   const socket = useFeedbackSocket(session.receiveFeedback);
-  const isMockMode = useMemo(
-    () =>
-      session.isRunning &&
-      (socket.status === "disconnected" || socket.status === "error"),
-    [session.isRunning, socket.status]
-  );
-
-  useMockFeedback(
-    isMockMode,
-    session.sessionId,
-    session.receiveFeedback
-  );
-
   const streaming = useBackendStreaming({
     isActive: session.isRunning && socket.status === "connected",
     stream: media.stream,
@@ -170,7 +156,6 @@ export function PracticePage() {
           connectionStatus={socket.status}
           feedback={session.feedbackState}
           socketError={socket.error}
-          isMockMode={isMockMode}
         />
       </div>
 

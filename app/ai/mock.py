@@ -10,7 +10,14 @@ FILLER_PATTERN = re.compile(r"(?<![가-힣])(어|음|그|저기|그러니까)(?!
 
 
 def _decode_transcript_payload(payload: bytes) -> tuple[str, float | None]:
-    raw = payload.decode("utf-8", errors="ignore").strip()
+    if payload.startswith(b"RIFF"):
+        return "", None
+    try:
+        raw = payload.decode("utf-8").strip()
+    except UnicodeDecodeError:
+        return "", None
+    if any(ord(char) < 32 and char not in "\t\n\r" for char in raw):
+        return "", None
     try:
         data: Any = json.loads(raw)
     except json.JSONDecodeError:
@@ -70,9 +77,13 @@ class MockSpeechAdapter:
             source="speech_rate",
             timestamp_ms=media.timestamp_ms,
             level=level,
-            message="발화 속도가 조금 빠릅니다."
-            if level == "warning"
-            else "발화 속도가 적절합니다.",
+            message=(
+                "Mock STT는 실제 음성을 받아쓰지 않습니다. STT_PROVIDER=qwen3_asr로 실행하세요."
+                if not text
+                else "발화 속도가 조금 빠릅니다."
+                if level == "warning"
+                else "발화 속도가 적절합니다."
+            ),
             metrics={
                 "syllables_per_minute": speech_rate,
                 "filler_words": [{"word": word, "count": count} for word, count in fillers.items()],

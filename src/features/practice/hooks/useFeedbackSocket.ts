@@ -206,7 +206,7 @@ export function useFeedbackSocket(
 
       socket.onerror = () => {
         setStatus("error");
-        setError("WebSocket 연결에 실패했습니다. Mock 피드백으로 전환합니다.");
+        setError("WebSocket 연결에 실패했습니다. 실시간 분석이 중단되었습니다.");
       };
 
       socket.onclose = () => {

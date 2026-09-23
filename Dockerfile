@@ -8,12 +8,12 @@ WORKDIR /app
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends gcc libavdevice-dev libavfilter-dev \
-       libopus-dev libvpx-dev pkg-config \
+       libglib2.0-0 libgl1 libopus-dev libvpx-dev pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml README.md ./
 COPY app ./app
-RUN pip install .
+RUN pip install '.[ai]'
 
 COPY alembic.ini ./
 COPY alembic ./alembic

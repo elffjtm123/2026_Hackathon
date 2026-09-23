@@ -25,14 +25,5 @@ export function reduceFeedback(
   if (feedback.source === "pronunciation") {
     return { ...state, pronunciation: feedback };
   }
-  if (!feedback.source) {
-    return {
-      gaze: feedback.gaze ? feedback : state.gaze,
-      speech: feedback.speech ? feedback : state.speech,
-      pronunciation: feedback.pronunciation
-        ? feedback
-        : state.pronunciation,
-    };
-  }
   return state;
 }

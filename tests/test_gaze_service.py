@@ -56,6 +56,18 @@ def test_calibration_accepts_unclassified_uniface_angles() -> None:
     assert stabilizer.update(second).metrics["calibrated"] is True
 
 
+def test_calibration_explains_why_no_frames_are_accepted() -> None:
+    stabilizer = GazeStabilizer(calibration_frames=16)
+    no_face = stabilizer.update(gaze_result(0, False, "unknown"))
+    too_small = gaze_result(125, True, "unknown")
+    too_small.metrics["quality"] = 0.2
+    low_quality = stabilizer.update(too_small)
+
+    assert "얼굴이 감지되지" in no_face.message
+    assert "가까이" in low_quality.message
+    assert low_quality.metrics["calibrated"] is False
+
+
 def test_gaze_warning_requires_sustained_away_state() -> None:
     stabilizer = GazeStabilizer(warning_after_ms=2000)
 

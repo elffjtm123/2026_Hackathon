@@ -160,10 +160,15 @@ class GazeStabilizer:
         else:
             attention_state = "unknown"
             direction = "unknown"
-            message = (
-                "카메라를 바라보며 보정 중 "
-                f"({len(self.calibration_yaw)}/{self.calibration_frames})"
-            )
+            progress = f"({len(self.calibration_yaw)}/{self.calibration_frames})"
+            if not observation.face_detected:
+                message = f"얼굴이 감지되지 않습니다. 카메라에 얼굴을 비춰 주세요. {progress}"
+            elif observation.quality < self.minimum_quality:
+                message = f"얼굴이 너무 작거나 흐립니다. 카메라에 더 가까이 와 주세요. {progress}"
+            elif yaw is None or pitch is None:
+                message = f"시선 각도를 계산할 수 없습니다. 조명을 확인해 주세요. {progress}"
+            else:
+                message = f"카메라를 바라보며 보정 중 {progress}"
         self._update_state(attention_state, result.timestamp_ms)
         return self._result(
             result,
