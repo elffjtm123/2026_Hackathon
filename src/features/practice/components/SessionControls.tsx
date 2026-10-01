@@ -63,14 +63,16 @@ export function SessionControls({
         >
           {isStarting ? "시작 중" : "시작"}
         </button>
-        <button
-          type="button"
-          className="secondary-button"
-          onClick={onEnd}
-          disabled={!isRunning || isStopping}
-        >
-          {isStopping ? "분석 중" : "종료"}
-        </button>
+        {mode === "presentation" || isStarting ? (
+          <button
+            type="button"
+            className="secondary-button"
+            onClick={onEnd}
+            disabled={(!isRunning && !isStarting) || isStopping}
+          >
+            {isStopping ? "분석 중" : isStarting ? "시작 취소" : "종료"}
+          </button>
+        ) : null}
       </div>
     </section>
   );

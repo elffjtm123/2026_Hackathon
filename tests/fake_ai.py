@@ -1,3 +1,5 @@
+"""Test-only model doubles. Never imported by the service."""
+
 import asyncio
 import json
 import re
@@ -27,14 +29,12 @@ def _decode_transcript_payload(payload: bytes) -> tuple[str, float | None]:
     text = str(data.get("text", "")).strip()
     duration_ms = data.get("duration_ms")
     duration_sec = (
-        max(0.5, float(duration_ms) / 1000)
-        if isinstance(duration_ms, int | float)
-        else None
+        max(0.5, float(duration_ms) / 1000) if isinstance(duration_ms, int | float) else None
     )
     return text, duration_sec
 
 
-class MockGazeAdapter:
+class FakeGazeAdapter:
     async def infer(self, media: MediaPayload) -> AIResult:
         await asyncio.sleep(0.01)
         away = (media.timestamp_ms // 1000) % 7 == 6
@@ -51,6 +51,9 @@ class MockGazeAdapter:
                     "roll": 0.0,
                 },
                 "gaze_direction": "left" if away else "center",
+                "gaze_angles": {"yaw": -20.0 if away else 1.2, "pitch": -1.1},
+                "quality_flags": [],
+                "face_detection_confidence": None,
                 "direction": "left" if away else "center",
                 "attention_state": "away" if away else "camera",
                 "away": away,
@@ -64,10 +67,12 @@ class MockGazeAdapter:
         )
 
 
-class MockSpeechAdapter:
+class FakeSpeechAdapter:
     async def infer(self, media: MediaPayload) -> AIResult:
         await asyncio.sleep(0.02)
-        text, duration_sec = _decode_transcript_payload(media.payload)
+        text, duration_sec = (
+            ("", None) if media.format == "pcm16" else _decode_transcript_payload(media.payload)
+        )
         fillers = Counter(FILLER_PATTERN.findall(text))
         syllables = len(re.findall(r"[가-힣]", text))
         estimated_duration_sec = duration_sec or max(1.0, syllables / 5)
@@ -78,7 +83,7 @@ class MockSpeechAdapter:
             timestamp_ms=media.timestamp_ms,
             level=level,
             message=(
-                "Mock STT는 실제 음성을 받아쓰지 않습니다. STT_PROVIDER=qwen3_asr로 실행하세요."
+                "Test-only speech fixture: no transcript"
                 if not text
                 else "발화 속도가 조금 빠릅니다."
                 if level == "warning"

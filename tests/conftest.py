@@ -6,10 +6,17 @@ from fastapi.testclient import TestClient
 
 from app.core.config import Settings
 from app.main import create_app
+from tests.fake_ai import FakeGazeAdapter, FakeSpeechAdapter
 
 
 @pytest.fixture
-def client(tmp_path: object) -> Iterator[TestClient]:
+def fake_models(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("app.main.create_local_gaze_adapter", lambda *_: FakeGazeAdapter())
+    monkeypatch.setattr("app.main.create_local_qwen_speech_adapter", lambda *_: FakeSpeechAdapter())
+
+
+@pytest.fixture
+def client(tmp_path: object, fake_models: None) -> Iterator[TestClient]:
     database_path = os.path.join(str(tmp_path), "test.db")
     settings = Settings(
         app_env="test",
@@ -18,9 +25,9 @@ def client(tmp_path: object) -> Iterator[TestClient]:
         auto_create_tables=True,
         jwt_secret="test-secret-that-is-definitely-long-enough",
         cors_origins=["http://testserver"],
-        ai_mode="mock",
-        vision_provider="mock",
-        stt_provider="mock",
+        ai_mode="local",
+        vision_provider="uniface",
+        stt_provider="qwen3_asr",
     )
     with TestClient(create_app(settings)) as test_client:
         yield test_client

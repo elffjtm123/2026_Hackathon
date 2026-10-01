@@ -40,8 +40,11 @@ async def test_uniface_adapter_maps_angles_to_contract() -> None:
 
     assert result.metrics["face_detected"] is True
     assert result.metrics["gaze_direction"] == "unknown"
-    assert round(result.metrics["head_pose"]["yaw"]) == -20
-    assert result.metrics["quality"] > 0
+    assert round(result.metrics["gaze_angles"]["yaw"]) == -20
+    assert result.metrics["gaze_angles"]["pitch"] > 0
+    assert result.metrics["head_pose"]["yaw"] is None
+    assert result.metrics["face_detection_confidence"] == 0.95
+    assert "pose_unavailable" in result.metrics["quality_flags"]
 
 
 @pytest.mark.asyncio
@@ -60,7 +63,7 @@ async def test_uniface_adapter_reports_no_face_without_marking_away() -> None:
 
 
 @pytest.mark.asyncio
-async def test_webcam_sized_face_can_complete_calibration() -> None:
+async def test_detector_only_does_not_invent_pose_for_calibration() -> None:
     class WebcamFace:
         bbox = np.array([230, 150, 340, 260], dtype=np.float32)
         confidence = 0.95
@@ -76,5 +79,5 @@ async def test_webcam_sized_face_can_complete_calibration() -> None:
     second = stabilizer.update(await adapter.infer(MediaPayload(uuid4(), 1500, b"jpeg")))
 
     assert first.metrics["calibrated"] is False
-    assert second.metrics["calibrated"] is True
-    assert second.metrics["gaze_direction"] == "center"
+    assert second.metrics["calibrated"] is False
+    assert second.metrics["head_pose"]["yaw"] is None

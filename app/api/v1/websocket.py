@@ -1,19 +1,173 @@
+import asyncio
 import json
 import time
 from typing import Any
 from uuid import UUID, uuid4
 
 import jwt
+from anyio import CancelScope
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
 from sqlalchemy import select
 
 from app.core.security import decode_token
 from app.db.models.session import PracticeSession, SessionStatus
-from app.realtime.events import ClientEvent, RealtimeEvent
+from app.realtime.events import ClientEvent, RealtimeEvent, SessionStartData, V2ClientEvent
+from app.realtime.media import decode_media_v2
 from app.realtime.pipeline import SessionPipeline
 
 router = APIRouter(tags=["realtime"])
+
+
+async def _v2_session(
+    websocket: WebSocket,
+    session_id: UUID,
+    stored_settings: dict[str, Any] | None = None,
+    user_id: UUID | None = None,
+) -> None:
+    settings = websocket.app.state.settings
+    pipeline = SessionPipeline(
+        session_id,
+        settings,
+        websocket.app.state.state_store,
+        websocket.app.state.gaze,
+        websocket.app.state.speech,
+        stored_settings or {},
+    )
+    pipeline.protocol = 2
+    subscriber = f"v2-{uuid4()}"
+    send_lock = asyncio.Lock()
+
+    async def send(event: RealtimeEvent) -> None:
+        async with send_lock:
+            await websocket.send_text(event.model_dump_json())
+
+    pipeline.subscribe(subscriber, send)
+    started = False
+    client_sequence = 0
+    calibration_timer: asyncio.Task[None] | None = None
+
+    async def calibration_deadline() -> None:
+        await asyncio.sleep(15)
+        if pipeline.phase == "calibrating":
+            pipeline.gaze_stabilizer.invalidate("timeout")
+            await pipeline.emit_error(
+                "CALIBRATION_TIMEOUT",
+                "보정 시간이 초과되었습니다. 정면을 보고 ‘다시 보정’을 눌러 주세요.",
+            )
+
+    try:
+        while True:
+            message = await websocket.receive()
+            if message.get("type") == "websocket.disconnect":
+                pipeline.incomplete = True
+                break
+            if (
+                user_id is not None
+                and not await websocket.app.state.state_store.allow_realtime_message(
+                    user_id, settings.max_realtime_messages_per_second
+                )
+            ):
+                pipeline.incomplete = True
+                await pipeline.emit_error("RATE_LIMITED", "메시지 전송 속도가 너무 빠릅니다.")
+                continue
+            try:
+                if message.get("bytes") is not None:
+                    if len(message["bytes"]) > settings.max_media_message_bytes:
+                        raise ValueError("PAYLOAD_TOO_LARGE")
+                    media = decode_media_v2(message["bytes"], session_id, pipeline.audio_origin_ms)
+                    await pipeline.accept_media(media)
+                    continue
+                raw = message.get("text")
+                if raw is None or len(raw.encode()) > settings.max_json_message_bytes:
+                    raise ValueError("INVALID_MESSAGE_SIZE")
+                event = V2ClientEvent.model_validate(json.loads(raw))
+                if event.sequence <= client_sequence or (
+                    started and event.session_id != session_id
+                ):
+                    raise ValueError("INVALID_CONTROL_SESSION_OR_SEQUENCE")
+                if event.timestamp_ms > pipeline.elapsed_ms() + 1000:
+                    raise ValueError("INVALID_CONTROL_TIMESTAMP")
+                client_sequence = event.sequence
+                if event.event == "session.start":
+                    if started:
+                        raise ValueError("SESSION_ALREADY_STARTED")
+                    data = SessionStartData.model_validate(event.data)
+                    analysis = {
+                        **data.settings.model_dump(),
+                        "script": data.script,
+                        "time_limit_seconds": data.time_limit_seconds,
+                    }
+                    if stored_settings is not None:
+                        analysis = stored_settings
+                        prepared = await websocket.app.state.pipelines.get_or_create(
+                            session_id, analysis, protocol=2
+                        )
+                        pipeline.unsubscribe(subscriber)
+                        pipeline = prepared
+                        pipeline.subscribe(subscriber, send)
+                    pipeline.update_analysis_settings(analysis)
+                    await pipeline.prepare()
+                    started = True
+                    await pipeline.emit(
+                        "session.ready",
+                        pipeline.elapsed_ms(),
+                        {
+                            "transport": "websocket",
+                            "modules": {
+                                name: module.model_dump()
+                                for name, module in websocket.app.state.module_status.items()
+                            },
+                        },
+                    )
+                elif event.event == "calibration.start":
+                    if not started:
+                        raise ValueError("SESSION_NOT_READY")
+                    if calibration_timer:
+                        calibration_timer.cancel()
+                    await pipeline.start_calibration()
+                    calibration_timer = asyncio.create_task(calibration_deadline())
+                elif event.event == "session.end":
+                    if event.data.get("incomplete") is True:
+                        pipeline.incomplete = True
+                    await pipeline.stop()
+                    break
+                elif event.event == "ping":
+                    await pipeline.emit("pong", pipeline.elapsed_ms(), {})
+                else:
+                    raise ValueError("UNSUPPORTED_EVENT")
+            except (ValueError, ValidationError) as exc:
+                pipeline.incomplete = True
+                code = "INVALID_SETTINGS" if isinstance(exc, ValidationError) else str(exc)
+                modules = {
+                    name: module.model_dump()
+                    for name, module in websocket.app.state.module_status.items()
+                }
+                reasons = [
+                    module.reason
+                    for module in websocket.app.state.module_status.values()
+                    if module.reason
+                ]
+                await pipeline.emit(
+                    "error",
+                    pipeline.elapsed_ms(),
+                    {
+                        "code": code,
+                        "message": "; ".join(reasons)
+                        if code == "MODEL_UNAVAILABLE_OR_BUSY" and reasons
+                        else "실시간 입력 또는 모델 상태를 확인해 주세요.",
+                        "modules": modules,
+                    },
+                )
+    except WebSocketDisconnect:
+        pipeline.incomplete = True
+    finally:
+        with CancelScope(shield=True):
+            if calibration_timer:
+                calibration_timer.cancel()
+                await asyncio.gather(calibration_timer, return_exceptions=True)
+            pipeline.unsubscribe(subscriber)
+            await pipeline.stop()
 
 
 def _frontend_feedback(event: RealtimeEvent) -> dict[str, Any] | None:
@@ -142,8 +296,20 @@ def _frontend_feedback(event: RealtimeEvent) -> dict[str, Any] | None:
 
 @router.websocket("/ws/practice-demo")
 async def practice_demo_websocket(websocket: WebSocket) -> None:
+    if websocket.app.state.settings.app_env == "production":
+        await websocket.close(code=4403, reason="development endpoint")
+        return
     await websocket.accept()
     settings = websocket.app.state.settings
+    if websocket.query_params.get("protocol") == "2":
+        await _v2_session(websocket, uuid4())
+        return
+    if any(module.status == "unavailable" for module in websocket.app.state.module_status.values()):
+        await websocket.send_json(
+            {"type": "error", "message": "필수 AI 모델을 사용할 수 없습니다."}
+        )
+        await websocket.close(code=1013)
+        return
     session_id = uuid4()
     gaze = websocket.app.state.gaze
     speech = websocket.app.state.speech
@@ -195,7 +361,7 @@ async def practice_demo_websocket(websocket: WebSocket) -> None:
                     )
                 continue
 
-            if raw_text is None:
+            if raw_text is None or len(raw_text.encode()) > settings.max_json_message_bytes:
                 await pipeline.emit_error("INVALID_MESSAGE", "메시지가 올바르지 않습니다.")
                 continue
 
@@ -210,6 +376,11 @@ async def practice_demo_websocket(websocket: WebSocket) -> None:
             if client_event.event == "ping":
                 await pipeline.emit("pong", client_event.timestamp_ms, {})
             elif client_event.event == "session.start":
+                try:
+                    SessionStartData.model_validate(client_event.data)
+                except ValidationError:
+                    await pipeline.emit_error("INVALID_SETTINGS", "세션 설정이 올바르지 않습니다.")
+                    continue
                 settings_data = client_event.data.get("settings", {})
                 analysis_updates = settings_data if isinstance(settings_data, dict) else {}
                 if "karaokeGuideEnabled" in analysis_updates:
@@ -228,19 +399,6 @@ async def practice_demo_websocket(websocket: WebSocket) -> None:
             elif client_event.event == "session.end":
                 await pipeline.stop()
                 break
-            elif client_event.event in {"transcript.partial", "transcript.final"}:
-                text = str(client_event.data.get("text", ""))
-                duration_ms = client_event.data.get("durationMs")
-                if len(text) > 10_000:
-                    await pipeline.emit_error("TRANSCRIPT_TOO_LARGE", "텍스트가 너무 깁니다.")
-                else:
-                    payload: dict[str, Any] = {"text": text}
-                    if isinstance(duration_ms, int | float):
-                        payload["duration_ms"] = duration_ms
-                    await pipeline.push_audio(
-                        client_event.timestamp_ms,
-                        json.dumps(payload, ensure_ascii=False).encode(),
-                    )
     except WebSocketDisconnect:
         pass
     finally:
@@ -284,7 +442,24 @@ async def session_websocket(websocket: WebSocket, session_id: UUID, token: str) 
 
     await websocket.accept()
     websocket.app.state.websocket_counts[session_id] = connection_count + 1
-    pipeline = await websocket.app.state.pipelines.get_or_create(session_id, analysis_settings)
+    if websocket.query_params.get("protocol") == "2":
+        try:
+            await _v2_session(websocket, session_id, analysis_settings, claims.subject)
+        finally:
+            websocket.app.state.websocket_counts[session_id] = max(
+                0, websocket.app.state.websocket_counts.get(session_id, 1) - 1
+            )
+        return
+    try:
+        pipeline = await websocket.app.state.pipelines.get_or_create(session_id, analysis_settings)
+    except ValueError:
+        try:
+            await websocket.close(code=1013, reason="required model unavailable or busy")
+        finally:
+            websocket.app.state.websocket_counts[session_id] = max(
+                0, websocket.app.state.websocket_counts.get(session_id, 1) - 1
+            )
+        return
     subscriber_id = f"ws-{uuid4()}"
 
     async def send(event: RealtimeEvent) -> None:
@@ -342,19 +517,6 @@ async def session_websocket(websocket: WebSocket, session_id: UUID, token: str) 
             elif client_event.event == "session.end":
                 await pipeline.stop()
                 break
-            elif client_event.event in {"transcript.partial", "transcript.final"}:
-                text = str(client_event.data.get("text", ""))
-                duration_ms = client_event.data.get("durationMs")
-                if len(text) > 10_000:
-                    await pipeline.emit_error("TRANSCRIPT_TOO_LARGE", "텍스트가 너무 깁니다.")
-                else:
-                    payload: dict[str, Any] = {"text": text}
-                    if isinstance(duration_ms, int | float):
-                        payload["duration_ms"] = duration_ms
-                    await pipeline.push_audio(
-                        client_event.timestamp_ms,
-                        json.dumps(payload, ensure_ascii=False).encode(),
-                    )
     except WebSocketDisconnect:
         pass
     finally:

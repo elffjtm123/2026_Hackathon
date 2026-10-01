@@ -28,4 +28,10 @@ async def ready(request: Request, response: Response) -> dict[str, object]:
     )
     if not is_ready:
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
-    return {"status": "ready" if is_ready else "not_ready", "dependencies": dependencies}
+    return {
+        "status": "ready" if is_ready else "not_ready",
+        "dependencies": dependencies,
+        "modules": {
+            name: module.model_dump() for name, module in request.app.state.module_status.items()
+        },
+    }

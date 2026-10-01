@@ -93,3 +93,63 @@ export function takeNextAudioChunk(
     remainder: input.slice(chunkSize - safeOverlap),
   };
 }
+
+// A bounded, continuous FIR resampler: retain fractional phase across worklet blocks.
+export class PcmResampler {
+  private samples: number[] = [];
+  private offset = 0;
+  private received = 0;
+  private emitted = 0;
+  private readonly ratio: number;
+  private readonly cutoff: number;
+  private readonly inputRate: number;
+  constructor(inputRate: number) {
+    this.inputRate = inputRate;
+    if (!Number.isFinite(inputRate) || inputRate < 16000) throw new Error('지원하지 않는 샘플링 주파수');
+    this.ratio = inputRate / 16000;
+    this.cutoff = .45 / this.ratio;
+  }
+  push(input: Float32Array): Float32Array {
+    if (this.inputRate === 16000) return input.slice();
+    this.samples.push(...input);
+    this.received += input.length;
+    return this.read(false);
+  }
+  flush(): Float32Array {
+    if (this.inputRate === 16000) return new Float32Array();
+    return this.read(true);
+  }
+  private read(flush: boolean): Float32Array {
+    const output: number[] = [];
+    const target = Math.floor(this.received / this.ratio);
+    while (this.emitted < target) {
+      const position = this.emitted * this.ratio;
+      if (!flush && position + 32 >= this.received) break;
+      const center = Math.floor(position);
+      let value = 0, sum = 0;
+      for (let n = center - 31; n <= center + 32; n++) {
+        const distance = n - position;
+        const sinc = distance === 0 ? 2 * this.cutoff : Math.sin(2 * Math.PI * this.cutoff * distance) / (Math.PI * distance);
+        const weight = sinc * (.5 + .5 * Math.cos(Math.PI * distance / 32));
+        value += (this.samples[n - this.offset] ?? 0) * weight;
+        sum += weight;
+      }
+      output.push(value / sum);
+      this.emitted++;
+    }
+    const discard = Math.max(0, Math.floor(this.emitted * this.ratio) - 32 - this.offset);
+    this.samples.splice(0, discard);
+    this.offset += discard;
+    return Float32Array.from(output);
+  }
+}
+
+export function encodePcm16(samples: Float32Array): ArrayBuffer {
+  const buffer = new ArrayBuffer(samples.length * 2);
+  const view = new DataView(buffer);
+  samples.forEach((sample, index) => {
+    const clipped = Math.max(-1, Math.min(1, sample));
+    view.setInt16(index * 2, clipped < 0 ? clipped * 32768 : clipped * 32767, true);
+  });
+  return buffer;
+}

@@ -1,4 +1,5 @@
 import type { FeedbackState } from "../feedbackState";
+import {directionLabels, gazeLabel} from '../feedbackState';
 import type { ConnectionStatus } from "../types";
 
 type FeedbackPanelProps = {
@@ -14,20 +15,6 @@ const statusLabels: Record<ConnectionStatus, string> = {
   disconnected: "연결 끊김",
   error: "오류",
 };
-
-function gazeLabel(feedback: FeedbackState) {
-  const gaze = feedback.gaze?.gaze;
-  if (!gaze) {
-    return "분석 대기";
-  }
-  if (!gaze.calibrated) {
-    return "보정 중";
-  }
-  if (!gaze.faceDetected || gaze.quality < 0.5) {
-    return "판단 어려움";
-  }
-  return gaze.attentionState === "away" ? `시선 이탈 (${gaze.direction})` : gaze.direction;
-}
 
 export function FeedbackPanel({
   connectionStatus,
@@ -45,17 +32,22 @@ export function FeedbackPanel({
 
       {socketError ? <p className="error-text">{socketError}</p> : null}
 
-      {feedback.gaze || feedback.speech ? (
+      {feedback.gaze || feedback.speech || feedback.gazeStale ? (
         <div className="feedback-detail">
           <div>
             <span className="label">시선 상태</span>
             <strong>{gazeLabel(feedback)}</strong>
             <p>{feedback.gaze?.gaze?.message}</p>
-            {feedback.gaze?.gaze?.calibrated ? (
-              <small>
-                신뢰도 {Math.round((feedback.gaze.gaze.confidence ?? 0) * 100)}%
-              </small>
-            ) : null}
+          </div>
+          <div>
+            <span className="label">얼굴 방향</span>
+            <strong>{directionLabels[feedback.gaze?.gaze?.headDirection ?? 'unknown']}</strong>
+            <small>좌우는 사용자 몸 기준입니다. 프리뷰는 거울처럼 표시됩니다.</small>
+            {feedback.gaze?.gaze ? <details><summary>관찰 진단</summary>
+              <p>품질 플래그: {feedback.gaze.gaze.qualityFlags?.join(', ') || '없음'}</p>
+              <p>얼굴 각도: yaw {feedback.gaze.gaze.headPose.yaw?.toFixed(1) ?? '미측정'}° / pitch {feedback.gaze.gaze.headPose.pitch?.toFixed(1) ?? '미측정'}°</p>
+              <p>시선 각도: yaw {feedback.gaze.gaze.gazeAngles?.yaw?.toFixed(1) ?? '미측정'}° / pitch {feedback.gaze.gaze.gazeAngles?.pitch?.toFixed(1) ?? '미측정'}°</p>
+            </details> : null}
           </div>
           <div>
             <span className="label">발화 속도</span>

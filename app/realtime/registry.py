@@ -24,10 +24,12 @@ class PipelineRegistry:
         self._lock = asyncio.Lock()
 
     async def get_or_create(
-        self, session_id: UUID, analysis_settings: dict[str, bool]
+        self, session_id: UUID, analysis_settings: dict[str, bool], protocol: int = 1
     ) -> SessionPipeline:
         async with self._lock:
             pipeline = self.pipelines.get(session_id)
+            if pipeline is not None and protocol == 2:
+                raise ValueError("SESSION_ALREADY_CONNECTED")
             if pipeline is None:
                 pipeline = SessionPipeline(
                     session_id,
@@ -37,8 +39,12 @@ class PipelineRegistry:
                     self.speech,
                     analysis_settings,
                 )
+                pipeline.protocol = protocol
+                if protocol == 2:
+                    await pipeline.prepare()
+                else:
+                    await pipeline.start()
                 self.pipelines[session_id] = pipeline
-                await pipeline.start()
             return pipeline
 
     def get(self, session_id: UUID) -> SessionPipeline | None:

@@ -10,8 +10,16 @@ services:
       REDIS_REQUIRED: ${REDIS_REQUIRED:-true}
       JWT_SECRET: ${JWT_SECRET:-development-only-secret-change-me-now}
       CORS_ORIGINS: ${CORS_ORIGINS:-["http://localhost:3000","http://localhost:5173"]}
-      AI_MODE: ${AI_MODE:-mock}
+      AI_MODE: ${AI_MODE:-local}
+      FACE_LANDMARKER_PATH: /app/.models/face_landmarker.task
       AUTO_CREATE_TABLES: "false"
+    volumes:
+      - type: bind
+        source: ${FACE_LANDMARKER_PATH:-./.models/face_landmarker.task}
+        target: /app/.models/face_landmarker.task
+        read_only: true
+        bind:
+          create_host_path: false
     ports:
       - "8000:8000"
     depends_on:

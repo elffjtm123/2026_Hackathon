@@ -2,10 +2,15 @@
 
 FastAPI, WebRTC, WebSocket 기반의 실시간 미디어 처리 백엔드입니다. 브라우저의
 영상·음성을 세션별 bounded queue로 받은 뒤 서로 독립적인 AI worker에서
-분석하며, 원본 미디어는 저장하지 않습니다. AI 서버 없이도 Mock AI로 전체
-흐름을 실행할 수 있습니다.
+분석하며, 원본 미디어는 저장하지 않습니다. 서비스는 실제 모델만 사용하며,
+모델을 사용할 수 없으면 해당 분석을 오류로 표시합니다.
 
 ## 빠른 실행
+
+먼저 [모델 준비 절차](docs/gaze-field-check.md)에 따라
+`.models/face_landmarker.task`를 준비해야 합니다. Compose는 이 파일을 읽기 전용으로
+연결하며, 없으면 시작을 거부합니다. Qwen과 MobileGaze 가중치는 첫 실행에
+다운로드되므로 인터넷 연결과 모델용 메모리가 필요합니다.
 
 ```bash
 cp .env.example .env
@@ -20,8 +25,7 @@ npm run dev
 
 프론트는 `http://localhost:5173`, 백엔드는 `http://127.0.0.1:8000`에서
 실행된다. Qwen3-ASR과 UniFace를 처음 사용할 때는 각 모델 가중치 다운로드로
-시작이 느려질 수 있다. 통신만 먼저 검사할 때는 `.env`의
-`VISION_PROVIDER=mock`, `STT_PROVIDER=mock`을 사용한다. 모델 로드·추론 오류는
+시작이 느려질 수 있다. 모델 로드·추론 오류는
 백엔드 터미널과 화면의 **최신 피드백** 패널에서 확인할 수 있다.
 
 API 문서는 `http://localhost:8000/docs`, 상태 확인은
@@ -38,7 +42,39 @@ alembic upgrade head
 uvicorn app.main:app --reload
 ```
 
-## 주요 API
+## 로컬 실시간 v2 (공통 처리 재설계 1단계)
+
+`AI_MODE=local`은 실제 로컬 모델, `AI_MODE=http`은 외부 AI 서버 실행 방식입니다.
+Mock 실행 모드와 provider는 제거되어 잘못된 설정으로 거부됩니다.
+실제 모델 로드 실패는 `unavailable`로 표시하고 필요한 모델이 없으면 시작을 거절합니다.
+실행 중 추론 실패는 분석 오류와 미완료 결과로 표시하며 가짜 결과를 생성하지 않습니다.
+`/health/ready`의 기존 DB/Redis 준비 상태와 별도로 `modules`에 provider/model/device/status/reason을 반환합니다.
+이번 로컬 경로에서 legacy 및 HTTP 시선 provider는 지원하지 않습니다.
+
+현재 브라우저는 `/api/v1/ws/practice-demo?protocol=2`를 사용합니다(개발 전용).
+`session.start → session.ready → calibration.start → session.calibrating → session.running`
+이후에만 음성을 캡처하고 연습 시간을 셉니다. 시선 비활성화 시 보정을 건너뜁니다.
+준비/보정 중 취소할 수 있고, 종료는 `session.draining → session.completed`로 진행됩니다.
+시선 보정은 정면 head pose·품질·중앙값 기반 각도 안정성을 통과한 연속 8개 이상/0.75초 이상 관찰을 사용합니다.
+보정 시간이 초과되면 연결을 유지하며 ‘다시 보정’으로 같은 세션에서 재시도할 수 있습니다.
+얼굴 방향과 눈 시선은 별도이며 center는 카메라 응시가 아닌 **보정 기준 근처**입니다.
+실제 사용자 방향 정확도는 현장 확인이 필요합니다. 모델 준비와 확인 절차는 [시선 체크 문서](docs/gaze-field-check.md)를 보세요.
+
+v2 미디어는 big-endian `>BBIQQI` 26바이트 헤더(version=2, type, sequence,
+timestamp_ms, start_sample, sample_count) 뒤에 JPEG 또는 little-endian PCM16 mono 16kHz가 붙습니다.
+시각은 서버 ready를 기준으로 한 세션 상대 단조 시각, 음성은 sample index 기준입니다.
+오디오는 200ms 단위로 전송하며 `media.ack`는 큐 수신 확인이지 모델 분석 완료가 아닙니다.
+음성 갭/처리량 초과/ACK 5초 지연은 오류와 미완료 결과로 표시합니다.
+영상은 비율을 유지한 최대 너비 640/8fps, 음성 큐는 32패킷입니다.
+서버는 종료 후 최대 30초 오디오를 처리하고 화면은 최대 35초 완료를 기다립니다.
+취소된 네이티브 추론이 실제로 끝나기 전 동일 모델의 다음 추론을 거절합니다.
+
+AudioWorklet이 실제 장치 sample rate를 사용하며 필요 시 연속 FIR 저역통과 리샘플링합니다.
+발화 구간 VAD 재설계 전까지는 비중첩 2초 PCM을 추론하고 마지막 짧은 잔여 음성도 전달합니다.
+받아쓰기/습관어/속도/시선의 실제 정확도 개선 완료를 뜻하지 않습니다.
+인증된 v1 WS/REST API는 유지합니다. 아래 9바이트 헤더는 v1 호환 경로 설명입니다.
+
+## 주요 API (v1 호환)
 
 - 인증: `POST /api/v1/auth/register`, `/login`, `/refresh`
 - 사용자: `GET /api/v1/users/me`
@@ -63,11 +99,8 @@ uvicorn app.main:app --reload
 WebSocket은 JSON 제어 메시지와 바이너리 미디어를 받습니다. 바이너리 헤더는
 `payload type 1 byte + timestamp_ms 8 byte(big-endian)`이며 타입 `0x01`은 JPEG,
 `0x02`는 mono PCM 16 kHz입니다. JSON `{"event":"ping"}`에는 `pong`으로
-응답합니다. 개발 중에는 아래 메시지로 Mock 음성 분석을 바로 확인할 수 있습니다.
-
-```json
-{"event":"transcript.final","timestamp_ms":1000,"data":{"text":"음 저는 백엔드 개발자입니다"}}
-```
+응답합니다. 받아쓰기 결과는 서버의 STT 분석에서만 생성합니다.
+클라이언트가 `transcript.partial` 또는 `transcript.final`을 보내는 전사 주입은 거부합니다.
 
 AI 연동 계약과 모든 이벤트 schema는 `/docs` 및
 [`app/realtime/events.py`](app/realtime/events.py)에 정의되어 있습니다.
@@ -78,11 +111,11 @@ AI 연동 계약과 모든 이벤트 schema는 `/docs` 및
 ## AI 모델과 라이선스
 
 로컬 시선 분석의 기본값은 `VISION_PROVIDER=uniface`입니다. UniFace의
-RetinaFace와 MobileGaze를 사용하며 Apple Silicon에서는 CoreML, 그 외에서는
-CPU ONNX provider로 실행됩니다. 최초 실행 시 모델 가중치가 다운로드될 수
-있습니다. 모델 없이 통신 흐름만 확인할 때는 `.env`에
-`VISION_PROVIDER=mock`을 설정합니다. 설치나 로드에 실패하면 Mock으로 숨은
-전환을 하지 않고 `GAZE_AI_UNAVAILABLE` 오류를 보냅니다.
+MediaPipe Face Landmarker와 MobileGaze를 사용합니다. Face Landmarker는 공식
+로컬 asset을 준비해야 하며 checksum을 검증합니다. MobileGaze는 Apple Silicon에서 CoreML, 그 외에서는
+CPU ONNX provider로 실행됩니다. MobileGaze 최초 실행 시 모델 가중치가 다운로드될 수
+있습니다. 설치나 로드에 실패하면 해당 모듈을 `unavailable`로 표시하고,
+실행 중 시선 추론 실패는 `GAZE_AI_UNAVAILABLE` 오류를 보냅니다.
 
 L2CS-Net은 공식 실행 절차에서 별도의 가중치 파일을 요구하므로 현재 기본
 의존성에서 제외했습니다. UniFace 역시 실제 카메라 환경에서 성능을 확인해야
@@ -104,6 +137,9 @@ python scripts/benchmark_gaze.py \
 [L2CS-Net 공식 저장소](https://github.com/Ahmednull/L2CS-Net)
 
 ## 개발 검증
+
+모델 로딩 없이 실행하는 자동 테스트의 가짜 분석기는 `tests/fake_ai.py`에만
+있으며, 테스트에서 모델 생성 함수를 대체합니다. 서비스 코드에서는 불러오지 않습니다.
 
 ```bash
 pytest

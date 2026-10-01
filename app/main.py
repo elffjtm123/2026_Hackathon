@@ -8,10 +8,9 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.ai.base import GazeAdapter, SpeechAdapter
+from app.ai.base import GazeAdapter, SpeechAdapter, UnavailableSpeechAdapter
 from app.ai.http import HTTPGazeAdapter, HTTPSpeechAdapter
 from app.ai.local_stt import create_local_qwen_speech_adapter
-from app.ai.mock import MockGazeAdapter, MockSpeechAdapter
 from app.ai.uniface_gaze import UnavailableGazeAdapter
 from app.api.health import router as health_router
 from app.api.v1.auth import router as auth_router
@@ -23,6 +22,7 @@ from app.core.errors import AppError
 from app.core.logging import configure_logging
 from app.db import models  # noqa: F401 -- registers SQLAlchemy metadata
 from app.db.session import Database
+from app.realtime.events import ModuleStatus
 from app.realtime.registry import PipelineRegistry
 from app.realtime.state import SessionStateStore
 from app.realtime.webrtc import WebRTCManager
@@ -31,18 +31,14 @@ logger = logging.getLogger(__name__)
 
 
 def create_local_gaze_adapter(settings: Settings) -> GazeAdapter:
-    if settings.vision_provider == "mock":
-        return MockGazeAdapter()
+    if settings.vision_provider == "legacy":
+        return UnavailableGazeAdapter("UNSUPPORTED_PROVIDER: legacy gaze")
     try:
-        if settings.vision_provider == "legacy":
-            from app.ai.video_gaze import VideoGazeAdapter
-
-            return VideoGazeAdapter()
         from app.ai.uniface_gaze import UniFaceGazeAdapter
 
-        return UniFaceGazeAdapter()
+        return UniFaceGazeAdapter(asset_path=settings.face_landmarker_path)
     except Exception as exc:
-        reason = f"{settings.vision_provider} gaze provider unavailable: {exc}"
+        reason = f"MODEL_LOAD_FAILED: {settings.vision_provider} ({type(exc).__name__})"
         logger.warning("local_gaze_unavailable", extra={"reason": reason})
         return UnavailableGazeAdapter(reason)
 
@@ -76,25 +72,48 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if settings.ai_mode == "http":
             http_gaze = HTTPGazeAdapter(settings)
             http_speech = HTTPSpeechAdapter(settings)
-            gaze = http_gaze
+            gaze = UnavailableGazeAdapter("UNSUPPORTED_PROVIDER: HTTP gaze")
             speech = http_speech
             http_clients = [http_gaze.client, http_speech.client]
         else:
             gaze = create_local_gaze_adapter(settings)
-            if settings.stt_provider == "qwen3_asr":
+            try:
                 speech = create_local_qwen_speech_adapter(
                     settings.stt_model,
                     settings.stt_device,
                     settings.stt_context,
                     settings.stt_silence_rms_threshold,
                 )
-            else:
-                speech = MockSpeechAdapter()
+            except Exception as exc:
+                speech = UnavailableSpeechAdapter(
+                    f"MODEL_LOAD_FAILED: qwen3_asr ({type(exc).__name__})"
+                )
         app.state.settings = settings
         app.state.database = database
         app.state.state_store = state_store
         app.state.gaze = gaze
         app.state.speech = speech
+        app.state.module_status = {
+            "gaze": ModuleStatus(
+                provider=settings.vision_provider if settings.ai_mode == "local" else "http",
+                model="MediaPipe Face Landmarker + MobileGaze"
+                if settings.vision_provider == "uniface"
+                else None,
+                status="unavailable"
+                if hasattr(gaze, "reason")
+                else "ready",
+                reason=getattr(gaze, "reason", None),
+            ),
+            "speech": ModuleStatus(
+                provider=settings.stt_provider if settings.ai_mode == "local" else "http",
+                model=settings.stt_model if settings.stt_provider == "qwen3_asr" else None,
+                device=getattr(speech, "device", None),
+                status="unavailable"
+                if hasattr(speech, "reason")
+                else "ready",
+                reason=getattr(speech, "reason", None),
+            ),
+        }
         app.state.pipelines = PipelineRegistry(settings, state_store, gaze, speech)
         app.state.webrtc = WebRTCManager(settings)
         app.state.websocket_counts = {}
@@ -105,6 +124,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await app.state.pipelines.close()
         if hasattr(gaze, "close"):
             gaze.close()  # type: ignore[attr-defined]
+        if hasattr(speech, "close"):
+            speech.close()  # type: ignore[attr-defined]
         await state_store.close()
         for client in http_clients:
             await client.aclose()  # type: ignore[attr-defined]

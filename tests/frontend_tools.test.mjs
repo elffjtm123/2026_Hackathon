@@ -62,6 +62,39 @@ test("session.end를 ping이 아닌 백엔드 종료 이벤트로 변환한다",
   );
 });
 
+test("면접 시작에는 발표 대본을 보내지 않고 발표 시작에는 유지한다", () => {
+  const start = {
+    type: "session.start",
+    sessionId: "session-1",
+    mode: "interview",
+    settings: { karaokeGuideEnabled: true, keywordHintEnabled: false },
+    script: "발표 대본",
+    timeLimitSeconds: 180,
+    timestamp: 1234,
+  };
+
+  assert.deepEqual(socketTools.toBackendEvent(start), {
+    event: "session.start",
+    timestamp_ms: 1234,
+    data: {
+      sessionId: "session-1",
+      mode: "interview",
+      settings: start.settings,
+    },
+  });
+  assert.deepEqual(socketTools.toBackendEvent({ ...start, mode: "presentation" }), {
+    event: "session.start",
+    timestamp_ms: 1234,
+    data: {
+      sessionId: "session-1",
+      mode: "presentation",
+      settings: start.settings,
+      script: "발표 대본",
+      timeLimitSeconds: 180,
+    },
+  });
+});
+
 test("발화 피드백이 마지막 시선 상태를 덮어쓰지 않는다", () => {
   const gaze = {
     type: "feedback",

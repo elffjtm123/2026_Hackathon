@@ -25,12 +25,8 @@ def load_labels(path: Path) -> dict[int, str]:
 
 def f1_score(expected: list[bool], predicted: list[bool]) -> float:
     true_positive = sum(want and got for want, got in zip(expected, predicted, strict=True))
-    false_positive = sum(
-        not want and got for want, got in zip(expected, predicted, strict=True)
-    )
-    false_negative = sum(
-        want and not got for want, got in zip(expected, predicted, strict=True)
-    )
+    false_positive = sum(not want and got for want, got in zip(expected, predicted, strict=True))
+    false_negative = sum(want and not got for want, got in zip(expected, predicted, strict=True))
     denominator = 2 * true_positive + false_positive + false_negative
     return 2 * true_positive / denominator if denominator else 0.0
 
@@ -52,8 +48,12 @@ def summarize(records: list[dict[str, Any]]) -> dict[str, Any]:
     latencies = sorted(float(record["latency_ms"]) for record in records)
     p95_index = max(0, round((len(latencies) - 1) * 0.95)) if latencies else 0
     return {
-        "binary_f1": round(binary_f1, 4),
-        "macro_f1": round(sum(per_direction) / len(per_direction), 4),
+        "binary_f1": round(binary_f1, 4) if labeled else None,
+        "macro_f1": round(sum(per_direction) / len(per_direction), 4) if labeled else None,
+        "labeled_sample_count": len(labeled),
+        "unknown_rate": sum(record["prediction"] == "unknown" for record in records) / len(records)
+        if records
+        else None,
         "mean_latency_ms": round(sum(latencies) / len(latencies), 2) if latencies else 0,
         "p95_latency_ms": round(latencies[p95_index], 2) if latencies else 0,
         "no_face_rate": round(
@@ -73,17 +73,19 @@ async def benchmark(provider: str, input_path: Path, labels_path: Path) -> dict[
     import cv2
 
     if provider == "legacy":
-        from app.ai.video_gaze import VideoGazeAdapter
-
-        adapter: Any = VideoGazeAdapter()
+        raise ValueError("legacy does not implement independent head/gaze observations")
     else:
-        adapter = UniFaceGazeAdapter()
+        from app.core.config import Settings
+
+        adapter = UniFaceGazeAdapter(asset_path=Settings().face_landmarker_path)
     labels = load_labels(labels_path)
-    stabilizer = GazeStabilizer(calibration_frames=16)
+    stabilizer = GazeStabilizer(calibration_frames=8)
     capture = cv2.VideoCapture(str(input_path))
     fps = capture.get(cv2.CAP_PROP_FPS) or 8.0
     records: list[dict[str, Any]] = []
     frame_index = 0
+    session_id = uuid4()
+    stabilizer.begin_calibration(0)
     try:
         while True:
             ok, frame = capture.read()
@@ -95,7 +97,7 @@ async def benchmark(provider: str, input_path: Path, labels_path: Path) -> dict[
             started = time.perf_counter()
             raw = await adapter.infer(
                 MediaPayload(
-                    uuid4(),
+                    session_id,
                     round(frame_index * 1000 / fps),
                     jpeg.tobytes(),
                 )
@@ -107,6 +109,11 @@ async def benchmark(provider: str, input_path: Path, labels_path: Path) -> dict[
                     "ground_truth": labels.get(frame_index),
                     "prediction": result.metrics["gaze_direction"],
                     "face_detected": result.metrics["face_detected"],
+                    "head_direction": result.metrics["head_direction"],
+                    "head_pose": result.metrics.get("head_pose"),
+                    "gaze_angles": result.metrics.get("gaze_angles"),
+                    "quality_flags": result.metrics.get("quality_flags"),
+                    "attention_state": result.metrics["attention_state"],
                     "latency_ms": (time.perf_counter() - started) * 1000,
                 }
             )
@@ -130,9 +137,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     result = asyncio.run(benchmark(args.provider, args.input, args.labels))
-    args.output.write_text(
-        json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    args.output.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps({key: value for key, value in result.items() if key != "frames"}, indent=2))
 
 

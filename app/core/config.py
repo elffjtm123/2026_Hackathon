@@ -22,27 +22,24 @@ class Settings(BaseSettings):
     refresh_token_days: int = 14
 
     cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:3000"])
-    ai_mode: Literal["mock", "http"] = "mock"
+    ai_mode: Literal["local", "http"] = "local"
     ai_base_url: str = "http://localhost:9000"
     ai_connect_timeout_seconds: float = 1.0
     ai_read_timeout_seconds: float = 2.0
     ai_max_retries: int = 2
-    vision_provider: Literal["legacy", "uniface", "mock"] = "uniface"
-    stt_provider: Literal["qwen3_asr", "mock"] = "qwen3_asr"
+    vision_provider: Literal["legacy", "uniface"] = "uniface"
+    face_landmarker_path: str = ".models/face_landmarker.task"
+    stt_provider: Literal["qwen3_asr"] = "qwen3_asr"
     stt_model: str = "Qwen/Qwen3-ASR-0.6B"
     stt_device: str = "auto"
     stt_context: str = ""
     stt_silence_rms_threshold: float = 0.003
     pronunciation_provider: str = "alignment"
-    llm_provider: str = "mock"
-    llm_base_url: str | None = None
-    llm_api_key: str | None = None
-    llm_model: str | None = None
 
     video_queue_size: int = 1
-    audio_queue_size: int = 8
+    audio_queue_size: int = 32
     audio_queue_wait_seconds: float = 0.1
-    pipeline_grace_seconds: float = 2.0
+    pipeline_grace_seconds: float = 30.0
     max_media_message_bytes: int = 2 * 1024 * 1024
     max_json_message_bytes: int = 64 * 1024
     max_connections_per_session: int = 2

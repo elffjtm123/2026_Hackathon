@@ -1,12 +1,9 @@
-import asyncio
 import importlib.util
 import io
-import json
-import re
 import time
 from typing import Any
 
-from app.ai.base import AIResult, MediaPayload
+from app.ai.base import AIResult, InferenceGate, MediaPayload
 
 
 def active_speech_duration(
@@ -54,29 +51,6 @@ def has_speech(audio: Any, sample_rate: int) -> bool:
     return voiced_frames >= 8  # 160 ms rejects short noise bursts
 
 
-def _decode_text_payload(payload: bytes) -> tuple[str, float | None] | None:
-    try:
-        raw = payload.decode("utf-8").strip()
-    except UnicodeDecodeError:
-        return None
-    if any(ord(char) < 32 and char not in "\t\n\r" for char in raw):
-        return None
-    try:
-        data: Any = json.loads(raw)
-    except json.JSONDecodeError:
-        return (raw, None) if raw else None
-    if not isinstance(data, dict):
-        return raw, None
-    text = str(data.get("text", "")).strip()
-    duration_ms = data.get("duration_ms")
-    duration_sec = (
-        max(0.5, float(duration_ms) / 1000)
-        if isinstance(duration_ms, int | float)
-        else None
-    )
-    return text, duration_sec
-
-
 class LocalQwenSpeechAdapter:
     def __init__(
         self,
@@ -100,6 +74,7 @@ class LocalQwenSpeechAdapter:
         )
         if resolved_device == "auto":
             resolved_device = "cpu"
+        self.device = resolved_device
         dtype = torch.float16 if resolved_device == "mps" else torch.float32
 
         self.np = np
@@ -115,19 +90,17 @@ class LocalQwenSpeechAdapter:
         )
         self.rate = SpeechRateAnalyzer()
         self.filler = FillerWordAnalyzer()
+        self.gate = InferenceGate()
 
     async def infer(self, media: MediaPayload) -> AIResult:
         started = time.perf_counter()
-        return await asyncio.to_thread(self._infer_sync, media, started)
+        return await self.gate.run_once(lambda: self._infer_sync(media, started))
+
+    def close(self) -> None:
+        self.gate.close()
 
     def _infer_sync(self, media: MediaPayload, started: float) -> AIResult:
-        text_payload = _decode_text_payload(media.payload)
-        if text_payload is not None and not media.payload.startswith(b"RIFF"):
-            transcript, duration = text_payload
-            duration = duration or max(1.0, len(re.findall(r"[가-힣]", transcript)) / 5)
-            return self._analyze_result(media, transcript, duration, started)
-
-        if media.payload.startswith(b"RIFF"):
+        if media.format != "pcm16" and media.payload.startswith(b"RIFF"):
             audio, sample_rate = self.sf.read(
                 io.BytesIO(media.payload), dtype="float32", always_2d=False
             )
@@ -140,7 +113,11 @@ class LocalQwenSpeechAdapter:
 
         duration = len(audio) / sample_rate
         rms = float(self.np.sqrt(self.np.mean(self.np.square(audio)))) if len(audio) else 0.0
-        if duration < 0.5 or rms < self.silence_rms_threshold or not has_speech(audio, sample_rate):
+        if (
+            (media.format != "pcm16" and duration < 0.5)
+            or rms < self.silence_rms_threshold
+            or not has_speech(audio, sample_rate)
+        ):
             return self._analyze_result(media, "", duration, started, rms=rms)
 
         result = self.stt.transcribe(
@@ -148,12 +125,8 @@ class LocalQwenSpeechAdapter:
             context=self.context,
             language="Korean",
         )[0]
-        speech_duration = active_speech_duration(
-            audio, sample_rate, self.silence_rms_threshold
-        )
-        return self._analyze_result(
-            media, result.text, speech_duration, started, rms=rms
-        )
+        speech_duration = active_speech_duration(audio, sample_rate, self.silence_rms_threshold)
+        return self._analyze_result(media, result.text, speech_duration, started, rms=rms)
 
     def _analyze_result(
         self,
@@ -168,9 +141,7 @@ class LocalQwenSpeechAdapter:
         speech_rate = self.rate.analyze(transcript, duration)
         fillers = self.filler.analyze(transcript)
         filler_counts = dict(fillers.get("counts", {}))
-        level = (
-            "warning" if transcript and speech_rate.get("level") in {"FAST", "SLOW"} else "info"
-        )
+        level = "warning" if transcript and speech_rate.get("level") in {"FAST", "SLOW"} else "info"
 
         return AIResult(
             source="speech_rate",

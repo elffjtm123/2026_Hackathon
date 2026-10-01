@@ -93,14 +93,19 @@ async def webrtc_offer(
     if session.status not in {SessionStatus.created, SessionStatus.active}:
         raise AppError("INVALID_SESSION_STATE", "종료된 세션에는 연결할 수 없습니다.", 409)
     await activate_session(db, session)
-    pipeline = await request.app.state.pipelines.get_or_create(
-        session.id,
-        {
-            **session.settings,
-            "script": session.active_script,
-            "time_limit_seconds": session.time_limit_seconds,
-        },
-    )
+    try:
+        pipeline = await request.app.state.pipelines.get_or_create(
+            session.id,
+            {
+                **session.settings,
+                "script": session.active_script,
+                "time_limit_seconds": session.time_limit_seconds,
+            },
+        )
+    except ValueError as exc:
+        raise AppError(
+            "MODEL_UNAVAILABLE_OR_BUSY", "필요한 모델이 준비되지 않았거나 처리 중입니다.", 503
+        ) from exc
     try:
         answer = await request.app.state.webrtc.create_answer(
             session.id, payload.sdp, payload.type, pipeline

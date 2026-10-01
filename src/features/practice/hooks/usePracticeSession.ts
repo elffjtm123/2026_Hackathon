@@ -12,6 +12,8 @@ import {
   type FeedbackState,
 } from "../feedbackState";
 import { appendTranscript } from "../scriptTools";
+import type { SessionPhase } from '../../../lib/realtimeProtocol';
+import { practiceElapsedMs } from '../sessionLifecycle';
 
 const gazeAwayStatuses = new Set(["away", "left", "right", "up", "down"]);
 const speechWarningStatuses = new Set(["fast", "slow"]);
@@ -25,6 +27,7 @@ function createSessionId() {
 }
 
 export function usePracticeSession() {
+  const [phase, setPhase] = useState<SessionPhase>('completed');
   const [mode, setMode] = useState<PracticeMode>("presentation");
   const [featureSettings, setFeatureSettings] =
     useState<PresentationFeatureSettings>({
@@ -34,7 +37,7 @@ export function usePracticeSession() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [endedAt, setEndedAt] = useState<number | null>(null);
-  const [now, setNow] = useState(Date.now());
+  const [now, setNow] = useState(performance.now());
   const [feedbackState, setFeedbackState] = useState<FeedbackState>(
     emptyFeedbackState
   );
@@ -51,32 +54,30 @@ export function usePracticeSession() {
   const pronunciationScoresRef = useRef<number[]>([]);
   const transcriptRef = useRef("");
 
-  const isRunning = startedAt !== null && endedAt === null;
+  const isRunning = phase === 'running';
+  const isActive = ['preparing', 'calibrating', 'running', 'draining'].includes(phase);
 
   useEffect(() => {
     if (!isRunning) {
       return;
     }
 
-    const intervalId = window.setInterval(() => setNow(Date.now()), 500);
+    const intervalId = window.setInterval(() => setNow(performance.now()), 500);
     return () => window.clearInterval(intervalId);
   }, [isRunning]);
 
   const elapsedSeconds = useMemo(() => {
-    if (!startedAt) {
-      return 0;
-    }
-
     const end = endedAt ?? now;
-    return Math.max(0, Math.floor((end - startedAt) / 1000));
+    return Math.floor(practiceElapsedMs(end, startedAt) / 1000);
   }, [endedAt, now, startedAt]);
 
   const startSession = useCallback(() => {
     const nextSessionId = createSessionId();
     setSessionId(nextSessionId);
-    setStartedAt(Date.now());
+    setPhase('preparing');
+    setStartedAt(null);
     setEndedAt(null);
-    setNow(Date.now());
+    setNow(performance.now());
     setFeedbackState(emptyFeedbackState);
     setCompletionReport(null);
     setGazeAwayDurationMs(0);
@@ -91,16 +92,14 @@ export function usePracticeSession() {
   }, []);
 
   const endSession = useCallback(() => {
-    const endedAtMs = Date.now();
-    const lastGazeSampleAt = lastGazeSampleAtRef.current;
+    setPhase('failed');
+    setEndedAt(performance.now());
+  }, []);
 
-    if (lastGazeWasAwayRef.current && lastGazeSampleAt !== null) {
-      gazeAwayDurationMsRef.current += Math.max(0, endedAtMs - lastGazeSampleAt);
-      setGazeAwayDurationMs(gazeAwayDurationMsRef.current);
-      lastGazeSampleAtRef.current = endedAtMs;
-    }
-
-    setEndedAt(endedAtMs);
+  const applyPhase = useCallback((next: SessionPhase, serverId: string, elapsedMs = 0) => {
+    setPhase(next); setSessionId(serverId);
+    if (next === 'running') {setStartedAt(performance.now() - Math.max(0, elapsedMs)); setNow(performance.now());}
+    if (next === 'draining') setEndedAt(current => current ?? performance.now());
   }, []);
 
   const setFeatureEnabled = useCallback(
@@ -121,7 +120,7 @@ export function usePracticeSession() {
     }
 
     if (feedback.source === undefined || feedback.source === "gaze") {
-      const observedAt = feedback.timestamp || Date.now();
+      const observedAt = feedback.timestamp;
       const lastGazeSampleAt = lastGazeSampleAtRef.current;
 
       if (lastGazeWasAwayRef.current && lastGazeSampleAt !== null) {
@@ -160,11 +159,12 @@ export function usePracticeSession() {
     setCompletionReport(report);
     gazeAwayDurationMsRef.current = report.gaze.awayDurationMs;
     setGazeAwayDurationMs(report.gaze.awayDurationMs);
-    setEndedAt(Date.now());
+    setPhase('completed');
+    setEndedAt(current => current ?? performance.now());
   }, []);
 
   const summary: PracticeSummary | null =
-    sessionId && endedAt
+    sessionId && endedAt && (phase === 'completed' || phase === 'failed')
       ? {
           sessionId,
           durationSeconds: elapsedSeconds,
@@ -196,6 +196,9 @@ export function usePracticeSession() {
     featureSettings,
     setFeatureEnabled,
     sessionId,
+    phase,
+    isActive,
+    applyPhase,
     isRunning,
     elapsedSeconds,
     feedbackState,

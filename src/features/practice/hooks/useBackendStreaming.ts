@@ -1,189 +1,93 @@
-import { useCallback, useEffect, useRef } from "react";
-import {
-  downsampleLinear,
-  encodePcm16Wav,
-  mergeAudioBuffers,
-  takeNextAudioChunk,
-} from "../audioTools";
+import { useCallback, useEffect, useRef } from 'react';
+import workletUrl from '../pcm-capture.worklet.ts?worker&url';
+import { captureSize } from '../sessionLifecycle';
+import type { MediaPacket } from '../../../lib/mediaProtocol';
 
-type UseBackendStreamingOptions = {
-  isActive: boolean;
-  stream: MediaStream | null;
-  sendVideoFrame: (payload: Blob) => Promise<boolean>;
-  sendAudioChunk: (payload: Blob) => Promise<boolean>;
+type Options = {
+  isActive: boolean; captureAudio: boolean; stream: MediaStream | null; audioContext: AudioContext | null;
+  sessionTime: () => number;
+  sendVideoFrame: (payload: Blob, timestampMs: number) => Promise<boolean>;
+  sendAudioPacket: (packet: Omit<MediaPacket, 'type' | 'timestampMs'>) => void;
+  awaitAudioAck: (sequence: number) => Promise<void>;
+  onError: (error: Error) => void;
 };
 
-const AUDIO_CHUNK_SECONDS = 2;
-const AUDIO_OVERLAP_SECONDS = 0.25;
-const OUTPUT_SAMPLE_RATE = 16_000;
-const VIDEO_INTERVAL_MS = 125;
-type AudioContextConstructor = new () => AudioContext;
-
-export function useBackendStreaming({
-  isActive,
-  stream,
-  sendVideoFrame,
-  sendAudioChunk,
-}: UseBackendStreamingOptions) {
-  const stopRef = useRef<() => Promise<void>>(async () => undefined);
+export function useBackendStreaming({isActive, captureAudio, stream, audioContext, sessionTime,
+  sendVideoFrame, sendAudioPacket, awaitAudioAck, onError}: Options) {
+  const stopVideoRef = useRef<() => void>(() => undefined);
+  const stopAudioRef = useRef<(flush: boolean) => Promise<void>>(async () => undefined);
+  useEffect(() => {
+    if (!isActive || !stream) return;
+    let stopped = false, encoding = false;
+    const video = document.createElement('video');
+    video.muted = true; video.playsInline = true; video.srcObject = stream;
+    void video.play().catch(error => {if (!stopped) onError(error);});
+    const canvas = document.createElement('canvas');
+    const interval = setInterval(() => {
+      if (stopped || encoding || !video.videoWidth || video.readyState < 2) return;
+      const size = captureSize(video.videoWidth, video.videoHeight);
+      canvas.width = size.width; canvas.height = size.height;
+      const context = canvas.getContext('2d');
+      if (!context) return;
+      const timestamp = sessionTime();
+      context.drawImage(video, 0, 0, size.width, size.height);
+      encoding = true;
+      canvas.toBlob(blob => {
+        if (blob && !stopped) void sendVideoFrame(blob, timestamp).catch(onError).finally(() => {encoding = false;});
+        else encoding = false;
+      }, 'image/jpeg', .8);
+    }, 125);
+    const stop = () => {stopped = true; clearInterval(interval); video.pause(); video.srcObject = null;};
+    stopVideoRef.current = stop;
+    return stop;
+  }, [isActive, stream, sessionTime, sendVideoFrame, onError]);
 
   useEffect(() => {
-    if (!isActive || !stream) {
-      stopRef.current = async () => undefined;
-      return;
-    }
-
-    let stopped = false;
+    if (!captureAudio || !stream || !audioContext) return;
+    let stopped = false, sequence = 0;
+    let node: AudioWorkletNode | null = null;
+    let source: MediaStreamAudioSourceNode | null = null;
+    let gain: GainNode | null = null;
+    let flushDone: (() => void) | null = null;
     let stopPromise: Promise<void> | null = null;
-    const video = document.createElement("video");
-    video.muted = true;
-    video.playsInline = true;
-    video.srcObject = stream;
-
-    const canvas = document.createElement("canvas");
-    canvas.width = 640;
-    canvas.height = 480;
-    void video.play();
-
-    const videoIntervalId = window.setInterval(() => {
-      const context = canvas.getContext("2d");
-      if (
-        stopped ||
-        !context ||
-        video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA
-      ) {
-        return;
-      }
-
-      context.drawImage(video, 0, 0, canvas.width, canvas.height);
-      canvas.toBlob(
-        (blob) => {
-          if (blob && !stopped) {
-            void sendVideoFrame(blob);
-          }
-        },
-        "image/jpeg",
-        0.65
-      );
-    }, VIDEO_INTERVAL_MS);
-
-    const browserWindow = window as Window &
-      typeof globalThis & {
-        webkitAudioContext?: AudioContextConstructor;
+    const cleanup = () => {source?.disconnect(); node?.disconnect(); gain?.disconnect(); if (node) node.port.onmessage = null;};
+    const initialize = (async () => {
+      await audioContext.audioWorklet.addModule(workletUrl);
+      if (stopped || audioContext.state === 'closed') return;
+      node = new AudioWorkletNode(audioContext, 'pcm-capture', {channelCount: 1, channelCountMode: 'explicit'});
+      source = audioContext.createMediaStreamSource(stream);
+      gain = audioContext.createGain(); gain.gain.value = 0;
+      node.port.onmessage = (message: MessageEvent<{event: string; startSample: number; sampleCount: number; payload: ArrayBuffer}>) => {
+        if (message.data.event === 'flushed') {flushDone?.(); return;}
+        try {
+          sendAudioPacket({sequence: ++sequence, startSample: message.data.startSample,
+            sampleCount: message.data.sampleCount, payload: message.data.payload});
+        } catch (error) {cleanup(); onError(error as Error);}
       };
-    const AudioContextConstructor =
-      browserWindow.AudioContext ?? browserWindow.webkitAudioContext;
-    const audioContext =
-      AudioContextConstructor && stream.getAudioTracks().length
-        ? new AudioContextConstructor()
-        : null;
-    const source = audioContext?.createMediaStreamSource(stream) ?? null;
-    const processor = audioContext?.createScriptProcessor(4096, 1, 1) ?? null;
-    const silentOutput = audioContext?.createGain() ?? null;
-    let bufferedSamples = new Float32Array();
-    let newSamplesSinceLastChunk = 0;
-    let sendChain = Promise.resolve();
-
-    const enqueueAudio = (samples: Float32Array) => {
-      if (!audioContext || !samples.length) {
-        return;
-      }
-      const wav = encodePcm16Wav(
-        downsampleLinear(samples, audioContext.sampleRate, OUTPUT_SAMPLE_RATE),
-        OUTPUT_SAMPLE_RATE
-      );
-      sendChain = sendChain.then(async () => {
-        await sendAudioChunk(wav);
-      });
-    };
-
-    if (audioContext && source && processor && silentOutput) {
-      const chunkSize = Math.round(
-        audioContext.sampleRate * AUDIO_CHUNK_SECONDS
-      );
-      const overlapSize = Math.round(
-        audioContext.sampleRate * AUDIO_OVERLAP_SECONDS
-      );
-      silentOutput.gain.value = 0;
-
-      processor.onaudioprocess = (event: AudioProcessingEvent) => {
-        if (stopped) {
-          return;
-        }
-        const input = new Float32Array(event.inputBuffer.getChannelData(0));
-        bufferedSamples = mergeAudioBuffers([bufferedSamples, input]);
-        newSamplesSinceLastChunk += input.length;
-
-        while (true) {
-          const next = takeNextAudioChunk(
-            bufferedSamples,
-            chunkSize,
-            overlapSize
-          );
-          if (!next.chunk) {
-            break;
-          }
-          enqueueAudio(next.chunk);
-          bufferedSamples = next.remainder;
-          newSamplesSinceLastChunk = Math.max(
-            0,
-            bufferedSamples.length - overlapSize
-          );
-        }
-      };
-
-      source.connect(processor);
-      processor.connect(silentOutput);
-      silentOutput.connect(audioContext.destination);
-    }
-
-    const stop = () => {
-      if (stopPromise) {
-        return stopPromise;
-      }
+      source.connect(node); node.connect(gain); gain.connect(audioContext.destination);
+    })();
+    void initialize.catch(error => {cleanup(); if (!stopped) onError(error as Error);});
+    const stop = (flush: boolean) => {
+      if (stopPromise) return stopPromise;
+      stopped = true;
       stopPromise = (async () => {
-        stopped = true;
-        window.clearInterval(videoIntervalId);
-        video.pause();
-        video.srcObject = null;
-
-        if (processor) {
-          processor.onaudioprocess = null;
-          processor.disconnect();
-        }
-        silentOutput?.disconnect();
-        source?.disconnect();
-
-        if (newSamplesSinceLastChunk > 0) {
-          const finalChunk = takeNextAudioChunk(
-            bufferedSamples,
-            Number.MAX_SAFE_INTEGER,
-            0,
-            true
-          ).chunk;
-          if (finalChunk) {
-            enqueueAudio(finalChunk);
+        try {
+          await initialize;
+          if (flush && node) {
+            await new Promise<void>((resolve, reject) => {
+              const timeout = setTimeout(() => reject(new Error('마지막 음성 캡처 완료 시간이 초과되었습니다.')), 2000);
+              flushDone = () => {clearTimeout(timeout); resolve();};
+              node!.port.postMessage({event: 'flush'});
+            });
+            if (sequence) await awaitAudioAck(sequence);
           }
-        }
-        bufferedSamples = new Float32Array();
-        newSamplesSinceLastChunk = 0;
-        await sendChain;
-        if (audioContext && audioContext.state !== "closed") {
-          await audioContext.close();
-        }
+        } finally {cleanup();}
       })();
       return stopPromise;
     };
-
-    stopRef.current = stop;
-    return () => {
-      void stop();
-    };
-  }, [isActive, sendAudioChunk, sendVideoFrame, stream]);
-
-  const stopStreaming = useCallback(async () => {
-    await stopRef.current();
-  }, []);
-
-  return { stopStreaming };
+    stopAudioRef.current = stop;
+    return () => {void stop(false).catch(() => undefined);};
+  }, [captureAudio, stream, audioContext, sendAudioPacket, awaitAudioAck, onError]);
+  const stopStreaming = useCallback(async () => {stopVideoRef.current(); await stopAudioRef.current(true);}, []);
+  return {stopStreaming};
 }

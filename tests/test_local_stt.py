@@ -1,12 +1,15 @@
+import io
 import time
+import wave
 from uuid import uuid4
 
 import numpy as np
+import pytest
+import soundfile as sf
 
 from app.ai.base import MediaPayload
 from app.ai.local_stt import (
     LocalQwenSpeechAdapter,
-    _decode_text_payload,
     active_speech_duration,
 )
 
@@ -21,7 +24,8 @@ def test_active_speech_duration_excludes_silence() -> None:
     assert 0.9 <= duration <= 1.1
 
 
-def test_pcm_silence_skips_qwen_inference() -> None:
+@pytest.mark.parametrize("wav", [False, True])
+def test_silent_audio_skips_qwen_inference(wav: bool) -> None:
     class FailIfCalled:
         def transcribe(self, **_: object) -> object:
             raise AssertionError("silent audio must not reach Qwen")
@@ -32,15 +36,24 @@ def test_pcm_silence_skips_qwen_inference() -> None:
 
     adapter = LocalQwenSpeechAdapter.__new__(LocalQwenSpeechAdapter)
     adapter.np = np
+    adapter.sf = sf
     adapter.silence_rms_threshold = 0.003
     adapter.stt = FailIfCalled()
     adapter.rate = EmptyAnalyzer()
     adapter.filler = EmptyAnalyzer()
 
-    payload = MediaPayload(uuid4(), 0, np.zeros(16_000, dtype="<i2").tobytes())
+    audio = np.zeros(16_000, dtype="<i2").tobytes()
+    if wav:
+        output = io.BytesIO()
+        with wave.open(output, "wb") as stream:
+            stream.setnchannels(1)
+            stream.setsampwidth(2)
+            stream.setframerate(16_000)
+            stream.writeframes(audio)
+        audio = output.getvalue()
+    payload = MediaPayload(uuid4(), 0, audio)
     result = adapter._infer_sync(payload, time.perf_counter())
 
-    assert _decode_text_payload(payload.payload) is None
     assert result.transcript is None
     assert result.metrics["rms"] == 0.0
 
@@ -68,3 +81,26 @@ def test_low_level_microphone_noise_does_not_reach_qwen() -> None:
     assert result.level == "info"
     assert result.metrics["syllables_per_minute"] == 0
     assert result.metrics["rms"] > adapter.silence_rms_threshold
+
+
+def test_text_cannot_bypass_qwen_inference(monkeypatch: pytest.MonkeyPatch) -> None:
+    from stt import FillerWordAnalyzer, SpeechRateAnalyzer
+
+    class FailingModel:
+        def transcribe(self, **_: object) -> object:
+            raise RuntimeError("model inference failed")
+
+    adapter = LocalQwenSpeechAdapter.__new__(LocalQwenSpeechAdapter)
+    adapter.np = np
+    adapter.context = ""
+    adapter.silence_rms_threshold = 0.003
+    adapter.stt = FailingModel()
+    adapter.rate = SpeechRateAnalyzer()
+    adapter.filler = FillerWordAnalyzer()
+    monkeypatch.setattr("app.ai.local_stt.has_speech", lambda *_: True)
+    payload = b'{"text":"invented transcript","duration_ms":2000}'
+    # Also valid, long PCM bytes: the former text shortcut must not take precedence.
+    payload = payload.ljust(16_000, b" ")
+
+    with pytest.raises(RuntimeError, match="model inference failed"):
+        adapter._infer_sync(MediaPayload(uuid4(), 0, payload), time.perf_counter())
