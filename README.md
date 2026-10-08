@@ -32,7 +32,8 @@ API 문서는 `http://localhost:8000/docs`, 상태 확인은
 `http://localhost:8000/health/ready`에서 볼 수 있습니다. Docker 시작 시 Alembic
 migration이 자동 적용됩니다.
 
-로컬 Python 3.12 환경에서는 다음과 같이 실행합니다.
+현재 Mac 로컬 검증은 Python 3.10/MPS 기준입니다(패키지 지원 선언 >=3.10).
+새 환경은 다음과 같이 실행하며, 기존 환경도 코드 갱신 후 `alembic upgrade head`를 적용합니다.
 
 ```bash
 python -m venv .venv
@@ -51,7 +52,10 @@ Mock 실행 모드와 provider는 제거되어 잘못된 설정으로 거부됩�
 `/health/ready`의 기존 DB/Redis 준비 상태와 별도로 `modules`에 provider/model/device/status/reason을 반환합니다.
 이번 로컬 경로에서 legacy 및 HTTP 시선 provider는 지원하지 않습니다.
 
-현재 브라우저는 `/api/v1/ws/practice-demo?protocol=2`를 사용합니다(개발 전용).
+현재 브라우저는 `/api/v1/ws/practice-demo?protocol=2`를 사용합니다(개발 환경 + loopback 접속 전용).
+공개 배포에서는 인증된 세션 API를 사용해야 하며 개발 데모는 차단됩니다.
+브라우저 WebSocket의 Origin도 `CORS_ORIGINS`와 일치해야 합니다. 기존 `.env`에서는 사용하는 프론트 주소
+(예: `http://localhost:9000`)를 추가하세요. Origin 없는 로컬 개발 도구 접속은 허용합니다.
 `session.start → session.ready → calibration.start → session.calibrating → session.running`
 이후에만 음성을 캡처하고 연습 시간을 셉니다. 시선 비활성화 시 보정을 건너뜁니다.
 준비/보정 중 취소할 수 있고, 종료는 `session.draining → session.completed`로 진행됩니다.
@@ -70,7 +74,9 @@ timestamp_ms, start_sample, sample_count) 뒤에 JPEG 또는 little-endian PCM16
 취소된 네이티브 추론이 실제로 끝나기 전 동일 모델의 다음 추론을 거절합니다.
 
 AudioWorklet이 실제 장치 sample rate를 사용하며 필요 시 연속 FIR 저역통과 리샘플링합니다.
-발화 구간 VAD 재설계 전까지는 비중첩 2초 PCM을 추론하고 마지막 짧은 잔여 음성도 전달합니다.
+PCM 패킷은 VAD로 비중첩 발화를 조립한 후 Qwen에서 최종 전사합니다.
+짧은 종료 발화도 flush하고 발화 ID로 재전송만 중복 제거합니다. 실제 반복 문장은 보존합니다.
+발화 속도는 한국어 음절 수 / VAD 발화 시간으로 계산하고, 습관어는 전사에 남은 후보만 검출합니다.
 받아쓰기/습관어/속도/시선의 실제 정확도 개선 완료를 뜻하지 않습니다.
 인증된 v1 WS/REST API는 유지합니다. 아래 9바이트 헤더는 v1 호환 경로 설명입니다.
 
@@ -87,14 +93,29 @@ AudioWorklet이 실제 장치 sample rate를 사용하며 필요 시 연속 FIR 
 발표 세션은 선택적으로 `script`와 `time_limit_seconds`를 함께 받을 수 있습니다.
 대본이 있으면 문장부호의 쉼 가중치를 반영한 목표 타임라인과 목표 발화 속도를
 계산합니다. 실시간 transcript는 대본 위치와 정렬되어 `script.progress` 이벤트를
-만들고, final transcript는 문자 정렬 기반의 발음 명료도 추정에 사용됩니다.
+만듭니다. 최종 전사만 정렬을 확정하며, 4자 이상·일치도 0.65 이상·경쟁 구간과 차이 0.10 이상일 때만
+실제 위치를 전진시킵니다. 무관한 말·반복 구간은 마지막 위치를 유지합니다.
 
-발음 결과는 실제 음향학적 발음 정확도가 아니라 STT 결과와 예상 대본 구간의
-일치도를 사용한 `pronunciation_clarity_score`입니다. 신호가 짧거나 신뢰도가 낮으면
-점수를 0으로 만들지 않고 `insufficient_signal`로 반환합니다.
+`pronunciation_clarity_score`는 호환 필드명이며 실제 의미는 **대본과 인식 결과 일치도**입니다.
+확정된 정렬 구간만 비교하고 음향학적 발음 정확도·모델 확률을 점수로 만들지 않습니다.
 
-프론트의 발표 모드에서는 노래방식 진행 가이드와 주요 단어 힌트를 선택할 수
-있습니다.
+발표 가이드는 목표 시간 진행과 실제 인식 진행을 구분합니다. 문장 요약 힌트는 설정 화면에서
+직접 작성한 메모를 사용하며 미설정 시 임의 단어로 대체하지 않습니다. 대본 변경 시 힌트는 초기화됩니다.
+요약 LLM의 자동 탑재는 하지 않았습니다.
+
+## 종료 리포트 v2와 저장 정책
+
+최종 화면은 서버 집계만 사용하며 데이터 없음·비활성·검출 0회를 구분합니다.
+시선은 관찰 간격 1초 이하만 적분하고 긴 공백은 판단 불가로 처리합니다.
+마지막 관찰은 최대 1초만 유지하며 유효 관찰 중 이탈 비율과 전체 시간 대비 관찰 범위를 따로 표시합니다.
+발화 속도는 유효 발화의 총 음절 수 / 총 발화 시간, 속도 경고는 경고 상태 진입 횟수입니다.
+근거 없는 종합 점수는 `null`, 미완료 상태는 DB에도 보존합니다.
+
+받아쓰기는 종료 화면에서 일시적으로 보여주지만 새 DB 리포트의 `transcript`는 `null`입니다.
+타임라인·중첩 지표는 수치/정해진 상태값만 허용하여 대본 비교 원문도 저장하지 않습니다.
+기존 v1 기록과 원문은 마이그레이션에서 삭제하지 않습니다. v2 nullable 변경은 안전한 다운그레이드를
+지원하지 않으므로 되돌릴 때는 변경 전 DB 백업을 사용하세요.
+현장 정성평가는 별도로 보류하며 [확인 항목](docs/realtime-field-check.md)을 참고하세요.
 
 WebSocket은 JSON 제어 메시지와 바이너리 미디어를 받습니다. 바이너리 헤더는
 `payload type 1 byte + timestamp_ms 8 byte(big-endian)`이며 타입 `0x01`은 JPEG,

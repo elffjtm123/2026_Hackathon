@@ -65,6 +65,17 @@ export function normalizeScript(text: string) {
   return text.trim().split(/\s+/).filter(Boolean).join(" ");
 }
 
+export function scriptSentences(text: string): string[] {
+  const sentences: string[] = [];
+  let sentence = '';
+  for (const token of normalizeScript(text).split(' ').filter(Boolean)) {
+    sentence += (sentence ? ' ' : '') + token;
+    if (sentenceEndPattern.test(token)) {sentences.push(sentence); sentence = '';}
+  }
+  if (sentence) sentences.push(sentence);
+  return sentences;
+}
+
 export function appendTranscript(current: string, next: string) {
   const currentText = normalizeScript(current);
   const nextText = normalizeScript(next);

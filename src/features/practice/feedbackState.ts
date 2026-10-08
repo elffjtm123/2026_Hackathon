@@ -1,6 +1,8 @@
 import type { RealtimeFeedback } from "./types";
+import type { ScriptProgress } from '../../lib/realtimeProtocol';
 
 export type FeedbackState = {
+  scriptProgress?: ScriptProgress;
   gaze: RealtimeFeedback | null;
   speech: RealtimeFeedback | null;
   pronunciation: RealtimeFeedback | null;
@@ -19,10 +21,13 @@ export function reduceFeedback(
   feedback: RealtimeFeedback,
   receivedAt = performance.now()
 ): FeedbackState {
+  if (feedback.source === 'script_sync') return {...state,scriptProgress:feedback.scriptProgress};
   if (feedback.source === "gaze") {
     return { ...state, gaze: feedback, receivedAt: {...state.receivedAt, gaze: receivedAt}, gazeStale: false };
   }
   if (feedback.source === "speech_rate") {
+    if (feedback.utteranceId && feedback.utteranceId === state.speech?.utteranceId &&
+        feedback.revision === state.speech?.revision) return state;
     return { ...state, speech: feedback, receivedAt: {...state.receivedAt, speech: receivedAt} };
   }
   if (feedback.source === "pronunciation") {
@@ -32,6 +37,7 @@ export function reduceFeedback(
 }
 
 export const directionLabels: Record<string,string> = {center:'정면',left:'왼쪽',right:'오른쪽',up:'위쪽',down:'아래쪽',unknown:'판단 불가',away:'기준 이탈'};
+export const speechPaceLabels = {slow:'느림',normal:'설정 범위',fast:'빠름',unknown:'판단 대기'};
 
 export function selectVisibleFeedback(state: FeedbackState, nowMs: number): FeedbackState {
   if (state.gaze && nowMs - (state.receivedAt?.gaze ?? -Infinity) > 1500) {

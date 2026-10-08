@@ -21,7 +21,15 @@ class Settings(BaseSettings):
     access_token_minutes: int = 15
     refresh_token_days: int = 14
 
-    cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:3000"])
+    cors_origins: list[str] = Field(
+        default_factory=lambda: [
+            "http://localhost:3000",
+            "http://localhost:5173",
+            "http://localhost:9000",
+            "http://127.0.0.1:5173",
+            "http://127.0.0.1:9000",
+        ]
+    )
     ai_mode: Literal["local", "http"] = "local"
     ai_base_url: str = "http://localhost:9000"
     ai_connect_timeout_seconds: float = 1.0

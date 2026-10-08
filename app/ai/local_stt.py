@@ -67,8 +67,6 @@ class LocalQwenSpeechAdapter:
         import torch
         from qwen_asr import Qwen3ASRModel
 
-        from stt import FillerWordAnalyzer, SpeechRateAnalyzer
-
         resolved_device = (
             "mps" if device == "auto" and torch.backends.mps.is_available() else device
         )
@@ -88,8 +86,6 @@ class LocalQwenSpeechAdapter:
             max_inference_batch_size=1,
             max_new_tokens=128,
         )
-        self.rate = SpeechRateAnalyzer()
-        self.filler = FillerWordAnalyzer()
         self.gate = InferenceGate()
 
     async def infer(self, media: MediaPayload) -> AIResult:
@@ -113,7 +109,14 @@ class LocalQwenSpeechAdapter:
 
         duration = len(audio) / sample_rate
         rms = float(self.np.sqrt(self.np.mean(self.np.square(audio)))) if len(audio) else 0.0
-        if (
+        confirmed = media.voiced_ms is not None
+        if media.voiced_ms is not None and (
+            media.format != "pcm16"
+            or not media.utterance_id
+            or not 0 < media.voiced_ms <= round(duration * 1000)
+        ):
+            raise ValueError("INVALID_CONFIRMED_SEGMENT")
+        if not confirmed and (
             (media.format != "pcm16" and duration < 0.5)
             or rms < self.silence_rms_threshold
             or not has_speech(audio, sample_rate)
@@ -125,7 +128,11 @@ class LocalQwenSpeechAdapter:
             context=self.context,
             language="Korean",
         )[0]
-        speech_duration = active_speech_duration(audio, sample_rate, self.silence_rms_threshold)
+        speech_duration = (
+            media.voiced_ms / 1000
+            if media.voiced_ms is not None
+            else active_speech_duration(audio, sample_rate, self.silence_rms_threshold)
+        )
         return self._analyze_result(media, result.text, speech_duration, started, rms=rms)
 
     def _analyze_result(
@@ -138,25 +145,16 @@ class LocalQwenSpeechAdapter:
         rms: float | None = None,
     ) -> AIResult:
         transcript = transcript.strip()
-        speech_rate = self.rate.analyze(transcript, duration)
-        fillers = self.filler.analyze(transcript)
-        filler_counts = dict(fillers.get("counts", {}))
-        level = "warning" if transcript and speech_rate.get("level") in {"FAST", "SLOW"} else "info"
-
         return AIResult(
             source="speech_rate",
             timestamp_ms=media.timestamp_ms,
-            level=level,
-            message=(
-                str(speech_rate.get("feedback", "발화 분석이 완료되었습니다."))
-                if transcript
-                else "음성이 감지되지 않았습니다."
-            ),
+            level="info",
+            message=("발화를 인식했습니다." if transcript else "음성이 감지되지 않았습니다."),
             metrics={
-                "syllables_per_minute": float(speech_rate.get("cpm", 0) or 0),
-                "filler_words": [
-                    {"word": word, "count": count} for word, count in filler_counts.items()
-                ],
+                "pace": "unknown",
+                "syllables_per_minute": None,
+                "voiced_ms": round(duration * 1000),
+                "filler_words": [],
                 "duration_sec": duration,
                 "rms": rms,
             },

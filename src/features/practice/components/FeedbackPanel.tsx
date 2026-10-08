@@ -1,5 +1,5 @@
 import type { FeedbackState } from "../feedbackState";
-import {directionLabels, gazeLabel} from '../feedbackState';
+import {directionLabels, gazeLabel, speechPaceLabels} from '../feedbackState';
 import type { ConnectionStatus } from "../types";
 
 type FeedbackPanelProps = {
@@ -51,9 +51,16 @@ export function FeedbackPanel({
           </div>
           <div>
             <span className="label">발화 속도</span>
-            <strong>{feedback.speech?.speech?.pace ?? "분석 대기"}</strong>
+            <strong>{speechPaceLabels[feedback.speech?.speech?.pace ?? 'unknown']}</strong>
             <p>{feedback.speech?.speech?.message}</p>
           </div>
+          {feedback.speech?.filler ? <div>
+            <span className="label">받아쓰기에서 검출된 습관어</span>
+            <strong>{feedback.speech.filler.status === 'disabled' ? '비활성' : feedback.speech.filler.totalCount === null ? '분석 없음' : `${feedback.speech.filler.totalCount}회`}</strong>
+            <p>{feedback.speech.filler.totalCount === null ? '인식된 발화가 있어야 집계할 수 있습니다.' : Object.entries(feedback.speech.filler.counts ?? {})
+              .map(([word,count]) => `${word} ${count}회`).join(', ') || '검출 없음'}</p>
+            <small>음성 인식에서 생략된 습관어는 집계되지 않을 수 있습니다.</small>
+          </div> : null}
           {feedback.speech?.transcript ? (
             <div>
               <span className="label">인식된 음성</span>

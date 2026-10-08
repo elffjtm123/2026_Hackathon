@@ -37,6 +37,10 @@ async def test_preparing_has_no_audio_or_practice_clock():
 
 @pytest.mark.asyncio
 async def test_stop_waits_for_short_accepted_pcm_tail():
+    import struct
+
+    from app.modules.speech.segments import SpeechSegmenter
+
     received = []
 
     class Speech:
@@ -46,15 +50,22 @@ async def test_stop_waits_for_short_accepted_pcm_tail():
             return AIResult("speech_rate", media.timestamp_ms, "info", "ok", {}, "네", True)
 
     pipeline = make_pipeline(Speech())
+    pipeline.segmenter = SpeechSegmenter(is_speech=lambda _: True)
     await pipeline.start()
     assert hasattr(pipeline, "accept_media"), "validated packet acceptance missing"
     packet = MediaPayload(
-        pipeline.session_id, pipeline.audio_origin_ms, b"\0\0" * 100, 1, 0, 100, "pcm16"
+        pipeline.session_id,
+        pipeline.audio_origin_ms,
+        struct.pack("<h", 1000) * 1600,
+        1,
+        0,
+        1600,
+        "pcm16",
     )
     await pipeline.accept_media(packet)
     report = await pipeline.stop()
     assert len(received) == 1
-    assert received[0].sample_count == 100
+    assert received[0].sample_count == 1600
     assert report["transcript"] == "네"
 
 

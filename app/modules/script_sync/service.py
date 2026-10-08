@@ -102,56 +102,68 @@ class ScriptSyncService:
         self.confirmed_cursor = -1
 
     def update(self, transcript: str, timestamp_ms: int, *, is_final: bool) -> dict[str, Any]:
-        words = TOKEN_PATTERN.findall(normalize_script(transcript))
-        if not self.plan.timeline or not words:
-            return self._progress(timestamp_ms, max(self.cursor, 0))
+        def normalize(text: str) -> str:
+            return re.sub(r"[^0-9a-z가-힣]", "", text.lower())
 
-        script_tokens = [str(item["text"]) for item in self.plan.timeline]
-        start = max(0, self.confirmed_cursor - 3)
-        end = min(len(script_tokens), max(start + 20, self.cursor + len(words) + 12))
-        best_cursor = max(self.cursor, 0)
-        best_score = -1.0
-        joined_words = "".join(words)
-        for candidate in range(start, end):
-            candidate_end = min(len(script_tokens), candidate + len(words) + 3)
-            score = SequenceMatcher(
-                None, joined_words, "".join(script_tokens[candidate:candidate_end])
-            ).ratio()
-            if score > best_score:
-                best_score = score
-                best_cursor = candidate_end - 1
-
-        # Partial hypotheses may fluctuate, but the UI cursor must not jump backwards.
-        self.cursor = max(self.cursor, best_cursor)
-        if is_final:
-            self.confirmed_cursor = max(self.confirmed_cursor, self.cursor)
-        return self._progress(timestamp_ms, self.cursor)
+        text = normalize(transcript)
+        tokens = [normalize(str(item["text"])) for item in self.plan.timeline]
+        candidates: list[tuple[float, int, int]] = []
+        if is_final and len(text) >= 4:
+            start = max(0, self.confirmed_cursor - 3)
+            stop = min(len(tokens), start + 40)
+            for left in range(start, stop):
+                joined = ""
+                for right in range(left, stop):
+                    joined += tokens[right]
+                    if len(joined) > len(text) * 1.6:
+                        break
+                    if len(joined) >= len(text) * 0.6:
+                        score = SequenceMatcher(None, text, joined, autojunk=False).ratio()
+                        candidates.append((score, left, right))
+        candidates.sort(reverse=True)
+        best = candidates[0] if candidates else (0.0, 0, 0)
+        # Alternate lengths of the same span are not independent competing matches.
+        runner_up = max(
+            (score for score, left, right in candidates if right < best[1] or left > best[2]),
+            default=0.0,
+        )
+        matched = best[0] >= 0.65 and best[0] - runner_up >= 0.10
+        if matched:
+            self.cursor = self.confirmed_cursor = max(self.confirmed_cursor, best[2])
+        return {
+            **self._progress(timestamp_ms, self.cursor),
+            "alignment_status": "matched" if matched else "uncertain",
+            "match_score": round(best[0], 4),
+            "matched_start_token": best[1] if matched else None,
+            "matched_end_token": best[2] if matched else None,
+        }
 
     def _progress(self, timestamp_ms: int, cursor: int) -> dict[str, Any]:
         timeline = self.plan.timeline
-        cursor = min(max(cursor, 0), max(len(timeline) - 1, 0))
         expected = 0
         for item in timeline:
             if int(item["target_start_ms"]) <= timestamp_ms:
                 expected = int(item["token_index"])
             else:
                 break
-        current_target = int(timeline[cursor]["target_start_ms"]) if timeline else 0
-        pace_delta = current_target - timestamp_ms
-        status = "on_time"
-        if pace_delta > 3_000:
+        current_target = int(timeline[cursor]["target_end_ms"]) if cursor >= 0 else None
+        pace_delta = current_target - timestamp_ms if current_target is not None else None
+        status = "unknown" if pace_delta is None else "on_time"
+        if pace_delta is not None and pace_delta > 3_000:
             status = "ahead"
-        elif pace_delta < -3_000:
+        elif pace_delta is not None and pace_delta < -3_000:
             status = "behind"
         next_index = min(cursor + 1, max(len(timeline) - 1, 0))
         return {
-            "current_token_index": cursor,
-            "current_sentence_index": int(timeline[cursor]["sentence_index"]) if timeline else 0,
+            "current_token_index": cursor if cursor >= 0 else None,
+            "current_sentence_index": int(timeline[cursor]["sentence_index"])
+            if cursor >= 0
+            else None,
             "expected_token_index": expected,
             "progress_ratio": round((cursor + 1) / max(len(timeline), 1), 4),
             "expected_progress_ratio": round((expected + 1) / max(len(timeline), 1), 4),
             "pace_delta_ms": pace_delta,
             "pace_status": status,
-            "active_text": str(timeline[cursor]["text"]) if timeline else "",
+            "active_text": str(timeline[cursor]["text"]) if cursor >= 0 else "",
             "next_text": str(timeline[next_index]["text"]) if timeline else "",
         }

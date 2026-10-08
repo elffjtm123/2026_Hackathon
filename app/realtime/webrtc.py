@@ -10,8 +10,10 @@ from aiortc import (
     RTCPeerConnection,
     RTCSessionDescription,
 )
+from aiortc.mediastreams import MediaStreamError
 from av import AudioResampler
 
+from app.ai.base import MediaPayload
 from app.core.config import Settings
 from app.realtime.pipeline import SessionPipeline
 
@@ -62,9 +64,17 @@ class WebRTCManager:
         @pc.on("track")
         def on_track(track: object) -> None:
             if getattr(track, "kind", None) == "video":
-                self._track(asyncio.create_task(self._consume_video(track, pipeline)))
+                self._track(
+                    asyncio.create_task(
+                        self._consume_video(track, pipeline), name=f"webrtc-video-{session_id}"
+                    )
+                )
             elif getattr(track, "kind", None) == "audio":
-                self._track(asyncio.create_task(self._consume_audio(track, pipeline)))
+                self._track(
+                    asyncio.create_task(
+                        self._consume_audio(track, pipeline), name=f"webrtc-audio-{session_id}"
+                    )
+                )
 
         @pc.on("connectionstatechange")
         async def on_connectionstatechange() -> None:
@@ -106,9 +116,33 @@ class WebRTCManager:
         resampler = AudioResampler(format="s16", layout="mono", rate=16_000)
         chunk_size = int(16_000 * 2 * self.settings.audio_chunk_ms / 1_000)
         buffer = bytearray()
+        origin_ms: int | None = None
+        sequence = pipeline.media_sequences["pcm16"]
+        sample = pipeline.next_audio_sample
+
+        async def send(payload: bytes) -> None:
+            nonlocal sequence, sample
+            sequence += 1
+            await pipeline.accept_media(
+                MediaPayload(
+                    pipeline.session_id,
+                    int(origin_ms or 0) + sample * 1000 // 16000,
+                    payload,
+                    sequence,
+                    sample,
+                    len(payload) // 2,
+                    "pcm16",
+                )
+            )
+            sample += len(payload) // 2
+
         try:
             while True:
                 frame = await track.recv()  # type: ignore[attr-defined]
+                if pipeline.phase != "running":
+                    continue
+                if origin_ms is None:
+                    origin_ms = pipeline.elapsed_ms() - sample * 1000 // 16000
                 # Resampling is local and bounded; raw audio is discarded after enqueueing.
                 for resampled in resampler.resample(frame):
                     sample_bytes = bytes(resampled.planes[0])[: resampled.samples * 2]
@@ -116,15 +150,46 @@ class WebRTCManager:
                     while len(buffer) >= chunk_size:
                         payload = bytes(buffer[:chunk_size])
                         del buffer[:chunk_size]
-                        await pipeline.push_audio(pipeline.elapsed_ms(), payload)
+                        await send(payload)
         except asyncio.CancelledError:
             raise
+        except MediaStreamError:
+            pass
         except Exception:
-            logger.info("audio_track_ended", extra={"session_id": pipeline.session_id})
+            pipeline.incomplete = True
+            await pipeline.emit_error("AUDIO_TRACK_FAILED", "음성 스트림 처리에 실패했습니다.")
+        finally:
+            if origin_ms is not None and pipeline.accepting and pipeline.phase == "running":
+                try:
+                    for resampled in resampler.resample(None):
+                        buffer.extend(bytes(resampled.planes[0])[: resampled.samples * 2])
+                    while buffer:
+                        payload = bytes(buffer[:chunk_size])
+                        del buffer[:chunk_size]
+                        await send(payload)
+                    await asyncio.wait_for(
+                        pipeline.audio_queue.put(
+                            MediaPayload(
+                                pipeline.session_id, pipeline.elapsed_ms(), b"", format="flush"
+                            )
+                        ),
+                        timeout=self.settings.audio_queue_wait_seconds,
+                    )
+                except Exception:
+                    pipeline.incomplete = True
+                    await pipeline.emit_error(
+                        "AUDIO_TAIL_FAILED", "마지막 음성을 전달하지 못했습니다."
+                    )
 
     async def close_session(self, session_id: UUID) -> None:
         connections = self.connections.pop(session_id, set())
         await asyncio.gather(*(pc.close() for pc in connections), return_exceptions=True)
+        tasks = [task for task in self.tasks if task.get_name().endswith(str(session_id))]
+        if tasks:
+            _, pending = await asyncio.wait(tasks, timeout=2)
+            for task in pending:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     async def close(self) -> None:
         await asyncio.gather(

@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   PracticeMode,
-  PracticeSummary,
   PresentationFeatureSettings,
   RealtimeFeedback,
   SessionCompletionReport,
@@ -11,12 +10,9 @@ import {
   reduceFeedback,
   type FeedbackState,
 } from "../feedbackState";
-import { appendTranscript } from "../scriptTools";
 import type { SessionPhase } from '../../../lib/realtimeProtocol';
+import {summaryForUi} from '../../../lib/realtimeProtocol';
 import { practiceElapsedMs } from '../sessionLifecycle';
-
-const gazeAwayStatuses = new Set(["away", "left", "right", "up", "down"]);
-const speechWarningStatuses = new Set(["fast", "slow"]);
 
 function createSessionId() {
   if (crypto.randomUUID) {
@@ -43,15 +39,6 @@ export function usePracticeSession() {
   );
   const [completionReport, setCompletionReport] =
     useState<SessionCompletionReport | null>(null);
-  const [gazeAwayDurationMs, setGazeAwayDurationMs] = useState(0);
-  const [pronunciationAccuracy, setPronunciationAccuracy] = useState<
-    number | null
-  >(null);
-  const [speechPaceWarningCount, setSpeechPaceWarningCount] = useState(0);
-  const gazeAwayDurationMsRef = useRef(0);
-  const lastGazeSampleAtRef = useRef<number | null>(null);
-  const lastGazeWasAwayRef = useRef(false);
-  const pronunciationScoresRef = useRef<number[]>([]);
   const transcriptRef = useRef("");
 
   const isRunning = phase === 'running';
@@ -80,13 +67,6 @@ export function usePracticeSession() {
     setNow(performance.now());
     setFeedbackState(emptyFeedbackState);
     setCompletionReport(null);
-    setGazeAwayDurationMs(0);
-    setPronunciationAccuracy(null);
-    setSpeechPaceWarningCount(0);
-    gazeAwayDurationMsRef.current = 0;
-    lastGazeSampleAtRef.current = null;
-    lastGazeWasAwayRef.current = false;
-    pronunciationScoresRef.current = [];
     transcriptRef.current = "";
     return nextSessionId;
   }, []);
@@ -112,82 +92,20 @@ export function usePracticeSession() {
   const receiveFeedback = useCallback((feedback: RealtimeFeedback) => {
     setFeedbackState((current) => reduceFeedback(current, feedback));
 
-    if (feedback.transcript) {
-      transcriptRef.current = appendTranscript(
-        transcriptRef.current,
-        feedback.transcript
-      );
-    }
+    if (typeof feedback.transcriptSnapshot === 'string')
+      transcriptRef.current = feedback.transcriptSnapshot;
 
-    if (feedback.source === undefined || feedback.source === "gaze") {
-      const observedAt = feedback.timestamp;
-      const lastGazeSampleAt = lastGazeSampleAtRef.current;
-
-      if (lastGazeWasAwayRef.current && lastGazeSampleAt !== null) {
-        gazeAwayDurationMsRef.current += Math.max(0, observedAt - lastGazeSampleAt);
-        setGazeAwayDurationMs(gazeAwayDurationMsRef.current);
-      }
-
-      lastGazeSampleAtRef.current = observedAt;
-      lastGazeWasAwayRef.current = gazeAwayStatuses.has(
-        feedback.gaze?.status ?? "unknown"
-      );
-    }
-
-    const accuracy = feedback.pronunciation?.accuracy;
-    if (typeof accuracy === "number" && Number.isFinite(accuracy)) {
-      pronunciationScoresRef.current = [
-        ...pronunciationScoresRef.current,
-        accuracy,
-      ];
-      const total = pronunciationScoresRef.current.reduce(
-        (sum, score) => sum + score,
-        0
-      );
-      setPronunciationAccuracy(total / pronunciationScoresRef.current.length);
-    }
-
-    if (
-      (feedback.source === undefined || feedback.source === "speech_rate") &&
-      speechWarningStatuses.has(feedback.speech?.pace ?? "unknown")
-    ) {
-      setSpeechPaceWarningCount((count) => count + 1);
-    }
   }, []);
 
   const completeSession = useCallback((report: SessionCompletionReport) => {
     setCompletionReport(report);
-    gazeAwayDurationMsRef.current = report.gaze.awayDurationMs;
-    setGazeAwayDurationMs(report.gaze.awayDurationMs);
     setPhase('completed');
     setEndedAt(current => current ?? performance.now());
   }, []);
 
-  const summary: PracticeSummary | null =
+  const summary =
     sessionId && endedAt && (phase === 'completed' || phase === 'failed')
-      ? {
-          sessionId,
-          durationSeconds: elapsedSeconds,
-          gazeAwayRatio:
-            elapsedSeconds > 0
-              ? Math.min(
-                  1,
-                  (completionReport?.gaze.awayDurationMs ?? gazeAwayDurationMs) /
-                    (elapsedSeconds * 1000)
-                )
-              : 0,
-          pronunciationAccuracy:
-            pronunciationAccuracy === null
-              ? null
-              : Math.round(pronunciationAccuracy * 10) / 10,
-          speechPaceWarningCount,
-          averageSyllablesPerMinute:
-            completionReport?.speech.averageSyllablesPerMinute ?? 0,
-          fillerWordCounts: completionReport?.filler.counts ?? {},
-          transcript:
-            completionReport?.transcript ?? (transcriptRef.current || null),
-          incomplete: completionReport?.incomplete ?? true,
-        }
+      ? summaryForUi(sessionId, completionReport, elapsedSeconds, transcriptRef.current || null)
       : null;
 
   return {

@@ -19,7 +19,7 @@ def fake_models(monkeypatch: pytest.MonkeyPatch) -> None:
 def client(tmp_path: object, fake_models: None) -> Iterator[TestClient]:
     database_path = os.path.join(str(tmp_path), "test.db")
     settings = Settings(
-        app_env="test",
+        app_env="development",
         database_url=f"sqlite+aiosqlite:///{database_path}",
         redis_url=None,
         auto_create_tables=True,
@@ -29,7 +29,7 @@ def client(tmp_path: object, fake_models: None) -> Iterator[TestClient]:
         vision_provider="uniface",
         stt_provider="qwen3_asr",
     )
-    with TestClient(create_app(settings)) as test_client:
+    with TestClient(create_app(settings), client=("127.0.0.1", 50000)) as test_client:
         yield test_client
 
 

@@ -124,12 +124,12 @@ async def finish_session(
     session = await owned_session(db, session_id, user.id)
     pipeline = request.app.state.pipelines.get(session.id)
     fallback_duration = pipeline.elapsed_ms() if pipeline else 0
+    await request.app.state.webrtc.close_session(session.id)
     report_data = await request.app.state.pipelines.stop(session.id)
     if report_data is None:
         from app.realtime.aggregator import FeedbackAggregator
 
-        report_data = FeedbackAggregator().report()
-    await request.app.state.webrtc.close_session(session.id)
+        report_data = {**FeedbackAggregator().report(settings=session.settings), "incomplete": True}
     return await complete_session(db, session, report_data, fallback_duration)
 
 

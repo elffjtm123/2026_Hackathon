@@ -118,6 +118,35 @@ def test_authenticated_v2_completion_uses_registered_pipeline(client, auth):
     assert response.status_code == 200
 
 
+@pytest.mark.parametrize("protocol", [1, 2])
+def test_socket_closes_and_flushes_webrtc_before_pipeline_stop(client, auth, monkeypatch, protocol):
+    session = create_session(client, auth)
+    closed_while_running = []
+
+    async def close(session_id):
+        pipeline = client.app.state.pipelines.get(session_id)
+        closed_while_running.append(bool(pipeline and pipeline.accepting))
+
+    monkeypatch.setattr(client.app.state.webrtc, "close_session", close)
+    with client.websocket_connect(
+        f"/api/v1/ws/sessions/{session['id']}?protocol={protocol}&token={auth['access_token']}"
+    ) as ws:
+        if protocol == 2:
+            send_v2(ws, "session.start", 1)
+            ready = ws.receive_json()
+            pipeline = client.app.state.pipelines.get(UUID(session["id"]))
+            pipeline.analysis_settings["gaze_enabled"] = False
+            send_v2(ws, "calibration.start", 2, ready["session_id"])
+            assert ws.receive_json()["event"] == "session.running"
+            send_v2(ws, "session.end", 3, ready["session_id"])
+        else:
+            ws.receive_json()
+            ws.send_json({"event": "session.end"})
+        while ws.receive_json()["event"] != "session.completed":
+            pass
+    assert closed_while_running and closed_while_running[0] is True
+
+
 def create_session(client: TestClient, auth: dict[str, object]) -> dict[str, object]:
     response = client.post(
         "/api/v1/sessions",
@@ -148,9 +177,7 @@ def test_client_transcript_injection_is_rejected(client, auth, demo):
     with client.websocket_connect(url) as ws:
         if not demo:
             ws.receive_json()
-        ws.send_json(
-            {"event": "transcript.final", "data": {"text": "invented transcript"}}
-        )
+        ws.send_json({"event": "transcript.final", "data": {"text": "invented transcript"}})
         ws.send_json({"event": "session.end"})
         error = ws.receive_json()
         last = error
@@ -210,7 +237,12 @@ def test_websocket_feedback_complete_and_report(
         completion_report = completed["data"]["report"]
         assert completion_report["transcript"] == "음 저는 백엔드 개발자입니다"
         assert completion_report["filler_word_counts"] == {"음": 1}
-        assert completion_report["gaze_away_duration_ms"] == 1500
+        # This v1 fixture sends future frames and a 1500ms gap: neither is valid coverage.
+        assert completion_report["gaze_away_duration_ms"] == 0
+        assert (
+            completion_report["gaze_metrics"]["valid_duration_ms"]
+            <= completion_report["summary"]["duration_ms"]
+        )
         assert completion_report["incomplete"] is False
 
     completed = client.post(f"/api/v1/sessions/{session['id']}/complete", headers=bearer(auth))

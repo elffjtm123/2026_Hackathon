@@ -12,6 +12,8 @@ from app.core.config import Settings
 from app.modules.gaze.service import GazeStabilizer
 from app.modules.pronunciation.service import estimate_stt_pronunciation_accuracy
 from app.modules.script_sync.service import ScriptSyncService, analyze_script
+from app.modules.speech.analysis import SpeechRateWindow, analyze_utterance, pace_message
+from app.modules.speech.segments import FinalUtterance, SpeechSegmenter
 from app.realtime.aggregator import FeedbackAggregator
 from app.realtime.events import RealtimeEvent
 from app.realtime.queues import DropOldestQueue
@@ -39,6 +41,13 @@ class SessionPipeline:
         self.analysis_settings = analysis_settings
         self.video_queue: DropOldestQueue[MediaPayload] = DropOldestQueue(settings.video_queue_size)
         self.audio_queue: asyncio.Queue[MediaPayload] = asyncio.Queue(settings.audio_queue_size)
+        self.speech_queue: asyncio.Queue[MediaPayload] = asyncio.Queue(2)
+        self.segmenter: SpeechSegmenter | None = None
+        self.speech_window = SpeechRateWindow()
+        self.legacy_utterance_sequence = 0
+        self.last_audio_activity_ms = 0
+        self.latest_audio_end_ms = 0
+        self.speech_waiting = False
         self.aggregator = FeedbackAggregator()
         self.gaze_stabilizer = GazeStabilizer(calibration_frames=8)
         self.subscribers: dict[str, Subscriber] = {}
@@ -58,8 +67,6 @@ class SessionPipeline:
         self.media_sequences = {"jpeg": 0, "pcm16": 0}
         self.media_timestamps = {"jpeg": -1, "pcm16": -1}
         self.next_audio_sample = 0
-        self._pcm_buffer = bytearray()
-        self._pcm_start = 0
         self.audio_receipts: dict[int, bytes] = {}
         script = analysis_settings.get("script")
         time_limit = analysis_settings.get("time_limit_seconds")
@@ -98,6 +105,7 @@ class SessionPipeline:
         self.tasks = [
             asyncio.create_task(self._video_worker(), name=f"video-{self.session_id}"),
             asyncio.create_task(self._audio_worker(), name=f"audio-{self.session_id}"),
+            asyncio.create_task(self._speech_worker(), name=f"speech-{self.session_id}"),
         ]
         await self.state_store.set(self.session_id, {"status": "active", **self.metrics()})
 
@@ -217,6 +225,7 @@ class SessionPipeline:
                 return self.completed_report
 
             self.accepting = False
+            running_end_ms = self.elapsed_ms()
             self.phase = "draining"
             incomplete = self.incomplete
             if self.running:
@@ -230,6 +239,7 @@ class SessionPipeline:
                         MediaPayload(self.session_id, self.elapsed_ms(), b"", format="flush")
                     )
                     await self.audio_queue.join()
+                    await self.speech_queue.join()
 
                 try:
                     await asyncio.wait_for(
@@ -248,10 +258,19 @@ class SessionPipeline:
                 self.tasks.clear()
                 self.running = False
 
-            report = {**self.aggregator.report(), "incomplete": incomplete or self.incomplete}
-            self._pcm_buffer.clear()
+            report = {
+                **self.aggregator.report(
+                    self.running_started_ms
+                    if self.running_started_ms is not None
+                    else running_end_ms,
+                    running_end_ms,
+                    settings=self.analysis_settings,
+                ),
+                "incomplete": incomplete or self.incomplete,
+            }
+            self.segmenter = None
             self.audio_receipts.clear()
-            for queue in [self.audio_queue, self.video_queue.queue]:
+            for queue in [self.audio_queue, self.speech_queue, self.video_queue.queue]:
                 while not queue.empty():
                     queue.get_nowait()
                     queue.task_done()
@@ -356,33 +375,68 @@ class SessionPipeline:
         while True:
             media = await self.audio_queue.get()
             try:
-                if media.format in {"pcm16", "flush"}:
-                    if media.format == "pcm16":
-                        if not self._pcm_buffer:
-                            self._pcm_start = media.start_sample
-                        self._pcm_buffer.extend(media.payload)
-                    # ponytail: fixed 2s non-overlap chunks until S1 adds VAD segmentation.
-                    if len(self._pcm_buffer) < 64000 and media.format != "flush":
-                        continue
-                    if not self._pcm_buffer:
-                        continue
-                    count = len(self._pcm_buffer) // 2
-                    media = MediaPayload(
-                        self.session_id,
-                        self.audio_origin_ms + self._pcm_start * 1000 // 16000,
-                        bytes(self._pcm_buffer),
-                        start_sample=self._pcm_start,
-                        sample_count=count,
-                        format="pcm16",
+                if not (
+                    self.analysis_settings.get("speech_rate_enabled", True)
+                    or self.analysis_settings.get("filler_words_enabled", True)
+                ):
+                    continue
+                if media.format not in {"pcm16", "flush"}:
+                    await self._enqueue_speech(media)
+                    continue
+                if self.segmenter is None:
+                    self.segmenter = SpeechSegmenter(
+                        silence_rms_threshold=self.settings.stt_silence_rms_threshold
                     )
-                    self._pcm_buffer.clear()
-                if self.analysis_settings.get(
-                    "speech_rate_enabled", True
-                ) or self.analysis_settings.get("filler_words_enabled", True):
-                    result = await self.speech.infer(media)
-                    await self._handle_result(result)
+                segments = (
+                    self.segmenter.flush()
+                    if media.format == "flush"
+                    else self.segmenter.feed(media)
+                )
+                if media.format == "pcm16":
+                    self.latest_audio_end_ms = media.timestamp_ms + len(media.payload) // 32
+                if segments:
+                    self.speech_waiting = False
+                for segment in segments:
+                    self.last_audio_activity_ms = segment.end_ms
+                    await self._enqueue_speech(
+                        MediaPayload(
+                            self.session_id,
+                            segment.start_ms,
+                            segment.pcm,
+                            start_sample=segment.start_sample,
+                            sample_count=len(segment.pcm) // 2,
+                            format="pcm16",
+                            utterance_id=segment.utterance_id,
+                            end_ms=segment.end_ms,
+                            voiced_ms=segment.voiced_ms,
+                        )
+                    )
+                if media.format == "pcm16":
+                    end_ms = media.timestamp_ms + len(media.payload) // 32
+                    if self.segmenter.speaking:
+                        self.last_audio_activity_ms = end_ms
+                        self.speech_waiting = False
+                    elif end_ms - self.last_audio_activity_ms >= 1500 and not self.speech_waiting:
+                        self.speech_waiting = True
+                        await self._handle_result(
+                            AIResult(
+                                "speech_rate",
+                                end_ms,
+                                "info",
+                                "음성 대기 중입니다.",
+                                {
+                                    "pace": "unknown",
+                                    "syllables_per_minute": None,
+                                    "filler_counts": {},
+                                    "filler_words": [],
+                                },
+                            )
+                        )
             except asyncio.CancelledError:
                 raise
+            except ValueError as exc:
+                self.incomplete = True
+                await self.emit_error(str(exc), "음성 샘플의 순서·형식을 확인할 수 없습니다.")
             except Exception:
                 self.incomplete = True
                 logger.exception(
@@ -398,11 +452,105 @@ class SessionPipeline:
                 if self.phase == "draining" and self.protocol == 2:
                     await self.emit("session.draining", self.elapsed_ms(), self.metrics())
 
+    async def _enqueue_speech(self, media: MediaPayload) -> None:
+        try:
+            await asyncio.wait_for(
+                self.speech_queue.put(media), self.settings.audio_queue_wait_seconds
+            )
+        except asyncio.TimeoutError:
+            self.incomplete = True
+            await self.emit_error("UTTERANCE_QUEUE_FULL", "발화 분석 대기량이 한도를 초과했습니다.")
+
+    async def _speech_worker(self) -> None:
+        while True:
+            media = await self.speech_queue.get()
+            try:
+                if not (
+                    self.analysis_settings.get("speech_rate_enabled", True)
+                    or self.analysis_settings.get("filler_words_enabled", True)
+                ):
+                    continue
+                result = await self.speech.infer(media)
+                self.legacy_utterance_sequence += 1
+                final = FinalUtterance(
+                    media.utterance_id or f"legacy-u{self.legacy_utterance_sequence}",
+                    media.timestamp_ms,
+                    media.end_ms
+                    if media.end_ms is not None
+                    else media.timestamp_ms
+                    + round(float(result.metrics.get("duration_sec", 0) or 0) * 1000),
+                    media.voiced_ms
+                    if media.voiced_ms is not None
+                    else round(float(result.metrics.get("duration_sec", 0) or 0) * 1000),
+                    (result.transcript or "").strip(),
+                )
+                metrics = analyze_utterance(
+                    final,
+                    rate_enabled=self.analysis_settings.get("speech_rate_enabled", True),
+                    fillers_enabled=self.analysis_settings.get("filler_words_enabled", True),
+                )
+                self.speech_window.add(final, metrics)
+                recent = self.speech_window.snapshot(
+                    max(final.end_ms, self.latest_audio_end_ms, self.elapsed_ms())
+                )
+                live_pace = "unknown" if self.speech_waiting else recent.pace
+                live_rate = None if live_pace == "unknown" else recent.syllables_per_minute
+                result = replace(
+                    result,
+                    metrics={
+                        **result.metrics,
+                        **metrics.as_dict(),
+                        "utterance_id": final.utterance_id,
+                        "revision": final.revision,
+                        "start_ms": final.start_ms,
+                        "end_ms": final.end_ms,
+                        "syllables_per_minute": live_rate,
+                        "pace": live_pace,
+                        "filler_words": [
+                            {"word": word, "count": count}
+                            for word, count in metrics.filler_counts.items()
+                        ],
+                    },
+                    is_final=True,
+                    transcript=final.text or None,
+                    level="warning" if live_pace in {"fast", "slow"} else "info",
+                    message="음성 대기 중입니다."
+                    if self.speech_waiting
+                    else pace_message(live_pace, live_rate),
+                )
+                await self._handle_result(result)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                self.incomplete = True
+                logger.exception("speech_inference_failed", extra={"session_id": self.session_id})
+                await self.emit_error("SPEECH_AI_UNAVAILABLE", "음성 분석에 실패했습니다.")
+            finally:
+                self.speech_queue.task_done()
+
     async def _handle_result(self, result: AIResult) -> None:
         if self.phase not in {"running", "draining"}:
             return
-        self.aggregator.add(result)
-        await self.state_store.set(self.session_id, {"status": "active", **self.metrics()})
+        if not self.aggregator.add(result):
+            return
+        if result.source == "speech_rate":
+            result = replace(
+                result,
+                metrics={
+                    **result.metrics,
+                    "filler_counts_total": dict(self.aggregator.fillers),
+                    "filler_status": "disabled"
+                    if not self.analysis_settings.get("filler_words_enabled", True)
+                    else "unavailable"
+                    if not self.aggregator.transcript
+                    else "observed"
+                    if self.aggregator.fillers
+                    else "observed_zero",
+                    "warning_episode_count": self.aggregator.speech_warning_episodes,
+                    "transcript_snapshot": self.aggregator.transcript,
+                },
+            )
+        # Publish before storage can yield to a newer result. emit's lock preserves event order.
         await self.emit(
             "feedback",
             result.timestamp_ms,
@@ -422,10 +570,18 @@ class SessionPipeline:
             await self.emit(
                 name,
                 result.timestamp_ms,
-                {"text": result.transcript},
+                {
+                    "text": result.transcript,
+                    "utterance_id": result.metrics.get("utterance_id"),
+                    "revision": result.metrics.get("revision", 1),
+                    "start_ms": result.metrics.get("start_ms", result.timestamp_ms),
+                    "end_ms": result.metrics.get("end_ms"),
+                    "voiced_ms": result.metrics.get("voiced_ms"),
+                },
                 module="speech_rate",
             )
             await self._handle_transcript_analysis(result)
+        await self.state_store.set(self.session_id, {"status": "active", **self.metrics()})
 
     async def _handle_transcript_analysis(self, result: AIResult) -> None:
         if result.transcript is None:
@@ -434,26 +590,33 @@ class SessionPipeline:
         if self.script_sync is not None:
             progress = self.script_sync.update(
                 result.transcript,
-                max(0, result.timestamp_ms - (self.running_started_ms or 0)),
+                max(
+                    0,
+                    int(result.metrics.get("end_ms", result.timestamp_ms))
+                    - (self.running_started_ms or 0),
+                ),
                 is_final=bool(result.is_final),
             )
             self.aggregator.add_script_progress(progress, result.timestamp_ms)
-            if self.analysis_settings.get("karaoke_guide_enabled", True):
-                await self.emit(
-                    "script.progress",
-                    result.timestamp_ms,
-                    progress,
-                    module="script_sync",
-                    level="warning" if progress["pace_status"] != "on_time" else "info",
-                )
+            await self.emit(
+                "script.progress",
+                result.timestamp_ms,
+                progress,
+                module="script_sync",
+                level="warning" if progress["pace_status"] != "on_time" else "info",
+            )
         if not result.is_final or not self.analysis_settings.get("pronunciation_enabled", True):
             return
         expected = None
-        if self.script_sync is not None and progress is not None:
+        if (
+            self.script_sync is not None
+            and progress is not None
+            and progress["alignment_status"] == "matched"
+        ):
             plan = self.script_sync.plan.timeline
-            cursor = int(progress["current_token_index"])
-            start = max(0, cursor - max(1, len(result.transcript.split())) + 1)
-            expected = " ".join(str(item["text"]) for item in plan[start : cursor + 1])
+            start = int(progress["matched_start_token"])
+            end = int(progress["matched_end_token"])
+            expected = " ".join(str(item["text"]) for item in plan[start : end + 1])
         pronunciation = estimate_stt_pronunciation_accuracy(
             result.transcript,
             reference_text=expected,
@@ -490,6 +653,7 @@ class SessionPipeline:
             "queue_depth": {
                 "video": self.video_queue.qsize(),
                 "audio": self.audio_queue.qsize(),
+                "utterances": self.speech_queue.qsize(),
             },
             "dropped_video_frames": self.video_queue.stats.dropped,
             **self.aggregator.snapshot(),

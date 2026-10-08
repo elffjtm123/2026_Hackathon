@@ -2,17 +2,25 @@ from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from app.db.models.session import PracticeType, SessionStatus
 
 
 class AnalysisSettings(BaseModel):
-    gaze_enabled: bool = True
-    speech_rate_enabled: bool = True
-    filler_words_enabled: bool = True
-    pronunciation_enabled: bool = True
-    karaoke_guide_enabled: bool = True
+    gaze_enabled: bool = Field(True, validation_alias=AliasChoices("gaze_enabled", "gazeEnabled"))
+    speech_rate_enabled: bool = Field(
+        True, validation_alias=AliasChoices("speech_rate_enabled", "speechRateEnabled")
+    )
+    filler_words_enabled: bool = Field(
+        True, validation_alias=AliasChoices("filler_words_enabled", "fillerWordsEnabled")
+    )
+    pronunciation_enabled: bool = Field(
+        True, validation_alias=AliasChoices("pronunciation_enabled", "pronunciationEnabled")
+    )
+    karaoke_guide_enabled: bool = Field(
+        True, validation_alias=AliasChoices("karaoke_guide_enabled", "karaokeGuideEnabled")
+    )
 
 
 class SessionCreate(BaseModel):
@@ -66,17 +74,18 @@ class ReportResponse(BaseModel):
 
     id: UUID
     session_id: UUID
-    overall_score: float
-    gaze_score: float
-    speech_rate_score: float
-    filler_word_score: float
+    overall_score: float | None
+    gaze_score: float | None
+    speech_rate_score: float | None
+    filler_word_score: float | None
+    incomplete: bool
     pronunciation_clarity_score: float | None
     script_completion_ratio: float | None
     time_adherence_score: float | None
     gaze_away_count: int
     gaze_away_duration_ms: int
-    average_syllables_per_minute: float
-    filler_word_counts: dict[str, int]
+    average_syllables_per_minute: float | None
+    filler_word_counts: dict[str, int] | None
     transcript: str | None
     timeline: list[dict[str, Any]]
     summary: dict[str, Any]

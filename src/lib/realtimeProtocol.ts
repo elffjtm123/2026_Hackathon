@@ -22,12 +22,17 @@ type BackendFeedbackData = {
     recalibration_required?: boolean; calibration_progress?: number; calibration_target?: number;
     quality_measurements?: Record<string, number>;
     face_detected?: boolean; head_pose?: {yaw: number | null; pitch: number | null; roll: number | null};
-    quality?: number; confidence?: number; calibrated?: boolean; syllables_per_minute?: number;
+    quality?: number; confidence?: number; calibrated?: boolean; syllables_per_minute?: number | null;
+    pace?: SpeechPaceStatus; utterance_id?: string; revision?: number; transcript_snapshot?: string;
+    filler_counts_total?: Record<string, number>; filler_status?:string; warning_episode_count?: number;
     filler_words?: {word: string; count: number}[]; pronunciation_clarity_score?: number; method?: string };
 };
 
 // Adapt canonical model data for existing presentation widgets, not a second wire protocol.
 export function feedbackForUi(event: RealtimeEvent): RealtimeFeedback {
+  if (event.event === 'script.progress') return {type:'feedback', sessionId:event.session_id,
+    timestamp:event.timestamp_ms, source:'script_sync', severity:'info',
+    scriptProgress:event.data as ScriptProgress};
   const data = event.data as unknown as BackendFeedbackData;
   const m = data.metrics;
   const feedback: RealtimeFeedback = {type: 'feedback', sessionId: event.session_id,
@@ -43,10 +48,17 @@ export function feedbackForUi(event: RealtimeEvent): RealtimeFeedback {
     recalibrationRequired: m.recalibration_required === true, calibrationProgress: m.calibration_progress,
     calibrationTarget: m.calibration_target, qualityMeasurements: m.quality_measurements};
   if (data.source === 'speech_rate') {
-    const rate = m.syllables_per_minute ?? 0;
-    const counts = Object.fromEntries((m.filler_words ?? []).map(item => [item.word, item.count]));
-    feedback.speech = {pace: rate === 0 ? 'unknown' : rate > 360 ? 'fast' : rate < 140 ? 'slow' : 'normal', syllablesPerSecond: rate / 60, message: data.message};
-    feedback.filler = {totalCount: Object.values(counts).reduce((a, b) => a+b, 0), counts};
+    const rate = m.syllables_per_minute;
+    const counts = m.filler_counts_total ?? Object.fromEntries((m.filler_words ?? []).map(item => [item.word, item.count]));
+    feedback.utteranceId = m.utterance_id;
+    feedback.revision = m.revision;
+    feedback.transcriptSnapshot = m.transcript_snapshot;
+    feedback.speech = {pace: m.pace ?? 'unknown',
+      syllablesPerSecond: m.pace === 'unknown' || rate == null ? undefined : rate / 60,
+      warningEpisodeCount: m.warning_episode_count, message: data.message};
+    const unavailable = m.filler_status === 'unavailable' || m.filler_status === 'disabled';
+    feedback.filler = {totalCount: unavailable ? null : Object.values(counts).reduce((a, b) => a+b, 0),
+      counts:unavailable ? null : counts,status:m.filler_status};
   }
   if (data.source === 'pronunciation') feedback.pronunciation = {
     accuracy: m.pronunciation_clarity_score, method: m.method, message: data.message};
@@ -55,10 +67,36 @@ export function feedbackForUi(event: RealtimeEvent): RealtimeFeedback {
 
 export function completionForUi(data: Record<string, unknown>): SessionCompletionReport {
   const report = data as {transcript?: string; gaze_away_count?: number; gaze_away_duration_ms?: number;
-    average_syllables_per_minute?: number; filler_word_counts?: Record<string, number>; incomplete?: boolean};
-  return {transcript: report.transcript ?? null, gaze: {awayCount: report.gaze_away_count ?? 0, awayDurationMs: report.gaze_away_duration_ms ?? 0},
-    speech: {averageSyllablesPerMinute: report.average_syllables_per_minute ?? 0},
-    filler: {counts: report.filler_word_counts ?? {}}, incomplete: report.incomplete !== false};
+    average_syllables_per_minute?: number | null; filler_word_counts?: Record<string, number> | null; incomplete?: boolean;
+    summary?: {duration_ms?:number};
+    pronunciation_clarity_score?:number | null; script_completion_ratio?:number | null;
+    gaze_metrics?:{away_ratio?:number | null; coverage_ratio?:number | null; status?:string};
+    speech_rate_metrics?: {warning_episode_count?: number;status?:string;filler_status?:string}};
+  return {transcript: report.transcript ?? null,
+    speech: {averageSyllablesPerMinute: report.average_syllables_per_minute ?? null,
+      warningEpisodeCount: ['disabled','unavailable'].includes(report.speech_rate_metrics?.status ?? '') ? null : report.speech_rate_metrics?.warning_episode_count ?? null,
+      status:report.speech_rate_metrics?.status},
+    filler: {counts: report.filler_word_counts ?? null,status:report.speech_rate_metrics?.filler_status},
+    incomplete: report.incomplete !== false,
+    durationMs:report.summary?.duration_ms,
+    pronunciationAccuracy:report.pronunciation_clarity_score ?? null,
+    scriptCompletionRatio:report.script_completion_ratio ?? null,
+    gaze:{awayCount:report.gaze_away_count ?? 0,awayDurationMs:report.gaze_away_duration_ms ?? 0,
+      awayRatio:report.gaze_metrics?.away_ratio ?? null,coverageRatio:report.gaze_metrics?.coverage_ratio ?? null,
+      status:report.gaze_metrics?.status}};
+}
+
+export function summaryForUi(sessionId: string, report: SessionCompletionReport | null,
+  elapsedSeconds: number, ephemeralTranscript: string | null): PracticeSummary {
+  return {sessionId,durationSeconds:report?.durationMs == null ? elapsedSeconds : Math.floor(report.durationMs / 1000),
+    gazeAwayRatio:report?.gaze.awayRatio ?? null,gazeCoverageRatio:report?.gaze.coverageRatio ?? null,
+    gazeStatus:report?.gaze.status,speechStatus:report?.speech.status,fillerStatus:report?.filler.status,
+    pronunciationAccuracy:report?.pronunciationAccuracy ?? null,
+    scriptCompletionRatio:report?.scriptCompletionRatio ?? null,
+    speechPaceWarningCount:report?.speech.warningEpisodeCount ?? null,
+    averageSyllablesPerMinute:report?.speech.averageSyllablesPerMinute ?? null,
+    fillerWordCounts:report?.filler.counts ?? null,
+    transcript:report?.transcript ?? ephemeralTranscript,incomplete:report?.incomplete ?? true};
 }
 
 export type SpeechPaceStatus = "slow" | "normal" | "fast" | "unknown";
@@ -73,6 +111,7 @@ export type PresentationFeatureSettings = {
 };
 
 export type RealtimeFeedback = {
+  scriptProgress?: ScriptProgress;
   type: "feedback";
   sessionId: string;
   source?: string;
@@ -103,13 +142,15 @@ export type RealtimeFeedback = {
   };
   speech?: {
     pace: SpeechPaceStatus;
+    warningEpisodeCount?: number;
     syllablesPerSecond?: number;
     message?: string;
   };
   filler?: {
     latestWord?: string;
-    totalCount: number;
-    counts?: Record<string, number>;
+    totalCount: number | null;
+    counts?: Record<string, number> | null;
+    status?:string;
   };
   pronunciation?: {
     accuracy?: number | null;
@@ -117,6 +158,9 @@ export type RealtimeFeedback = {
     method?: string | null;
   };
   transcript?: string | null;
+  transcriptSnapshot?: string;
+  utteranceId?: string;
+  revision?: number;
   message?: string;
 };
 
@@ -127,29 +171,52 @@ export type ConnectionStatus =
   | "disconnected"
   | "error";
 
+export type ScriptProgress = {
+  current_token_index: number | null;
+  current_sentence_index: number | null;
+  alignment_status: 'matched' | 'uncertain';
+  progress_ratio: number;
+  expected_progress_ratio: number;
+  pace_status: string;
+};
+
 export type PracticeSummary = {
   sessionId: string;
   durationSeconds: number;
-  gazeAwayRatio: number;
+  gazeAwayRatio: number | null;
+  gazeCoverageRatio?: number | null;
+  gazeStatus?: string;
+  speechStatus?: string;
+  fillerStatus?: string;
+  scriptCompletionRatio?: number | null;
   pronunciationAccuracy: number | null;
-  speechPaceWarningCount: number;
-  averageSyllablesPerMinute: number;
-  fillerWordCounts: Record<string, number>;
+  speechPaceWarningCount: number | null;
+  averageSyllablesPerMinute: number | null;
+  fillerWordCounts: Record<string, number> | null;
   transcript: string | null;
   incomplete: boolean;
 };
 
 export type SessionCompletionReport = {
+  durationMs?:number;
+  pronunciationAccuracy?:number | null;
+  scriptCompletionRatio?:number | null;
   transcript: string | null;
   gaze: {
     awayCount: number;
     awayDurationMs: number;
+    awayRatio?:number | null;
+    coverageRatio?:number | null;
+    status?:string;
   };
   speech: {
-    averageSyllablesPerMinute: number;
+    averageSyllablesPerMinute: number | null;
+    warningEpisodeCount?: number | null;
+    status?:string;
   };
   filler: {
-    counts: Record<string, number>;
+    counts: Record<string, number> | null;
+    status?:string;
   };
   incomplete: boolean;
 };

@@ -10,8 +10,8 @@ function formatDuration(seconds: number) {
   return `${minutes}분 ${remainingSeconds}초`;
 }
 
-function formatPercent(ratio: number) {
-  return `${Math.round(ratio * 100)}%`;
+function formatPercent(ratio: number | null | undefined) {
+  return ratio == null ? '분석 없음' : `${Math.round(ratio * 100)}%`;
 }
 
 function formatAccuracy(score: number | null) {
@@ -32,34 +32,40 @@ export function SessionSummary({ summary }: SessionSummaryProps) {
           <dd>{formatDuration(summary.durationSeconds)}</dd>
         </div>
         <div>
-          <dt>시선 이탈 비율</dt>
-          <dd>{formatPercent(summary.gazeAwayRatio)}</dd>
+          <dt>유효 관찰 중 시선 이탈 비율</dt>
+          <dd>{summary.gazeStatus === 'disabled' ? '비활성' : formatPercent(summary.gazeAwayRatio)}</dd>
         </div>
         <div>
-          <dt>발음 정확도</dt>
+          <dt>시선 관찰 범위</dt>
+          <dd>{formatPercent(summary.gazeCoverageRatio)}</dd>
+        </div>
+        <div>
+          <dt>대본과 인식 결과 일치도</dt>
           <dd>{formatAccuracy(summary.pronunciationAccuracy)}</dd>
         </div>
         <div>
           <dt>속도 경고</dt>
-          <dd>{summary.speechPaceWarningCount}회</dd>
+          <dd>{summary.speechPaceWarningCount == null ? '분석 없음' : `${summary.speechPaceWarningCount}회`}</dd>
         </div>
         <div>
           <dt>평균 발화 속도</dt>
-          <dd>{Math.round(summary.averageSyllablesPerMinute)}음절/분</dd>
+          <dd>{summary.speechStatus === 'disabled' ? '비활성' : summary.averageSyllablesPerMinute == null ? '분석 없음' : `${Math.round(summary.averageSyllablesPerMinute)}음절/분`}</dd>
         </div>
         <div>
           <dt>습관어</dt>
           <dd>
-            {Object.entries(summary.fillerWordCounts)
+            {summary.fillerStatus === 'disabled' ? '비활성' : summary.fillerWordCounts === null ? '분석 없음' : Object.entries(summary.fillerWordCounts)
               .map(([word, count]) => `${word} ${count}회`)
-              .join(", ") || "없음"}
+              .join(", ") || "검출 0회"}
           </dd>
         </div>
+        <div><dt>실제 대본 진행률</dt><dd>{formatPercent(summary.scriptCompletionRatio)}</dd></div>
       </dl>
       {summary.incomplete ? (
         <p className="error-text">일부 분석이 완료되지 않아 현재까지의 결과만 표시합니다.</p>
       ) : null}
       <div className="transcript-summary">
+        <p>대본 일치도는 STT 텍스트 비교이며 발음 정확도를 의미하지 않습니다. 받아쓰기는 이 화면에서만 확인하며 새 리포트에는 저장하지 않습니다.</p>
         <h3>받아쓰기 결과</h3>
         <p>{summary.transcript ?? "인식된 음성이 없습니다."}</p>
       </div>

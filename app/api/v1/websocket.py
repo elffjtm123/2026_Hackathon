@@ -1,4 +1,5 @@
 import asyncio
+import ipaddress
 import json
 import time
 from typing import Any
@@ -130,6 +131,7 @@ async def _v2_session(
                 elif event.event == "session.end":
                     if event.data.get("incomplete") is True:
                         pipeline.incomplete = True
+                    await websocket.app.state.webrtc.close_session(session_id)
                     await pipeline.stop()
                     break
                 elif event.event == "ping":
@@ -167,6 +169,7 @@ async def _v2_session(
                 calibration_timer.cancel()
                 await asyncio.gather(calibration_timer, return_exceptions=True)
             pipeline.unsubscribe(subscriber)
+            await websocket.app.state.webrtc.close_session(session_id)
             await pipeline.stop()
 
 
@@ -296,7 +299,19 @@ def _frontend_feedback(event: RealtimeEvent) -> dict[str, Any] | None:
 
 @router.websocket("/ws/practice-demo")
 async def practice_demo_websocket(websocket: WebSocket) -> None:
-    if websocket.app.state.settings.app_env == "production":
+    try:
+        loopback = (
+            websocket.client is not None and ipaddress.ip_address(websocket.client.host).is_loopback
+        )
+    except ValueError:
+        loopback = False
+    settings = websocket.app.state.settings
+    origin = websocket.headers.get("origin")
+    if (
+        settings.app_env != "development"
+        or not loopback
+        or (origin is not None and origin not in settings.cors_origins)
+    ):
         await websocket.close(code=4403, reason="development endpoint")
         return
     await websocket.accept()
@@ -397,12 +412,14 @@ async def practice_demo_websocket(websocket: WebSocket) -> None:
                 )
                 await pipeline.emit("session.started", client_event.timestamp_ms, client_event.data)
             elif client_event.event == "session.end":
+                await websocket.app.state.webrtc.close_session(session_id)
                 await pipeline.stop()
                 break
     except WebSocketDisconnect:
         pass
     finally:
         pipeline.unsubscribe(subscriber_id)
+        await websocket.app.state.webrtc.close_session(session_id)
         await pipeline.stop()
 
 
@@ -515,6 +532,7 @@ async def session_websocket(websocket: WebSocket, session_id: UUID, token: str) 
             if client_event.event == "ping":
                 await pipeline.emit("pong", client_event.timestamp_ms, {})
             elif client_event.event == "session.end":
+                await websocket.app.state.webrtc.close_session(session_id)
                 await pipeline.stop()
                 break
     except WebSocketDisconnect:

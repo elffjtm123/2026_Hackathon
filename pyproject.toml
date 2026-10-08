@@ -31,6 +31,8 @@ ai = [
   "opencv-python>=4.10,<4.11",
   "qwen-asr==0.0.6",
   "scikit-learn>=1.5,<2",
+  "soundfile>=0.12,<1",
+  "torch>=2.6,<3",
   "tqdm>=4.67,<5",
   "uniface[cpu]>=4,<5",
   "webrtcvad-wheels>=2.0.14,<3",

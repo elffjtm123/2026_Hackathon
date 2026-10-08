@@ -79,7 +79,8 @@ def test_low_level_microphone_noise_does_not_reach_qwen() -> None:
 
     assert result.transcript is None
     assert result.level == "info"
-    assert result.metrics["syllables_per_minute"] == 0
+    assert result.metrics["syllables_per_minute"] is None
+    assert result.metrics["pace"] == "unknown"
     assert result.metrics["rms"] > adapter.silence_rms_threshold
 
 
@@ -104,3 +105,30 @@ def test_text_cannot_bypass_qwen_inference(monkeypatch: pytest.MonkeyPatch) -> N
 
     with pytest.raises(RuntimeError, match="model inference failed"):
         adapter._infer_sync(MediaPayload(uuid4(), 0, payload), time.perf_counter())
+
+
+def test_confirmed_100ms_segment_is_transcribed_without_second_vad_gate():
+    from types import SimpleNamespace
+
+    class Model:
+        def transcribe(self, **kwargs):
+            assert len(kwargs["audio"][0]) == 1600
+            return [SimpleNamespace(text="네")]
+
+    adapter = LocalQwenSpeechAdapter.__new__(LocalQwenSpeechAdapter)
+    adapter.np, adapter.sf = np, sf
+    adapter.context = ""
+    adapter.silence_rms_threshold = 0.003
+    adapter.stt = Model()
+    media = MediaPayload(
+        uuid4(),
+        0,
+        np.full(1600, 1000, dtype="<i2").tobytes(),
+        format="pcm16",
+        utterance_id="u1",
+        end_ms=100,
+        voiced_ms=100,
+    )
+    result = adapter._infer_sync(media, time.perf_counter())
+    assert result.transcript == "네"
+    assert result.metrics["voiced_ms"] == 100

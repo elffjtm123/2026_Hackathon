@@ -42,6 +42,9 @@ def upgrade() -> None:
         sa.Column("scoring_version", sa.String(20), nullable=False, server_default="v1"),
     )
 
+    # Older create_all installations already have this retired feature's table.
+    if not op.get_context().as_sql and sa.inspect(op.get_bind()).has_table("style_transfer_jobs"):
+        return
     op.create_table(
         "style_transfer_jobs",
         sa.Column("id", sa.Uuid(), nullable=False),

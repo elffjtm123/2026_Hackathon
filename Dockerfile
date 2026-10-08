@@ -11,7 +11,7 @@ RUN apt-get update \
        libglib2.0-0 libgl1 libopus-dev libvpx-dev pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
-COPY pyproject.toml README.md stt.py ./
+COPY pyproject.toml README.md ./
 COPY app ./app
 RUN pip install '.[ai]'
 

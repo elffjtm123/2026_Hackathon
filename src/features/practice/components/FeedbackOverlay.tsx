@@ -1,5 +1,5 @@
 import type { FeedbackState } from "../feedbackState";
-import {feedbackMessage, gazeLabel} from '../feedbackState';
+import {feedbackMessage, gazeLabel, speechPaceLabels} from '../feedbackState';
 
 type FeedbackOverlayProps = {
   feedback: FeedbackState;
@@ -35,7 +35,7 @@ export function FeedbackOverlay({ feedback }: FeedbackOverlayProps) {
       </div>
       <div className="overlay-row">
         <span>속도</span>
-        <strong>{feedback.speech?.speech?.pace ?? "분석 대기"}</strong>
+        <strong>{speechPaceLabels[feedback.speech?.speech?.pace ?? 'unknown']}</strong>
       </div>
       {message ? (
         <p className="overlay-message" role={severity === 'info' ? undefined : 'status'}>{message}</p>

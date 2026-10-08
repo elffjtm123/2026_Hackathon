@@ -114,7 +114,7 @@ export function useFeedbackSocket(onFeedback: (feedback: RealtimeFeedback) => vo
           const sequence = Number(message.data.accepted_sequence);
           const value = ackRef.current.get(sequence);
           if (value) {clearTimeout(value.pending.timer); value.pending.resolve(); ackRef.current.delete(sequence); acknowledgedRef.current = Math.max(acknowledgedRef.current, sequence);}
-        } else if (message.event === 'feedback') {
+        } else if (message.event === 'feedback' || message.event === 'script.progress') {
           callbacks.current.onFeedback(feedbackForUi(message));
         } else if (message.event === 'session.completed') {
           const report = completionForUi(message.data.report as Record<string, unknown>);

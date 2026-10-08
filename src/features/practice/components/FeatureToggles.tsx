@@ -61,14 +61,14 @@ export function FeatureToggles({
       <div className="feature-settings__grid">
         <FeatureToggle
           title="노래방식 발표 진행 가이드"
-          description="대본과 제한시간을 기준으로 현재 읽을 위치와 속도를 안내합니다."
+          description="인식된 대본 위치를 표시하고 제한시간의 목표 진행과 구분합니다."
           checked={settings.karaokeGuideEnabled}
           disabled={disabled}
           onChange={(enabled) => onChange("karaokeGuideEnabled", enabled)}
         />
         <FeatureToggle
-          title="주요 단어 힌트"
-          description="전문 대신 현재 문장의 핵심 단어만 같은 위치에 표시합니다."
+          title="문장 요약 힌트"
+          description="현재 문장에 직접 작성한 요약 메모를 표시합니다."
           checked={settings.keywordHintEnabled}
           disabled={disabled}
           onChange={(enabled) => onChange("keywordHintEnabled", enabled)}

@@ -33,9 +33,10 @@ export function PracticePage() {
   const [operationError, setOperationError] = useState<string | null>(null);
   const [completedMode, setCompletedMode] = useState<PracticeMode | null>(null);
   const [presentationScript, setPresentationScript] = useState(
-    "안녕하세요. 오늘은 실시간 발표 피드백 서비스의 핵심 기능을 소개하겠습니다. 이 서비스는 시선, 발화 속도, 발음 정확도를 확인해 발표자가 더 안정적으로 연습할 수 있도록 돕습니다."
+    "안녕하세요. 오늘은 실시간 발표 피드백 서비스의 핵심 기능을 소개하겠습니다. 이 서비스는 시선, 발화 속도, 대본 일치도를 확인해 발표자가 더 안정적으로 연습할 수 있도록 돕습니다."
   );
   const [timeLimitSeconds, setTimeLimitSeconds] = useState(180);
+  const [sentenceHints, setSentenceHints] = useState<Record<number, string>>({});
   const socket = useFeedbackSocket(session.receiveFeedback, session.applyPhase);
   const streaming = useBackendStreaming({
     isActive: ['calibrating', 'running', 'draining'].includes(session.phase) && socket.status === "connected",
@@ -169,8 +170,10 @@ export function PracticePage() {
             script={presentationScript}
             timeLimitSeconds={timeLimitSeconds}
             disabled={session.isActive || isStarting}
-            onScriptChange={setPresentationScript}
+            onScriptChange={script => {setPresentationScript(script); setSentenceHints({});}}
             onTimeLimitChange={handleTimeLimitChange}
+            sentenceHints={sentenceHints}
+            onHintChange={(index, hint) => setSentenceHints(current => ({...current, [index]:hint}))}
           />
           <FeatureToggles
             settings={session.featureSettings}
@@ -215,6 +218,8 @@ export function PracticePage() {
                 elapsedSeconds={session.elapsedSeconds}
                 karaokeEnabled={session.featureSettings.karaokeGuideEnabled}
                 keywordHintEnabled={session.featureSettings.keywordHintEnabled}
+                progress={session.feedbackState.scriptProgress}
+                sentenceHints={sentenceHints}
               />
             </section>
             <FeedbackPanel

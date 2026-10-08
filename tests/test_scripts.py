@@ -39,6 +39,44 @@ def test_pronunciation_requires_reference_or_stt_confidence() -> None:
     assert result["pronunciation_clarity_score"] is None
 
 
+def test_alignment_waits_for_relevant_final_text_and_normalizes_spacing() -> None:
+    sync = ScriptSyncService(
+        analyze_script("안녕하세요. 실시간 음성을 분석합니다. 감사합니다.", 60)
+    )
+    for text in ["", "네", "냉장고 바나나"]:
+        result = sync.update(text, 40_000, is_final=True)
+        assert result["alignment_status"] == "uncertain"
+        assert result["current_token_index"] is None
+        assert result["progress_ratio"] == 0
+    partial = sync.update("실시간음성을분석합니다", 41_000, is_final=False)
+    assert partial["current_token_index"] is None
+    final = sync.update("실시간음성을분석합니다!", 42_000, is_final=True)
+    assert final["alignment_status"] == "matched"
+    assert (final["matched_start_token"], final["matched_end_token"]) == (1, 3)
+    assert final["current_token_index"] == 3
+    held = sync.update("냉장고 바나나", 43_000, is_final=True)
+    assert held["current_token_index"] == 3
+    assert held["alignment_status"] == "uncertain"
+
+
+def test_repeated_script_is_ambiguous_and_does_not_advance() -> None:
+    sync = ScriptSyncService(analyze_script("시스템을 소개합니다. 시스템을 소개합니다.", 60))
+    result = sync.update("시스템을 소개합니다", 10_000, is_final=True)
+    assert result["alignment_status"] == "uncertain"
+    assert result["progress_ratio"] == 0
+
+
+def test_stt_probabilities_are_not_pronunciation_accuracy() -> None:
+    result = estimate_stt_pronunciation_accuracy(
+        "안녕하세요", avg_logprob=-0.1, no_speech_prob=0.01
+    )
+    assert result["pronunciation_clarity_score"] is None
+    match = estimate_stt_pronunciation_accuracy("안녕하세요", reference_text="안녕하세요.")
+    assert match["method"] == "script_agreement"
+    assert match["confidence"] is None
+    assert match["pronunciation_clarity_score"] == 100
+
+
 def test_script_api_and_session_fields(client: TestClient, auth: dict[str, object]) -> None:
     analyzed = client.post(
         "/api/v1/scripts/analyze",
@@ -76,9 +114,7 @@ def test_script_api_and_session_fields(client: TestClient, auth: dict[str, objec
     assert unrealistic.json()["error"]["code"] == "UNREALISTIC_TARGET_PACE"
 
 
-def test_style_transfer_routes_are_removed(
-    client: TestClient, auth: dict[str, object]
-) -> None:
+def test_style_transfer_routes_are_removed(client: TestClient, auth: dict[str, object]) -> None:
     headers = bearer(auth)
     assert client.get("/api/v1/styles/presets", headers=headers).status_code == 404
     response = client.post("/api/v1/scripts/style-transfer", headers=headers, json={})

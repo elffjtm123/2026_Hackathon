@@ -15,14 +15,14 @@ def test_qwen_load_failure_is_unavailable_not_mock(
 
     monkeypatch.setattr("app.main.create_local_qwen_speech_adapter", unavailable)
     settings = Settings(
-        app_env="test",
+        app_env="development",
         database_url=f"sqlite+aiosqlite:///{tmp_path}/test.db",
         redis_url=None,
         vision_provider="uniface",
         stt_provider="qwen3_asr",
     )
 
-    with TestClient(create_app(settings)) as client:
+    with TestClient(create_app(settings), client=("127.0.0.1", 50000)) as client:
         body = client.get("/health/ready").json()
         assert body["status"] == "ready"
         assert body["modules"]["speech"]["status"] == "unavailable"
@@ -51,12 +51,12 @@ def test_ready_exposes_successfully_loaded_real_provider(monkeypatch, tmp_path, 
     monkeypatch.setattr("app.main.create_local_qwen_speech_adapter", lambda *args: Loaded())
     settings = Settings(
         _env_file=None,
-        app_env="test",
+        app_env="development",
         vision_provider="uniface",
         stt_provider="qwen3_asr",
         database_url=f"sqlite+aiosqlite:///{tmp_path}/ready.db",
     )
-    with TestClient(create_app(settings)) as client:
+    with TestClient(create_app(settings), client=("127.0.0.1", 50000)) as client:
         speech = client.get("/health/ready").json()["modules"]["speech"]
         assert speech["status"] == "ready"
         assert speech["provider"] == "qwen3_asr"
@@ -90,10 +90,10 @@ def test_gaze_load_failure_is_unavailable_and_refuses_session(monkeypatch, tmp_p
     monkeypatch.setattr("app.main.create_local_qwen_speech_adapter", lambda *_: FakeSpeechAdapter())
     settings = Settings(
         _env_file=None,
-        app_env="test",
+        app_env="development",
         database_url=f"sqlite+aiosqlite:///{tmp_path}/gaze-failure.db",
     )
-    with TestClient(create_app(settings)) as client:
+    with TestClient(create_app(settings), client=("127.0.0.1", 50000)) as client:
         modules = client.get("/health/ready").json()["modules"]
         assert modules["gaze"]["status"] == "unavailable"
         assert "MODEL_LOAD_FAILED" in modules["gaze"]["reason"]

@@ -15,6 +15,9 @@ class MediaPayload:
     start_sample: int = 0
     sample_count: int = 0
     format: str = "legacy"
+    utterance_id: str | None = None
+    end_ms: int | None = None
+    voiced_ms: int | None = None
 
 
 @dataclass(slots=True, frozen=True)

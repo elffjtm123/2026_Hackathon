@@ -71,14 +71,8 @@ AUDIO_ROOT = SAMPLE_ROOT / "01.원천데이터"
 DEFAULT_OUTPUT_DIR = LABEL_ROOT / "features"
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 기준값 — 상단에서 쉽게 조정 가능
-# 데이터셋 기반 (AI Hub 채용면접, n=1302): p25=294 p50=332 p75=395 p90=443
+# Standalone 도구의 기타 기준값. 속도·습관어 규칙은 app/modules/speech/analysis.py 공유.
 # ══════════════════════════════════════════════════════════════════════════════
-CPM_SLOW_THRESHOLD   = 200   # 이하 → SLOW
-CPM_FAST_THRESHOLD   = 420   # 이상 → FAST
-WPM_SLOW_THRESHOLD   = 50    # 어절/분 이하 → SLOW
-WPM_FAST_THRESHOLD   = 110   # 어절/분 이상 → FAST
-
 FILLER_HIGH_RATIO    = 0.12  # 전체 어절 대비 12% 초과 → HIGH
 FILLER_MEDIUM_RATIO  = 0.05  # 5~12% → MEDIUM
 
@@ -90,23 +84,6 @@ RELEVANCE_PARTIAL    = 28    # 이상 → PARTIALLY_OFF_TOPIC
 
 MIC_SAMPLE_RATE = 16000
 CHUNK_DURATION  = 5          # 초, 기본 청크 길이
-
-# ── 습관어 목록 ────────────────────────────────────────────────────────────────
-_SINGLE_FILLERS = [
-    "어", "음", "아", "에", "으", "응", "흠",   # 주저 소리·변이형
-    "뭐", "좀", "막", "약간", "그냥",
-    "이제", "인제", "저기", "그", "일단", "사실",
-    "뭔가", "아무튼", "어쨌든", "뭐냐", "자",
-]
-_MULTI_FILLERS = [
-    "그러니까", "그니까", "그러니까요",
-    "사실은", "기본적으로", "솔직히",
-    "말하자면", "뭐랄까", "어떻게 보면",
-    "있잖아요", "있잖아", "그래가지고",
-    "다시 말해서", "솔직히 말해서",
-    "어떻게 말하면", "그렇게 말하자면",
-    "그러다 보니까", "뭔가 좀",
-]
 
 # ── 한국어 불용어 (맥락 키워드 추출용) ──────────────────────────────────────
 _KO_STOPWORDS = {
@@ -381,42 +358,25 @@ class STTEngine:
 # ══════════════════════════════════════════════════════════════════════════════
 
 class SpeechRateAnalyzer:
-    """
-    발화 속도 분석.
-    CPM(분당 글자수), WPM_like(분당 어절수) 기반 SLOW/NORMAL/FAST 분류.
-    """
+    """Standalone compatibility keys backed by the service's Korean syllable rules."""
 
     def analyze(self, transcript: str, duration_sec: float) -> dict[str, Any]:
         if duration_sec <= 0:
             return self._empty("음성 길이 정보 없음")
 
-        # 공백·문장부호 제거 후 글자 수
-        chars  = len(re.sub(r"[\s\W]", "", transcript))
-        words  = len(transcript.split())
-        cpm    = round(chars  / duration_sec * 60)
-        wpm    = round(words  / duration_sec * 60)
+        from app.modules.speech.analysis import analyze_utterance, pace_message
+        from app.modules.speech.segments import FinalUtterance
 
-        if cpm < CPM_SLOW_THRESHOLD:
-            level    = "SLOW"
-            feedback = (
-                f"발화 속도가 느립니다 (분당 {cpm}자·{wpm}어절). "
-                "자신감 있게 일정한 속도로 말해보세요."
-            )
-        elif cpm > CPM_FAST_THRESHOLD:
-            level    = "FAST"
-            feedback = (
-                f"발화 속도가 빠릅니다 (분당 {cpm}자·{wpm}어절). "
-                "문장 사이 짧은 pause를 두면 전달력이 높아집니다."
-            )
-        else:
-            level    = "NORMAL"
-            feedback = f"발화 속도가 적절합니다 (분당 {cpm}자·{wpm}어절)."
+        milliseconds = round(duration_sec * 1000)
+        metrics = analyze_utterance(FinalUtterance("standalone", 0, milliseconds,
+                                                   milliseconds, transcript),
+                                     fillers_enabled=False)
 
         return {
-            "cpm":      cpm,
-            "wpm_like": wpm,
-            "level":    level,
-            "feedback": feedback,
+            "cpm": metrics.syllables_per_minute or 0,
+            "wpm_like": round(len(transcript.split()) / duration_sec * 60),
+            "level": metrics.pace.upper(),
+            "feedback": pace_message(metrics.pace, metrics.syllables_per_minute),
         }
 
     @staticmethod
@@ -435,35 +395,12 @@ class FillerWordAnalyzer:
     """
 
     def analyze(self, transcript: str) -> dict[str, Any]:
-        cleaned = re.sub(r"[^\w\s]", " ", transcript)
-        tokens  = cleaned.split()
-        counts: dict[str, int] = {}
+        from app.modules.speech.analysis import filler_counts
 
-        # 음절 반복 허용(어어어→어로 취급) + 단어 경계 매칭
-        for f in _SINGLE_FILLERS:
-            pat = re.compile(r'(?<!\w)' + re.escape(f) + r'+(?!\w)', re.UNICODE)
-            n = len(pat.findall(cleaned))
-            if n:
-                counts[f] = n
-
-        # STT 공백 오차 흡수: "그러 니까" / "그러니까" 모두 매칭
-        for f in _MULTI_FILLERS:
-            parts = f.split()
-            pat = re.compile(r'\s+'.join(re.escape(p) for p in parts), re.UNICODE)
-            n = len(pat.findall(transcript))
-            if n:
-                counts[f] = n
-
-        # 연속 동일 단어 반복 감지 (말더듬: "그 그 그", "어 어")
-        repeat_count = sum(
-            1 for i in range(len(tokens) - 1)
-            if tokens[i] == tokens[i + 1]
-        )
-        if repeat_count:
-            counts["(말더듬)"] = repeat_count
+        counts, repeat_count = filler_counts(transcript)
 
         total      = sum(counts.values())
-        word_count = len(tokens)
+        word_count = len(re.sub(r"[^\w\s]", " ", transcript).split())
         ratio      = total / word_count if word_count else 0.0
 
         if ratio >= FILLER_HIGH_RATIO:
@@ -482,6 +419,7 @@ class FillerWordAnalyzer:
         return {
             "total_count":  total,
             "counts":       counts,
+            "repeat_count": repeat_count,
             "word_count":   word_count,
             "filler_ratio": round(ratio, 4),
             "level":        level,

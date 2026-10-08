@@ -159,6 +159,7 @@ button:disabled {
 }
 
 .time-input-row input,
+.presentation-setup__script input,
 .presentation-setup textarea {
   width: 100%;
   border: 1px solid #cfd9dc;
@@ -168,6 +169,9 @@ button:disabled {
   background: #ffffff;
   font: inherit;
 }
+
+.presentation-setup details { grid-column: 1 / -1; }
+.presentation-setup details label { display: grid; gap: 6px; margin-top: 12px; }
 
 .time-input-row input {
   max-width: 130px;
