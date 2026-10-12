@@ -76,6 +76,31 @@ export function scriptSentences(text: string): string[] {
   return sentences;
 }
 
+export type ScriptSummaryResult = {
+  normalized_script: string;
+  model: string;
+  elapsed_seconds: number;
+  sentences: {sentence_index: number; original: string; hint: string | null; error: string | null}[];
+};
+
+export function summaryHints(script: string, result: ScriptSummaryResult): Record<number, string> {
+  const originals = scriptSentences(script);
+  if (!result || result.normalized_script !== normalizeScript(script)
+      || !Array.isArray(result.sentences) || result.sentences.length !== originals.length) {
+    throw new Error('대본이 변경되었거나 요약 응답이 올바르지 않습니다. 다시 요약해 주세요.');
+  }
+  const hints: Record<number, string> = {};
+  result.sentences.forEach((item, index) => {
+    if (!item || item.sentence_index !== index || item.original !== originals[index]
+        || (item.hint !== null && (typeof item.hint !== 'string' || !item.hint.trim() || item.hint.length > 160))
+        || (item.error !== null && typeof item.error !== 'string')) {
+      throw new Error('원문과 요약 문장의 연결을 확인할 수 없습니다. 다시 요약해 주세요.');
+    }
+    if (item.hint !== null) hints[index] = item.hint;
+  });
+  return hints;
+}
+
 export function appendTranscript(current: string, next: string) {
   const currentText = normalizeScript(current);
   const nextText = normalizeScript(next);

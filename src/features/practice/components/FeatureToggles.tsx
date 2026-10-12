@@ -67,8 +67,8 @@ export function FeatureToggles({
           onChange={(enabled) => onChange("karaokeGuideEnabled", enabled)}
         />
         <FeatureToggle
-          title="문장 요약 힌트"
-          description="현재 문장에 직접 작성한 요약 메모를 표시합니다."
+          title="대본 요약 보기"
+          description="발표 중 인식된 현재 문장에 연결된 요약을 표시합니다. 끄면 기존 대본 가이드를 사용합니다."
           checked={settings.keywordHintEnabled}
           disabled={disabled}
           onChange={(enabled) => onChange("keywordHintEnabled", enabled)}

@@ -103,6 +103,8 @@ async def webrtc_offer(
             },
         )
     except ValueError as exc:
+        if str(exc) == "SUMMARY_BUSY":
+            raise AppError("SUMMARY_BUSY", "요약 모델 정리가 끝난 뒤 시작해 주세요.", 409) from exc
         raise AppError(
             "MODEL_UNAVAILABLE_OR_BUSY", "필요한 모델이 준비되지 않았거나 처리 중입니다.", 503
         ) from exc

@@ -173,6 +173,14 @@ button:disabled {
 .presentation-setup details { grid-column: 1 / -1; }
 .presentation-setup details label { display: grid; gap: 6px; margin-top: 12px; }
 
+.script-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.presentation-summary { grid-column: 1 / -1; display: grid; gap: 12px; }
+.presentation-summary h3, .presentation-summary p { margin: 0; }
+.presentation-summary p { color: #526168; line-height: 1.6; }
+.summary-sentence { display: grid; gap: 6px; padding-top: 12px; border-top: 1px solid #dde4e6; }
+.summary-sentence > span { font-weight: 500; line-height: 1.6; overflow-wrap: anywhere; }
+.summary-sentence__error { color: #a32424; }
+
 .time-input-row input {
   max-width: 130px;
 }

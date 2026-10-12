@@ -15,6 +15,8 @@ import { useUserMedia } from "./hooks/useUserMedia";
 import { completePracticeSession } from "./sessionLifecycle";
 import type { PracticeMode } from "./types";
 import {selectVisibleFeedback} from './feedbackState';
+import {summaryHints} from './scriptTools';
+import {requestScriptSummary} from './scriptSummary';
 
 export function PracticePage() {
   const session = usePracticeSession();
@@ -37,6 +39,45 @@ export function PracticePage() {
   );
   const [timeLimitSeconds, setTimeLimitSeconds] = useState(180);
   const [sentenceHints, setSentenceHints] = useState<Record<number, string>>({});
+  const [isSummarizing, setIsSummarizing] = useState(false);
+  const [summaryError, setSummaryError] = useState<string | null>(null);
+  const [sentenceErrors, setSentenceErrors] = useState<Record<number, string>>({});
+  const [summarySeconds, setSummarySeconds] = useState<number | null>(null);
+  const summaryRequest = useRef<AbortController | null>(null);
+  const scriptVersion = useRef(0);
+  useEffect(() => () => summaryRequest.current?.abort(), []);
+
+  const handleScriptChange = (script: string) => {
+    scriptVersion.current++;
+    setPresentationScript(script); setSentenceHints({}); setSentenceErrors({});
+    setSummaryError(null); setSummarySeconds(null);
+  };
+  const handleSummarize = async () => {
+    if (session.isActive || isStarting || isStopping || summaryRequest.current) return;
+    if (Object.values(sentenceHints).some(hint => hint.trim())
+        && !window.confirm('현재 요약을 새 AI 초안으로 바꿀까요? 직접 수정한 내용이 덮어써질 수 있습니다.')) return;
+    const controller = new AbortController();
+    const version = scriptVersion.current;
+    summaryRequest.current = controller;
+    setIsSummarizing(true); setSummaryError(null);
+    try {
+      const result = await requestScriptSummary(presentationScript, controller.signal);
+      if (controller.signal.aborted || version !== scriptVersion.current) return;
+      const hints = summaryHints(presentationScript, result);
+      setSentenceHints(current => ({...current, ...hints}));
+      setSentenceErrors(Object.fromEntries(result.sentences
+        .filter(item => item.error).map(item => [item.sentence_index, item.error!])));
+      setSummarySeconds(result.elapsed_seconds);
+    } catch (error) {
+      if (!controller.signal.aborted && version === scriptVersion.current)
+        setSummaryError(error instanceof Error ? error.message : '요약하지 못했습니다. 다시 시도하세요.');
+    } finally {
+      if (summaryRequest.current === controller) {
+        summaryRequest.current = null;
+        if (!controller.signal.aborted) setIsSummarizing(false);
+      }
+    }
+  };
   const socket = useFeedbackSocket(session.receiveFeedback, session.applyPhase);
   const streaming = useBackendStreaming({
     isActive: ['calibrating', 'running', 'draining'].includes(session.phase) && socket.status === "connected",
@@ -51,6 +92,7 @@ export function PracticePage() {
   });
 
   const handleStart = useCallback(async () => {
+    if (summaryRequest.current) return;
     const generation = ++generationRef.current;
     setIsStarting(true);
     setOperationError(null);
@@ -162,6 +204,7 @@ export function PracticePage() {
         onModeChange={session.setMode}
         onStart={handleStart}
         onEnd={handleEnd}
+        startBlocked={isSummarizing}
       />
 
       {session.mode === "presentation" ? (
@@ -170,10 +213,18 @@ export function PracticePage() {
             script={presentationScript}
             timeLimitSeconds={timeLimitSeconds}
             disabled={session.isActive || isStarting}
-            onScriptChange={script => {setPresentationScript(script); setSentenceHints({});}}
+            onScriptChange={handleScriptChange}
             onTimeLimitChange={handleTimeLimitChange}
             sentenceHints={sentenceHints}
-            onHintChange={(index, hint) => setSentenceHints(current => ({...current, [index]:hint}))}
+            onHintChange={(index, hint) => {
+              setSentenceHints(current => ({...current, [index]:hint}));
+              setSentenceErrors(current => ({...current, [index]:''}));
+            }}
+            onSummarize={() => void handleSummarize()}
+            isSummarizing={isSummarizing}
+            summaryError={summaryError}
+            sentenceErrors={sentenceErrors}
+            summarySeconds={summarySeconds}
           />
           <FeatureToggles
             settings={session.featureSettings}

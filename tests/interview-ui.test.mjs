@@ -15,6 +15,25 @@ const server = await createServer({
   server: { middlewareMode: true, hmr: false, ws: false },
   optimizeDeps: { noDiscovery: true },
 });
+test('대본 옆 요약 버튼과 아래 문장별 수정 결과가 표시된다', async () => {
+  const {PresentationSetup} = await server.ssrLoadModule('/src/features/practice/components/PresentationSetup.tsx');
+  const props = {script:'서비스를 소개합니다. 원본은 저장하지 않습니다.',
+    timeLimitSeconds:60,disabled:false,onScriptChange(){},onTimeLimitChange(){},
+    sentenceHints:{0:'서비스 소개',1:'원본 미저장'},onHintChange(){},
+    onSummarize(){},isSummarizing:false,summaryError:null,sentenceErrors:{},summarySeconds:1.2};
+  const markup = renderToStaticMarkup(createElement(PresentationSetup, props));
+  assert.match(markup, /요약 시작|다시 요약/);
+  assert.ok(markup.indexOf('id="presentation-script"') < markup.indexOf('서비스 소개'));
+  assert.match(markup, /AI 초안/);
+  assert.match(markup, /원본 미저장/);
+  const pending = renderToStaticMarkup(createElement(PresentationSetup, {...props,isSummarizing:true}));
+  assert.match(pending, /<button[^>]*disabled=""[^>]*>요약 중/);
+  const {SessionControls} = await server.ssrLoadModule('/src/features/practice/components/SessionControls.tsx');
+  const controls = renderToStaticMarkup(createElement(SessionControls, {mode:'presentation',
+    isRunning:false,isStarting:false,isStopping:false,elapsedSeconds:0,
+    onModeChange(){},onStart(){},onEnd(){},startBlocked:true}));
+  assert.match(controls, /<button[^>]*class="primary-button"[^>]*disabled=""/);
+});
 after(async () => {
   await server.close();
   await rm(cacheDir, { recursive: true, force: true });

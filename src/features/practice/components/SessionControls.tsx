@@ -9,6 +9,7 @@ type SessionControlsProps = {
   onModeChange: (mode: PracticeMode) => void;
   onStart: () => void;
   onEnd: () => void;
+  startBlocked?: boolean;
 };
 
 function formatDuration(seconds: number) {
@@ -28,6 +29,7 @@ export function SessionControls({
   onModeChange,
   onStart,
   onEnd,
+  startBlocked = false,
 }: SessionControlsProps) {
   return (
     <section className="controls-bar" aria-label="세션 컨트롤">
@@ -36,7 +38,7 @@ export function SessionControls({
           type="button"
           className={mode === "presentation" ? "active" : ""}
           onClick={() => onModeChange("presentation")}
-          disabled={isRunning || isStarting || isStopping}
+          disabled={isRunning || isStarting || isStopping || startBlocked}
         >
           발표
         </button>
@@ -44,7 +46,7 @@ export function SessionControls({
           type="button"
           className={mode === "interview" ? "active" : ""}
           onClick={() => onModeChange("interview")}
-          disabled={isRunning || isStarting || isStopping}
+          disabled={isRunning || isStarting || isStopping || startBlocked}
         >
           면접
         </button>
@@ -59,7 +61,7 @@ export function SessionControls({
           type="button"
           className="primary-button"
           onClick={onStart}
-          disabled={isRunning || isStarting || isStopping}
+          disabled={isRunning || isStarting || isStopping || startBlocked}
         >
           {isStarting ? "시작 중" : "시작"}
         </button>

@@ -1,6 +1,10 @@
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+
+class ScriptSummaryRequest(BaseModel):
+    script: str = Field(min_length=1, max_length=20_000)
 
 
 class ScriptAnalyzeRequest(BaseModel):

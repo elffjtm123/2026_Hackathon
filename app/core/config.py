@@ -56,6 +56,9 @@ class Settings(BaseSettings):
     audio_chunk_ms: int = 750
     module_timeout_seconds: float = 3.0
     max_script_chars: int = 20_000
+    summary_server_path: str = ".models/llama/llama-server"
+    summary_model_path: str = ".models/Qwen3.5-0.8B-Q8_0.gguf"
+    summary_timeout_seconds: float = Field(default=180, gt=0, le=600)
     min_time_limit_seconds: int = 30
     max_time_limit_seconds: int = 3_600
 

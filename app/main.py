@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 from app.ai.base import GazeAdapter, SpeechAdapter, UnavailableSpeechAdapter
 from app.ai.http import HTTPGazeAdapter, HTTPSpeechAdapter
 from app.ai.local_stt import create_local_qwen_speech_adapter
+from app.ai.script_summary import LocalScriptSummarizer
 from app.ai.uniface_gaze import UnavailableGazeAdapter
 from app.api.health import router as health_router
 from app.api.v1.auth import router as auth_router
@@ -89,6 +90,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     f"MODEL_LOAD_FAILED: qwen3_asr ({type(exc).__name__})"
                 )
         app.state.settings = settings
+        app.state.script_summarizer = LocalScriptSummarizer(settings)
+        app.state.live_sessions = set()
         app.state.database = database
         app.state.state_store = state_store
         app.state.gaze = gaze
@@ -114,12 +117,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 reason=getattr(speech, "reason", None),
             ),
         }
-        app.state.pipelines = PipelineRegistry(settings, state_store, gaze, speech)
+        app.state.pipelines = PipelineRegistry(
+            settings, state_store, gaze, speech, app.state.script_summarizer
+        )
         app.state.webrtc = WebRTCManager(settings)
         app.state.websocket_counts = {}
         if settings.auto_create_tables:
             await database.create_tables()
         yield
+        await app.state.script_summarizer.close()
         await app.state.webrtc.close()
         await app.state.pipelines.close()
         if hasattr(gaze, "close"):

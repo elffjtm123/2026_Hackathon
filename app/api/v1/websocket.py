@@ -93,6 +93,8 @@ async def _v2_session(
                 if event.event == "session.start":
                     if started:
                         raise ValueError("SESSION_ALREADY_STARTED")
+                    if websocket.app.state.script_summarizer.busy:
+                        raise ValueError("SUMMARY_BUSY")
                     data = SessionStartData.model_validate(event.data)
                     analysis = {
                         **data.settings.model_dump(),
@@ -108,6 +110,7 @@ async def _v2_session(
                         pipeline = prepared
                         pipeline.subscribe(subscriber, send)
                     pipeline.update_analysis_settings(analysis)
+                    websocket.app.state.live_sessions.add(session_id)
                     await pipeline.prepare()
                     started = True
                     await pipeline.emit(
@@ -171,6 +174,7 @@ async def _v2_session(
             pipeline.unsubscribe(subscriber)
             await websocket.app.state.webrtc.close_session(session_id)
             await pipeline.stop()
+            websocket.app.state.live_sessions.discard(session_id)
 
 
 def _frontend_feedback(event: RealtimeEvent) -> dict[str, Any] | None:
@@ -319,6 +323,12 @@ async def practice_demo_websocket(websocket: WebSocket) -> None:
     if websocket.query_params.get("protocol") == "2":
         await _v2_session(websocket, uuid4())
         return
+    if websocket.app.state.script_summarizer.busy:
+        await websocket.send_json(
+            {"type": "error", "message": "요약 모델 정리가 끝난 뒤 시작해 주세요."}
+        )
+        await websocket.close(code=1013)
+        return
     if any(module.status == "unavailable" for module in websocket.app.state.module_status.values()):
         await websocket.send_json(
             {"type": "error", "message": "필수 AI 모델을 사용할 수 없습니다."}
@@ -340,7 +350,6 @@ async def practice_demo_websocket(websocket: WebSocket) -> None:
             "filler_detection_enabled": True,
         },
     )
-    await pipeline.start()
     subscriber_id = f"demo-{uuid4()}"
 
     async def send(event: RealtimeEvent) -> None:
@@ -349,9 +358,10 @@ async def practice_demo_websocket(websocket: WebSocket) -> None:
             await websocket.send_json(feedback)
 
     pipeline.subscribe(subscriber_id, send)
-    await pipeline.emit("session.ready", pipeline.elapsed_ms(), {"transport": "practice-demo"})
-
+    websocket.app.state.live_sessions.add(session_id)
     try:
+        await pipeline.start()
+        await pipeline.emit("session.ready", pipeline.elapsed_ms(), {"transport": "practice-demo"})
         while True:
             message = await websocket.receive()
             if message.get("type") == "websocket.disconnect":
@@ -418,9 +428,11 @@ async def practice_demo_websocket(websocket: WebSocket) -> None:
     except WebSocketDisconnect:
         pass
     finally:
-        pipeline.unsubscribe(subscriber_id)
-        await websocket.app.state.webrtc.close_session(session_id)
-        await pipeline.stop()
+        with CancelScope(shield=True):
+            pipeline.unsubscribe(subscriber_id)
+            await websocket.app.state.webrtc.close_session(session_id)
+            await pipeline.stop()
+            websocket.app.state.live_sessions.discard(session_id)
 
 
 @router.websocket("/ws/sessions/{session_id}")
