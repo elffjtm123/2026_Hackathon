@@ -41,7 +41,6 @@ class Settings(BaseSettings):
     stt_model: str = ".models/Qwen3-ASR-0.6B-Q8_0.gguf"
     stt_library_path: str = ".models/speech/libspeech.dylib"
     stt_device: str = "auto"
-    stt_context: str = ""
     stt_silence_rms_threshold: float = 0.003
     pronunciation_provider: str = "alignment"
 

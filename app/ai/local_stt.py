@@ -1,4 +1,5 @@
 import io
+import math
 import time
 from typing import Any
 
@@ -59,7 +60,6 @@ class LocalQwenSpeechAdapter:
         self,
         model_name: str = DEFAULT_STT_MODEL,
         device: str = "auto",
-        context: str = "",
         silence_rms_threshold: float = 0.003,
         library_path: str = DEFAULT_STT_LIBRARY,
     ) -> None:
@@ -68,7 +68,6 @@ class LocalQwenSpeechAdapter:
 
         self.np = np
         self.sf = sf
-        self.context = context
         self.silence_rms_threshold = silence_rms_threshold
         self.stt = QwenGGUF(model_name, device, library_path)
         self.device = self.stt.device
@@ -98,6 +97,8 @@ class LocalQwenSpeechAdapter:
             audio = self.np.frombuffer(media.payload, dtype="<i2").astype(self.np.float32)
             audio /= 32768.0
 
+        if not self.np.isfinite(audio).all():
+            raise ValueError("INVALID_AUDIO")
         duration = len(audio) / sample_rate
         rms = float(self.np.sqrt(self.np.mean(self.np.square(audio)))) if len(audio) else 0.0
         confirmed = media.voiced_ms is not None
@@ -107,23 +108,44 @@ class LocalQwenSpeechAdapter:
             or not 0 < media.voiced_ms <= round(duration * 1000)
         ):
             raise ValueError("INVALID_CONFIRMED_SEGMENT")
-        if not confirmed and (
-            (media.format != "pcm16" and duration < 0.5)
-            or rms < self.silence_rms_threshold
-            or not has_speech(audio, sample_rate)
+        quiet = rms < self.silence_rms_threshold
+        if media.voiced_ms is not None:
+            # Check frame energy, not padded-segment RMS; never rerun VAD on short answers.
+            frame_size = sample_rate // 50
+            energetic_samples = sum(
+                len(audio[offset : offset + frame_size])
+                for offset in range(0, len(audio), frame_size)
+                if float(self.np.mean(self.np.square(audio[offset : offset + frame_size])))
+                >= self.silence_rms_threshold**2
+            )
+            quiet = energetic_samples * 1000 < min(media.voiced_ms, 100) * sample_rate
+        if (
+            not len(audio)
+            or quiet
+            or (
+                not confirmed
+                and (
+                    (media.format != "pcm16" and duration < 0.5)
+                    or not has_speech(audio, sample_rate)
+                )
+            )
         ):
-            return self._analyze_result(media, "", duration, started, rms=rms)
+            return self._analyze_result(media, "", 0, started, rms=rms, status="no_speech")
 
-        result = self.stt.transcribe(
-            audio=(audio, sample_rate),
-            context=self.context,
-            language="Korean",
-        )
+        result = self.stt.transcribe(audio=(audio, sample_rate), language="Korean").strip()
         speech_duration = (
             media.voiced_ms / 1000
             if media.voiced_ms is not None
             else active_speech_duration(audio, sample_rate, self.silence_rms_threshold)
         )
+        characters = sum(character.isalnum() for character in result)
+        if not characters:
+            return self._analyze_result(media, "", 0, started, rms=rms, status="unrecognized")
+        # shortcut: catches runaway length, not plausible hallucinations; tune with real speech.
+        if characters > max(20, math.ceil(speech_duration * 20)):
+            return self._analyze_result(
+                media, "", 0, started, rms=rms, status="rejected", reason="TRANSCRIPT_TOO_LONG"
+            )
         return self._analyze_result(media, result, speech_duration, started, rms=rms)
 
     def _analyze_result(
@@ -134,13 +156,21 @@ class LocalQwenSpeechAdapter:
         started: float,
         *,
         rms: float | None = None,
+        status: str = "recognized",
+        reason: str | None = None,
     ) -> AIResult:
         transcript = transcript.strip()
         return AIResult(
             source="speech_rate",
             timestamp_ms=media.timestamp_ms,
             level="info",
-            message=("발화를 인식했습니다." if transcript else "음성이 감지되지 않았습니다."),
+            message=(
+                "발화를 인식했습니다."
+                if transcript
+                else "음성 대기 중입니다."
+                if status == "no_speech"
+                else "음성을 명확히 인식하지 못했습니다."
+            ),
             metrics={
                 "pace": "unknown",
                 "syllables_per_minute": None,
@@ -148,9 +178,11 @@ class LocalQwenSpeechAdapter:
                 "filler_words": [],
                 "duration_sec": duration,
                 "rms": rms,
+                "recognition_status": status,
+                "rejection_reason": reason,
             },
             transcript=transcript or None,
-            is_final=True,
+            is_final=bool(transcript),
             latency_ms=int((time.perf_counter() - started) * 1000),
         )
 
@@ -158,8 +190,7 @@ class LocalQwenSpeechAdapter:
 def create_local_qwen_speech_adapter(
     model_name: str = DEFAULT_STT_MODEL,
     device: str = "auto",
-    context: str = "",
     silence_rms_threshold: float = 0.003,
     library_path: str = DEFAULT_STT_LIBRARY,
 ) -> LocalQwenSpeechAdapter:
-    return LocalQwenSpeechAdapter(model_name, device, context, silence_rms_threshold, library_path)
+    return LocalQwenSpeechAdapter(model_name, device, silence_rms_threshold, library_path)

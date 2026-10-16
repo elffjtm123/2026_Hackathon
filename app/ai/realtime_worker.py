@@ -36,7 +36,6 @@ def _speech(settings: Settings) -> SpeechAdapter:
     return create_local_qwen_speech_adapter(
         settings.stt_model,
         settings.stt_device,
-        settings.stt_context,
         settings.stt_silence_rms_threshold,
         settings.stt_library_path,
     )

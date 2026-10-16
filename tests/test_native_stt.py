@@ -81,14 +81,19 @@ def test_default_stt_is_quantized_local_file():
     assert settings.stt_library_path == ".models/speech/libspeech.dylib"
 
 
-def test_native_transcription_preserves_audio_language_context_and_frees_request(engine):
+def test_stale_context_environment_cannot_reach_settings(monkeypatch):
+    monkeypatch.setenv("STT_CONTEXT", "이전 참고 문구")
+    assert "stt_context" not in Settings(_env_file=None).model_dump()
+
+
+def test_native_transcription_has_no_context_and_frees_request(engine):
     loaded, library = engine
     audio = np.array([0.1, -0.2, 0.3], dtype=np.float64)
-    text = loaded.transcribe(audio=(audio, 16000), context="개발자 면접", language="Korean")
+    text = loaded.transcribe(audio=(audio, 16000), language="Korean")
     assert text == "안녕하세요"
     assert loaded.device == "mps"
     assert (1, b"ko") in library.strings
-    assert (9, "개발자 면접".encode()) in library.strings
+    assert not any(isinstance(x, tuple) and x[0] == 9 for x in library.strings)
     assert library.audio[1] == 16000
     np.testing.assert_allclose(library.audio[0], audio)
     assert library.freed.count(5) == 1
@@ -96,7 +101,7 @@ def test_native_transcription_preserves_audio_language_context_and_frees_request
     loaded.close()
     assert library.freed.count(3) == 1
     with pytest.raises(RuntimeError, match="STT_CLOSED"):
-        loaded.transcribe(audio=(audio, 16000), context="", language="Korean")
+        loaded.transcribe(audio=(audio, 16000), language="Korean")
 
 
 @pytest.mark.parametrize(
@@ -107,7 +112,7 @@ def test_failed_truncated_or_invalid_result_is_not_a_transcript(engine, status, 
     loaded, library = engine
     library.status, library.stop, library.text = status, stop, text
     with pytest.raises((RuntimeError, UnicodeError)):
-        loaded.transcribe(audio=(np.ones(1600), 16000), context="", language="Korean")
+        loaded.transcribe(audio=(np.ones(1600), 16000), language="Korean")
     assert library.freed.count(5) == 1
 
 

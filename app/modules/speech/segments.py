@@ -54,6 +54,7 @@ class SpeechSegmenter:
         endpoint_ms: int = 500,
         post_roll_ms: int = 100,
         max_ms: int = 8000,
+        observe_frame: Callable[[int, int, float, bool], None] | None = None,
     ) -> None:
         if not (0 < onset_ms <= pre_roll_ms < max_ms and 0 <= post_roll_ms < endpoint_ms):
             raise ValueError("INVALID_SEGMENT_SETTINGS")
@@ -69,6 +70,7 @@ class SpeechSegmenter:
                 return rms >= silence_rms_threshold and vad.is_speech(padded, SAMPLE_RATE)
 
         self.is_speech = is_speech
+        self.observe_frame = observe_frame
         self.onset_samples = onset_ms * 16
         self.endpoint_samples = endpoint_ms * 16
         self.post_roll_samples = post_roll_ms * 16
@@ -129,6 +131,16 @@ class SpeechSegmenter:
 
     def _frame(self, frame: _Frame) -> list[SpeechSegment]:
         samples = frame.end - frame.start
+        if self.observe_frame is not None:
+            assert self.origin_ms is not None
+            values = [x[0] for x in struct.iter_unpack("<h", frame.pcm)]
+            rms = math.sqrt(sum(x * x for x in values) / len(values)) / 32768
+            self.observe_frame(
+                self.origin_ms + frame.start * 1000 // SAMPLE_RATE,
+                self.origin_ms + frame.end * 1000 // SAMPLE_RATE,
+                rms,
+                frame.voiced,
+            )
         if self.active is None:
             self.history.append(frame)
             self.onset = self.onset + samples if frame.voiced else 0

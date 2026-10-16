@@ -14,6 +14,7 @@ from app.modules.gaze.service import GazeStabilizer
 from app.modules.pronunciation.service import estimate_stt_pronunciation_accuracy
 from app.modules.script_sync.service import ScriptSyncService, analyze_script
 from app.modules.speech.analysis import SpeechRateWindow, analyze_utterance, pace_message
+from app.modules.speech.changes import SpeechChangeDetector
 from app.modules.speech.segments import FinalUtterance, SpeechSegmenter
 from app.realtime.aggregator import FeedbackAggregator
 from app.realtime.events import RealtimeEvent
@@ -48,6 +49,7 @@ class SessionPipeline:
         self.speech_queue: asyncio.Queue[MediaPayload] = asyncio.Queue(2)
         self.segmenter: SpeechSegmenter | None = None
         self.speech_window = SpeechRateWindow()
+        self.speech_changes = SpeechChangeDetector()
         self.legacy_utterance_sequence = 0
         self.last_audio_activity_ms = 0
         self.latest_audio_end_ms = 0
@@ -404,7 +406,8 @@ class SessionPipeline:
                     continue
                 if self.segmenter is None:
                     self.segmenter = SpeechSegmenter(
-                        silence_rms_threshold=self.settings.stt_silence_rms_threshold
+                        silence_rms_threshold=self.settings.stt_silence_rms_threshold,
+                        observe_frame=self.speech_changes.observe_audio,
                     )
                 segments = (
                     self.segmenter.flush()
@@ -490,6 +493,11 @@ class SessionPipeline:
                 ):
                     continue
                 result = await self.speech.infer(media)
+                if not result.transcript:
+                    if result.metrics.get("recognition_status") == "rejected":
+                        self.incomplete = True
+                    await self._handle_result(replace(result, is_final=False))
+                    continue
                 self.legacy_utterance_sequence += 1
                 final = FinalUtterance(
                     media.utterance_id or f"legacy-u{self.legacy_utterance_sequence}",
@@ -553,6 +561,13 @@ class SessionPipeline:
         if not self.aggregator.add(result):
             return
         if result.source == "speech_rate":
+            if result.is_final and result.transcript:
+                self.speech_changes.observe_pace(
+                    result.metrics.get("start_ms", result.timestamp_ms),
+                    result.metrics.get("end_ms", result.timestamp_ms),
+                    result.metrics.get("syllable_count", 0),
+                    result.metrics.get("voiced_ms", 0),
+                )
             result = replace(
                 result,
                 metrics={

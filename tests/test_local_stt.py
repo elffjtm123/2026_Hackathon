@@ -67,7 +67,6 @@ def test_low_level_microphone_noise_does_not_reach_qwen() -> None:
 
     adapter = LocalQwenSpeechAdapter.__new__(LocalQwenSpeechAdapter)
     adapter.np = np
-    adapter.context = "한국어 개발자 면접입니다."
     adapter.silence_rms_threshold = 0.003
     adapter.stt = FailIfCalled()
     adapter.rate = SpeechRateAnalyzer()
@@ -93,7 +92,6 @@ def test_text_cannot_bypass_qwen_inference(monkeypatch: pytest.MonkeyPatch) -> N
 
     adapter = LocalQwenSpeechAdapter.__new__(LocalQwenSpeechAdapter)
     adapter.np = np
-    adapter.context = ""
     adapter.silence_rms_threshold = 0.003
     adapter.stt = FailingModel()
     adapter.rate = SpeechRateAnalyzer()
@@ -115,7 +113,6 @@ def test_confirmed_100ms_segment_is_transcribed_without_second_vad_gate():
 
     adapter = LocalQwenSpeechAdapter.__new__(LocalQwenSpeechAdapter)
     adapter.np, adapter.sf = np, sf
-    adapter.context = ""
     adapter.silence_rms_threshold = 0.003
     adapter.stt = Model()
     media = MediaPayload(
@@ -130,3 +127,108 @@ def test_confirmed_100ms_segment_is_transcribed_without_second_vad_gate():
     result = adapter._infer_sync(media, time.perf_counter())
     assert result.transcript == "네"
     assert result.metrics["voiced_ms"] == 100
+
+
+def confirmed_adapter(text="네"):
+    class Model:
+        calls = 0
+
+        def transcribe(self, **kwargs):
+            assert "context" not in kwargs
+            self.calls += 1
+            return text
+
+    adapter = LocalQwenSpeechAdapter.__new__(LocalQwenSpeechAdapter)
+    adapter.np, adapter.sf = np, sf
+    adapter.silence_rms_threshold = 0.003
+    adapter.stt = Model()
+    return adapter
+
+
+@pytest.mark.parametrize("amplitude", [0, 1])
+def test_confirmed_silence_still_skips_inference(amplitude):
+    adapter = confirmed_adapter()
+    media = MediaPayload(
+        uuid4(),
+        0,
+        np.full(4800, amplitude, dtype="<i2").tobytes(),
+        format="pcm16",
+        utterance_id="u1",
+        voiced_ms=100,
+        end_ms=300,
+    )
+    result = adapter._infer_sync(media, time.perf_counter())
+    assert adapter.stt.calls == 0
+    assert result.transcript is None
+    assert result.metrics["recognition_status"] == "no_speech"
+    assert result.metrics["voiced_ms"] == 0
+
+
+@pytest.mark.parametrize("text", ["", " . 。!? … ", "가" * 100])
+def test_nonlexical_and_runaway_transcripts_are_not_accepted(text):
+    adapter = confirmed_adapter(text)
+    media = MediaPayload(
+        uuid4(),
+        0,
+        np.full(4800, 1000, dtype="<i2").tobytes(),
+        format="pcm16",
+        utterance_id="u1",
+        voiced_ms=240,
+        end_ms=300,
+    )
+    result = adapter._infer_sync(media, time.perf_counter())
+    assert result.transcript is None
+    assert result.metrics["recognition_status"] in {"unrecognized", "rejected"}
+    assert result.metrics["voiced_ms"] == 0
+    if text:
+        assert text not in str(result.metrics)
+
+
+@pytest.mark.parametrize("text", ["네", "이", "음 음 음", "네 네"])
+def test_short_words_and_real_repetition_are_preserved(text):
+    adapter = confirmed_adapter(text)
+    media = MediaPayload(
+        uuid4(),
+        0,
+        np.full(1600, 1000, dtype="<i2").tobytes(),
+        format="pcm16",
+        utterance_id="u1",
+        voiced_ms=100,
+        end_ms=100,
+    )
+    assert adapter._infer_sync(media, time.perf_counter()).transcript == text
+
+
+def test_nonfinite_wav_does_not_reach_model():
+    adapter = confirmed_adapter()
+    output = io.BytesIO()
+    sf.write(output, np.full(8000, np.nan), 16000, format="WAV", subtype="FLOAT")
+    with pytest.raises(ValueError, match="INVALID_AUDIO"):
+        adapter._infer_sync(MediaPayload(uuid4(), 0, output.getvalue()), time.perf_counter())
+    assert adapter.stt.calls == 0
+
+
+def test_padded_quiet_100ms_answer_is_not_mistaken_for_silence():
+    from app.modules.speech.segments import SpeechSegmenter
+
+    segmenter = SpeechSegmenter(is_speech=lambda pcm: np.frombuffer(pcm, dtype="<i2").max() > 0)
+    pcm = bytes(6400) + np.full(1600, 131, dtype="<i2").tobytes() + bytes(16000)
+    raw = MediaPayload(uuid4(), 0, pcm, format="pcm16")
+    segment = segmenter.feed(raw)[0]
+    assert segment.voiced_ms == 100
+    adapter = confirmed_adapter()
+    result = adapter._infer_sync(
+        MediaPayload(
+            raw.session_id,
+            segment.start_ms,
+            segment.pcm,
+            format="pcm16",
+            utterance_id=segment.utterance_id,
+            voiced_ms=segment.voiced_ms,
+            end_ms=segment.end_ms,
+        ),
+        time.perf_counter(),
+    )
+    assert result.metrics["rms"] < adapter.silence_rms_threshold
+    assert result.transcript == "네"
+    assert adapter.stt.calls == 1

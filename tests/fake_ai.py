@@ -49,7 +49,6 @@ class FakeRealtimeModelProcess:
             "speech": lambda: create_local_qwen_speech_adapter(
                 self.settings.stt_model,
                 self.settings.stt_device,
-                self.settings.stt_context,
                 self.settings.stt_silence_rms_threshold,
                 self.settings.stt_library_path,
             ),

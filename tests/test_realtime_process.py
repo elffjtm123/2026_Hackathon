@@ -381,7 +381,6 @@ async def test_socket_is_private_and_only_model_settings_cross_ipc(
             "stt_model",
             "stt_library_path",
             "stt_device",
-            "stt_context",
             "stt_silence_rms_threshold",
         }
     finally:

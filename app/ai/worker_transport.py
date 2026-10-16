@@ -21,7 +21,6 @@ MODEL_SETTINGS = {
     "stt_model",
     "stt_library_path",
     "stt_device",
-    "stt_context",
     "stt_silence_rms_threshold",
 }
 

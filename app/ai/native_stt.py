@@ -84,7 +84,7 @@ class QwenGGUF:
         if status != 0:
             raise RuntimeError(f"STT_NATIVE_FAILED:{status}")
 
-    def transcribe(self, *, audio: tuple[Any, int], context: str, language: str) -> str:
+    def transcribe(self, *, audio: tuple[Any, int], language: str) -> str:
         import numpy as np
 
         if not self.model.value:
@@ -109,7 +109,6 @@ class QwenGGUF:
                     request, 1, ("ko" if language == "Korean" else language).encode()
                 )
             )
-            self._check(self.lib.speech_request_set_string(request, 9, context.encode()))
             self._check(self.lib.speech_transcribe(request))
             result = self.lib.speech_request_result(request)
             if not result or self.lib.speech_result_stop(result) != 0:
