@@ -66,6 +66,31 @@ def test_repeated_script_is_ambiguous_and_does_not_advance() -> None:
     assert result["progress_ratio"] == 0
 
 
+def test_long_recognized_span_is_not_cut_off_at_40_tokens():
+    script = " ".join(f"항목{i} 설명{i}" for i in range(60)) + "."
+    sync = ScriptSyncService(analyze_script(script, 180))
+    result = sync.update(script, 8000, is_final=True)
+    assert result["alignment_status"] == "matched"
+    assert result["current_token_index"] == 119
+    assert result["progress_ratio"] == 1
+
+
+def test_unique_later_phrase_can_resynchronize_after_missing_opening():
+    script = " ".join(f"앞부분{i}" for i in range(55)) + " 원본 영상과 음성은 저장하지 않습니다."
+    sync = ScriptSyncService(analyze_script(script, 180))
+    result = sync.update("원본 영상과 음성은 저장하지 않습니다", 10000, is_final=True)
+    assert result["alignment_status"] == "matched"
+    assert result["current_token_index"] == len(sync.plan.timeline) - 1
+
+
+def test_long_span_with_small_stt_error_can_still_align():
+    script = " ".join(f"정보{i}" for i in range(55)) + "."
+    sync = ScriptSyncService(analyze_script(script, 180))
+    result = sync.update(script.replace("정보25", "정도25"), 8000, is_final=True)
+    assert result["alignment_status"] == "matched"
+    assert result["current_token_index"] == 54
+
+
 def test_stt_probabilities_are_not_pronunciation_accuracy() -> None:
     result = estimate_stt_pronunciation_accuracy(
         "안녕하세요", avg_logprob=-0.1, no_speech_prob=0.01

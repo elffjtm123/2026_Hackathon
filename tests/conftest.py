@@ -6,11 +6,12 @@ from fastapi.testclient import TestClient
 
 from app.core.config import Settings
 from app.main import create_app
-from tests.fake_ai import FakeGazeAdapter, FakeSpeechAdapter
+from tests.fake_ai import FakeGazeAdapter, FakeRealtimeModelProcess, FakeSpeechAdapter
 
 
 @pytest.fixture
 def fake_models(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("app.main.create_realtime_process", FakeRealtimeModelProcess)
     monkeypatch.setattr("app.main.create_local_gaze_adapter", lambda *_: FakeGazeAdapter())
     monkeypatch.setattr("app.main.create_local_qwen_speech_adapter", lambda *_: FakeSpeechAdapter())
 

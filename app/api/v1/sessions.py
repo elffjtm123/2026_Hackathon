@@ -5,6 +5,7 @@ from fastapi import APIRouter, Query, Request
 from sqlalchemy import select
 
 from app.api.deps import CurrentUser, DBSession
+from app.api.disconnect import disconnected_request
 from app.api.v1.scripts import validate_script
 from app.core.errors import AppError
 from app.db.models.report import SessionReport
@@ -89,10 +90,24 @@ async def webrtc_offer(
     user: CurrentUser,
     db: DBSession,
 ) -> WebRTCAnswer:
+    async with disconnected_request(
+        request, "WEBRTC_CANCELLED", "연결이 종료되어 모델 준비를 중단했습니다."
+    ):
+        return await _negotiate_webrtc(session_id, payload, request, user, db)
+
+
+async def _negotiate_webrtc(
+    session_id: UUID,
+    payload: WebRTCOffer,
+    request: Request,
+    user: CurrentUser,
+    db: DBSession,
+) -> WebRTCAnswer:
     session = await owned_session(db, session_id, user.id)
     if session.status not in {SessionStatus.created, SessionStatus.active}:
         raise AppError("INVALID_SESSION_STATE", "종료된 세션에는 연결할 수 없습니다.", 409)
     await activate_session(db, session)
+    previous_pipeline = request.app.state.pipelines.get(session.id)
     try:
         pipeline = await request.app.state.pipelines.get_or_create(
             session.id,
@@ -112,7 +127,24 @@ async def webrtc_offer(
         answer = await request.app.state.webrtc.create_answer(
             session.id, payload.sdp, payload.type, pipeline
         )
-    except Exception as exc:
+    except BaseException as exc:
+        if previous_pipeline is None:
+            from anyio import CancelScope
+
+            with CancelScope(shield=True):
+                registry = request.app.state.pipelines
+                async with registry._lock:
+                    if (
+                        registry.get(session.id) is pipeline
+                        and not pipeline.subscribers
+                        and not request.app.state.webrtc.connections.get(session.id)
+                    ):
+                        try:
+                            await pipeline.stop()
+                        finally:
+                            registry.pipelines.pop(session.id, None)
+        if not isinstance(exc, Exception):
+            raise
         raise AppError(
             "WEBRTC_NEGOTIATION_FAILED", "WebRTC 연결 협상에 실패했습니다.", 400
         ) from exc

@@ -177,6 +177,12 @@ button:disabled {
 .presentation-summary { grid-column: 1 / -1; display: grid; gap: 12px; }
 .presentation-summary h3, .presentation-summary p { margin: 0; }
 .presentation-summary p { color: #526168; line-height: 1.6; }
+.summary-progress { display: grid; gap: 8px; }
+.summary-progress progress { width: 100%; height: 10px; accent-color: #396c6d; }
+.summary-details > summary { cursor: pointer; font-size: 1.05rem; font-weight: 700; padding: 8px 0; }
+.summary-details > summary > span { margin-left: 12px; font-size: .85rem; color: #526168; font-weight: 400; }
+.summary-details[open] .summary-open-label, .summary-details:not([open]) .summary-close-label { display: none; }
+.summary-details > p { margin: 8px 0 12px; }
 .summary-sentence { display: grid; gap: 6px; padding-top: 12px; border-top: 1px solid #dde4e6; }
 .summary-sentence > span { font-weight: 500; line-height: 1.6; overflow-wrap: anywhere; }
 .summary-sentence__error { color: #a32424; }

@@ -1,6 +1,7 @@
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import Any
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Request
@@ -8,9 +9,10 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.ai.base import GazeAdapter, SpeechAdapter, UnavailableSpeechAdapter
+from app.ai.base import GazeAdapter, SpeechAdapter
 from app.ai.http import HTTPGazeAdapter, HTTPSpeechAdapter
-from app.ai.local_stt import create_local_qwen_speech_adapter
+from app.ai.local_stt import create_local_qwen_speech_adapter as create_local_qwen_speech_adapter
+from app.ai.model_execution import ModelExecution
 from app.ai.script_summary import LocalScriptSummarizer
 from app.ai.uniface_gaze import UnavailableGazeAdapter
 from app.api.health import router as health_router
@@ -29,6 +31,12 @@ from app.realtime.state import SessionStateStore
 from app.realtime.webrtc import WebRTCManager
 
 logger = logging.getLogger(__name__)
+
+
+def create_realtime_process(settings: Settings) -> Any:
+    from app.ai.realtime_process import RealtimeModelProcess
+
+    return RealtimeModelProcess(settings)
 
 
 def create_local_gaze_adapter(settings: Settings) -> GazeAdapter:
@@ -70,6 +78,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         http_clients: list[object] = []
         gaze: GazeAdapter
         speech: SpeechAdapter
+        execution = None
         if settings.ai_mode == "http":
             http_gaze = HTTPGazeAdapter(settings)
             http_speech = HTTPSpeechAdapter(settings)
@@ -77,65 +86,59 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             speech = http_speech
             http_clients = [http_gaze.client, http_speech.client]
         else:
-            gaze = create_local_gaze_adapter(settings)
-            try:
-                speech = create_local_qwen_speech_adapter(
-                    settings.stt_model,
-                    settings.stt_device,
-                    settings.stt_context,
-                    settings.stt_silence_rms_threshold,
-                )
-            except Exception as exc:
-                speech = UnavailableSpeechAdapter(
-                    f"MODEL_LOAD_FAILED: qwen3_asr ({type(exc).__name__})"
-                )
+            runtime = create_realtime_process(settings)
+            execution = ModelExecution(runtime)
+            gaze, speech = runtime.gaze, runtime.speech
         app.state.settings = settings
-        app.state.script_summarizer = LocalScriptSummarizer(settings)
+        app.state.model_execution = execution
+        app.state.script_summarizer = LocalScriptSummarizer(settings, execution)
         app.state.live_sessions = set()
         app.state.database = database
         app.state.state_store = state_store
         app.state.gaze = gaze
         app.state.speech = speech
-        app.state.module_status = {
-            "gaze": ModuleStatus(
-                provider=settings.vision_provider if settings.ai_mode == "local" else "http",
-                model="MediaPipe Face Landmarker + MobileGaze"
-                if settings.vision_provider == "uniface"
-                else None,
-                status="unavailable"
-                if hasattr(gaze, "reason")
-                else "ready",
-                reason=getattr(gaze, "reason", None),
-            ),
-            "speech": ModuleStatus(
-                provider=settings.stt_provider if settings.ai_mode == "local" else "http",
-                model=settings.stt_model if settings.stt_provider == "qwen3_asr" else None,
-                device=getattr(speech, "device", None),
-                status="unavailable"
-                if hasattr(speech, "reason")
-                else "ready",
-                reason=getattr(speech, "reason", None),
-            ),
-        }
+        app.state.module_status = (
+            runtime.modules
+            if execution is not None
+            else {
+                "gaze": ModuleStatus(
+                    provider=settings.vision_provider if settings.ai_mode == "local" else "http",
+                    model="MediaPipe Face Landmarker + MobileGaze"
+                    if settings.vision_provider == "uniface"
+                    else None,
+                    status="unavailable" if hasattr(gaze, "reason") else "ready",
+                    reason=getattr(gaze, "reason", None),
+                ),
+                "speech": ModuleStatus(
+                    provider=settings.stt_provider if settings.ai_mode == "local" else "http",
+                    model=settings.stt_model if settings.stt_provider == "qwen3_asr" else None,
+                    device=getattr(speech, "device", None),
+                    status="unavailable" if hasattr(speech, "reason") else "ready",
+                    reason=getattr(speech, "reason", None),
+                ),
+            }
+        )
         app.state.pipelines = PipelineRegistry(
-            settings, state_store, gaze, speech, app.state.script_summarizer
+            settings, state_store, gaze, speech, app.state.script_summarizer, execution
         )
         app.state.webrtc = WebRTCManager(settings)
         app.state.websocket_counts = {}
         if settings.auto_create_tables:
             await database.create_tables()
-        yield
-        await app.state.script_summarizer.close()
-        await app.state.webrtc.close()
-        await app.state.pipelines.close()
-        if hasattr(gaze, "close"):
-            gaze.close()  # type: ignore[attr-defined]
-        if hasattr(speech, "close"):
-            speech.close()  # type: ignore[attr-defined]
-        await state_store.close()
-        for client in http_clients:
-            await client.aclose()  # type: ignore[attr-defined]
-        await database.close()
+        try:
+            yield
+        finally:
+            await app.state.script_summarizer.close()
+            await app.state.webrtc.close()
+            try:
+                await app.state.pipelines.close()
+            finally:
+                if execution is not None:
+                    await execution.close()
+                await state_store.close()
+                for client in http_clients:
+                    await client.aclose()  # type: ignore[attr-defined]
+                await database.close()
 
     app = FastAPI(title=settings.app_name, version="0.1.0", lifespan=lifespan)
     app.add_middleware(

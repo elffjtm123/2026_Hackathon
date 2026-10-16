@@ -9,7 +9,10 @@ export type GazeStatus =
 
 export type SessionPhase = 'preparing' | 'calibrating' | 'running' | 'draining' | 'completed' | 'failed';
 export type ModuleStatus = { provider: string; model: string | null; device: string | null;
-  status: 'ready' | 'unavailable'; reason: string | null };
+  status: 'idle' | 'loading' | 'ready' | 'unavailable'; reason: string | null };
+export function modelStatusLabel(module: ModuleStatus): string {
+  return {idle:'미로드',loading:'준비 중',ready:'준비 완료',unavailable:'사용 불가'}[module.status];
+}
 export type SessionReadyData = { sessionId: string; timestampMs: number; modules: Record<string, ModuleStatus> };
 export type RealtimeEvent = { event: string; version: number; session_id: string; sequence: number;
   timestamp_ms: number; module: string; level: string; data: Record<string, unknown> };

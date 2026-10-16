@@ -81,7 +81,7 @@ export function useFeedbackSocket(onFeedback: (feedback: RealtimeFeedback) => vo
     clientSequenceRef.current = 0;
     const url = new URL(feedbackWsUrl); url.searchParams.set('protocol', '2');
     const socket = new WebSocket(url); socketRef.current = socket;
-    const waiting = pending<SessionReadyData>(5000, '서버 준비 응답 시간이 초과되었습니다.', fail);
+    const waiting = pending<SessionReadyData>(130000, '모델 준비 응답 시간이 초과되었습니다.', fail);
     readyRef.current = waiting;
     socket.onopen = () => {
       if (socketRef.current !== socket) return;
@@ -95,7 +95,7 @@ export function useFeedbackSocket(onFeedback: (feedback: RealtimeFeedback) => vo
       try {
         const message = JSON.parse(String(event.data)) as RealtimeEvent;
         if (message.version !== 2 || typeof message.session_id !== 'string' || !message.data) throw new Error('지원하지 않는 서버 응답');
-        if (!idRef.current && (message.event === 'session.ready' || message.event === 'error')) idRef.current = message.session_id;
+        if (!idRef.current && ['session.ready','session.completed','error'].includes(message.event)) idRef.current = message.session_id;
         if (!acceptServerEvent(message, idRef.current, lastSequenceRef.current)) return;
         lastSequenceRef.current = message.sequence;
         if (message.event === 'session.ready') {
@@ -117,6 +117,8 @@ export function useFeedbackSocket(onFeedback: (feedback: RealtimeFeedback) => vo
         } else if (message.event === 'feedback' || message.event === 'script.progress') {
           callbacks.current.onFeedback(feedbackForUi(message));
         } else if (message.event === 'session.completed') {
+          if (readyRef.current) {clearTimeout(readyRef.current.timer); readyRef.current.reject(new Error('모델 준비가 취소되었습니다.')); readyRef.current = null;}
+          if (message.data.modules) setModules(message.data.modules as Record<string, ModuleStatus>);
           const report = completionForUi(message.data.report as Record<string, unknown>);
           if (completionRef.current) {clearTimeout(completionRef.current.timer); completionRef.current.resolve(report); completionRef.current = null;}
           runningRef.current = false;
@@ -162,7 +164,7 @@ export function useFeedbackSocket(onFeedback: (feedback: RealtimeFeedback) => vo
   }, []);
   const finish = useCallback((_sessionId: string, incomplete = false) => {
     if (completionRef.current) return completionRef.current.promise;
-    const waiting = pending<SessionCompletionReport>(35000, '세션 분석 완료 응답 시간이 초과되었습니다.', fail);
+    const waiting = pending<SessionCompletionReport>(45000, '세션 분석·모델 종료 응답 시간이 초과되었습니다.', fail);
     completionRef.current = waiting;
     try {control('session.end', {incomplete});} catch (reason) {fail(reason as Error);}
     return waiting.promise;

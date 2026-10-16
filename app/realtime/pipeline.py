@@ -8,6 +8,7 @@ from typing import Any
 from uuid import UUID
 
 from app.ai.base import AIResult, GazeAdapter, MediaPayload, SpeechAdapter
+from app.ai.model_execution import ModelExecution
 from app.core.config import Settings
 from app.modules.gaze.service import GazeStabilizer
 from app.modules.pronunciation.service import estimate_stt_pronunciation_accuracy
@@ -32,6 +33,7 @@ class SessionPipeline:
         gaze: GazeAdapter,
         speech: SpeechAdapter,
         analysis_settings: dict[str, bool],
+        execution: ModelExecution | None = None,
     ) -> None:
         self.session_id = session_id
         self.settings = settings
@@ -39,6 +41,8 @@ class SessionPipeline:
         self.gaze = gaze
         self.speech = speech
         self.analysis_settings = analysis_settings
+        self.execution = execution
+        self._execution_acquired = False
         self.video_queue: DropOldestQueue[MediaPayload] = DropOldestQueue(settings.video_queue_size)
         self.audio_queue: asyncio.Queue[MediaPayload] = asyncio.Queue(settings.audio_queue_size)
         self.speech_queue: asyncio.Queue[MediaPayload] = asyncio.Queue(2)
@@ -88,6 +92,9 @@ class SessionPipeline:
     async def prepare(self) -> None:
         if self.running:
             return
+        if self.execution is not None:
+            await self.execution.start_session(self.session_id)
+            self._execution_acquired = True
         for enabled, adapter in [
             (self.analysis_settings.get("gaze_enabled", True), self.gaze),
             (
@@ -99,6 +106,9 @@ class SessionPipeline:
             if enabled and (
                 hasattr(adapter, "reason") or getattr(getattr(adapter, "gate", None), "busy", False)
             ):
+                if self.execution is not None:
+                    await self.execution.stop_session(self.session_id)
+                    self._execution_acquired = False
                 raise ValueError("MODEL_UNAVAILABLE_OR_BUSY")
         self.running = True
         self.started_monotonic = time.monotonic()
@@ -274,13 +284,22 @@ class SessionPipeline:
                 while not queue.empty():
                     queue.get_nowait()
                     queue.task_done()
+            if self.execution is not None and self._execution_acquired:
+                await self.execution.stop_session(self.session_id)
+                self._execution_acquired = False
             self.phase = "completed"
             self.completed_report = report
             await self.state_store.set(
                 self.session_id,
                 {"status": "completed", **self.metrics()},
             )
-            await self.emit("session.completed", self.elapsed_ms(), {"report": report})
+            data: dict[str, Any] = {"report": report}
+            if self.execution is not None:
+                data["modules"] = {
+                    name: module.model_dump()
+                    for name, module in self.execution.runtime.modules.items()
+                }
+            await self.emit("session.completed", self.elapsed_ms(), data)
             return report
 
     async def emit(

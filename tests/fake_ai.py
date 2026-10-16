@@ -7,8 +7,73 @@ from collections import Counter
 from typing import Any
 
 from app.ai.base import AIResult, MediaPayload
+from app.realtime.events import ModuleStatus
 
 FILLER_PATTERN = re.compile(r"(?<![가-힣])(어|음|그|저기|그러니까)(?![가-힣])")
+
+
+class FakeProcessProxy:
+    def __init__(self):
+        self.adapter = None
+
+    def __getattr__(self, name):
+        if self.adapter is None:
+            raise AttributeError(name)
+        return getattr(self.adapter, name)
+
+    async def infer(self, media):
+        if self.adapter is None:
+            raise RuntimeError("MODEL_UNAVAILABLE")
+        return await self.adapter.infer(media)
+
+
+class FakeRealtimeModelProcess:
+    """Test-only lifecycle double; factories are invoked on start, never constructor."""
+
+    def __init__(self, settings):
+        self.settings = settings
+        self.gaze, self.speech = FakeProcessProxy(), FakeProcessProxy()
+        self.process = None
+        self.modules = {
+            "gaze": ModuleStatus(
+                provider="uniface", model="MediaPipe Face Landmarker + MobileGaze", status="idle"
+            ),
+            "speech": ModuleStatus(provider="qwen3_asr", model=settings.stt_model, status="idle"),
+        }
+
+    async def start(self):
+        from app.main import create_local_gaze_adapter, create_local_qwen_speech_adapter
+
+        factories = {
+            "gaze": lambda: create_local_gaze_adapter(self.settings),
+            "speech": lambda: create_local_qwen_speech_adapter(
+                self.settings.stt_model,
+                self.settings.stt_device,
+                self.settings.stt_context,
+                self.settings.stt_silence_rms_threshold,
+                self.settings.stt_library_path,
+            ),
+        }
+        for name, factory in factories.items():
+            proxy = getattr(self, name)
+            try:
+                proxy.adapter = factory()
+                reason = getattr(proxy.adapter, "reason", None)
+                self.modules[name].status = "unavailable" if reason else "ready"
+                self.modules[name].reason = reason
+                self.modules[name].device = getattr(proxy.adapter, "device", None)
+            except Exception as exc:
+                self.modules[name].status = "unavailable"
+                self.modules[name].reason = f"MODEL_LOAD_FAILED: {name} ({type(exc).__name__})"
+        if any(module.status == "unavailable" for module in self.modules.values()):
+            raise ValueError("MODEL_UNAVAILABLE_OR_BUSY")
+
+    async def stop(self):
+        self.gaze.adapter = self.speech.adapter = None
+        for module in self.modules.values():
+            if module.status != "unavailable":
+                module.status = "idle"
+            module.device = None
 
 
 def _decode_transcript_payload(payload: bytes) -> tuple[str, float | None]:

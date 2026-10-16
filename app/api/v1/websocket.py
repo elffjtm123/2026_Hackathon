@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import ipaddress
 import json
 import time
@@ -10,7 +11,9 @@ from anyio import CancelScope
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
 from sqlalchemy import select
+from starlette.types import Message
 
+from app.ai.model_execution import finish
 from app.core.security import decode_token
 from app.db.models.session import PracticeSession, SessionStatus
 from app.realtime.events import ClientEvent, RealtimeEvent, SessionStartData, V2ClientEvent
@@ -34,6 +37,7 @@ async def _v2_session(
         websocket.app.state.gaze,
         websocket.app.state.speech,
         stored_settings or {},
+        websocket.app.state.model_execution,
     )
     pipeline.protocol = 2
     subscriber = f"v2-{uuid4()}"
@@ -47,6 +51,54 @@ async def _v2_session(
     started = False
     client_sequence = 0
     calibration_timer: asyncio.Task[None] | None = None
+    live_registered = False
+    pending_message: Message | None = None
+
+    async def prepare_or_cancel(operation: asyncio.Task[None]) -> bool:
+        nonlocal client_sequence, pending_message
+        receiving = asyncio.create_task(websocket.receive())
+        try:
+            while True:
+                done, _ = await asyncio.wait(
+                    (operation, receiving), return_when=asyncio.FIRST_COMPLETED
+                )
+                if receiving in done:
+                    message = receiving.result()
+                    if message.get("type") == "websocket.disconnect":
+                        pipeline.incomplete = True
+                        raise WebSocketDisconnect()
+                    raw = message.get("text")
+                    if raw is None or len(raw.encode()) > settings.max_json_message_bytes:
+                        raise ValueError("SESSION_NOT_READY")
+                    event = V2ClientEvent.model_validate(json.loads(raw))
+                    if event.event == "session.end" and event.session_id in {None, session_id}:
+                        if event.sequence <= client_sequence:
+                            raise ValueError("INVALID_CONTROL_SESSION_OR_SEQUENCE")
+                        client_sequence = event.sequence
+                        pipeline.incomplete = True
+                        return False
+                    if operation in done:
+                        pending_message = message
+                        await operation
+                        return True
+                    if event.event != "ping":
+                        raise ValueError("SESSION_NOT_READY")
+                    receiving = asyncio.create_task(websocket.receive())
+                elif operation in done:
+                    await operation
+                    return True
+        finally:
+            if receiving.done() and not receiving.cancelled() and pending_message is None:
+                with contextlib.suppress(Exception):
+                    pending_message = receiving.result()
+            receiving.cancel()
+            if not operation.done():
+                operation.cancel()
+
+            async def settle() -> None:
+                await asyncio.gather(operation, receiving, return_exceptions=True)
+
+            await finish(asyncio.create_task(settle()))
 
     async def calibration_deadline() -> None:
         await asyncio.sleep(15)
@@ -59,7 +111,8 @@ async def _v2_session(
 
     try:
         while True:
-            message = await websocket.receive()
+            message = pending_message if pending_message is not None else await websocket.receive()
+            pending_message = None
             if message.get("type") == "websocket.disconnect":
                 pipeline.incomplete = True
                 break
@@ -83,11 +136,12 @@ async def _v2_session(
                 if raw is None or len(raw.encode()) > settings.max_json_message_bytes:
                     raise ValueError("INVALID_MESSAGE_SIZE")
                 event = V2ClientEvent.model_validate(json.loads(raw))
+                early_end = event.event == "session.end" and event.session_id is None
                 if event.sequence <= client_sequence or (
-                    started and event.session_id != session_id
+                    started and event.session_id != session_id and not early_end
                 ):
                     raise ValueError("INVALID_CONTROL_SESSION_OR_SEQUENCE")
-                if event.timestamp_ms > pipeline.elapsed_ms() + 1000:
+                if not early_end and event.timestamp_ms > pipeline.elapsed_ms() + 1000:
                     raise ValueError("INVALID_CONTROL_TIMESTAMP")
                 client_sequence = event.sequence
                 if event.event == "session.start":
@@ -101,17 +155,26 @@ async def _v2_session(
                         "script": data.script,
                         "time_limit_seconds": data.time_limit_seconds,
                     }
-                    if stored_settings is not None:
-                        analysis = stored_settings
-                        prepared = await websocket.app.state.pipelines.get_or_create(
-                            session_id, analysis, protocol=2
+
+                    async def prepare(analysis_settings: dict[str, Any] = analysis) -> None:
+                        nonlocal pipeline, live_registered
+                        if stored_settings is not None:
+                            prepared = await websocket.app.state.pipelines.get_or_create(
+                                session_id, stored_settings, protocol=2
+                            )
+                            pipeline.unsubscribe(subscriber)
+                            pipeline = prepared
+                            pipeline.subscribe(subscriber, send)
+                        pipeline.update_analysis_settings(
+                            stored_settings if stored_settings is not None else analysis_settings
                         )
-                        pipeline.unsubscribe(subscriber)
-                        pipeline = prepared
-                        pipeline.subscribe(subscriber, send)
-                    pipeline.update_analysis_settings(analysis)
-                    websocket.app.state.live_sessions.add(session_id)
-                    await pipeline.prepare()
+                        websocket.app.state.live_sessions.add(session_id)
+                        live_registered = True
+                        await pipeline.prepare()
+
+                    if not await prepare_or_cancel(asyncio.create_task(prepare())):
+                        await pipeline.stop()
+                        break
                     started = True
                     await pipeline.emit(
                         "session.ready",
@@ -132,6 +195,8 @@ async def _v2_session(
                     await pipeline.start_calibration()
                     calibration_timer = asyncio.create_task(calibration_deadline())
                 elif event.event == "session.end":
+                    if not started:
+                        raise ValueError("SESSION_NOT_READY")
                     if event.data.get("incomplete") is True:
                         pipeline.incomplete = True
                     await websocket.app.state.webrtc.close_session(session_id)
@@ -172,9 +237,13 @@ async def _v2_session(
                 calibration_timer.cancel()
                 await asyncio.gather(calibration_timer, return_exceptions=True)
             pipeline.unsubscribe(subscriber)
-            await websocket.app.state.webrtc.close_session(session_id)
-            await pipeline.stop()
-            websocket.app.state.live_sessions.discard(session_id)
+            if live_registered:
+                await websocket.app.state.webrtc.close_session(session_id)
+            try:
+                await pipeline.stop()
+            finally:
+                if live_registered:
+                    websocket.app.state.live_sessions.discard(session_id)
 
 
 def _frontend_feedback(event: RealtimeEvent) -> dict[str, Any] | None:
@@ -329,12 +398,6 @@ async def practice_demo_websocket(websocket: WebSocket) -> None:
         )
         await websocket.close(code=1013)
         return
-    if any(module.status == "unavailable" for module in websocket.app.state.module_status.values()):
-        await websocket.send_json(
-            {"type": "error", "message": "필수 AI 모델을 사용할 수 없습니다."}
-        )
-        await websocket.close(code=1013)
-        return
     session_id = uuid4()
     gaze = websocket.app.state.gaze
     speech = websocket.app.state.speech
@@ -349,6 +412,7 @@ async def practice_demo_websocket(websocket: WebSocket) -> None:
             "speech_rate_enabled": True,
             "filler_detection_enabled": True,
         },
+        websocket.app.state.model_execution,
     )
     subscriber_id = f"demo-{uuid4()}"
 
@@ -425,14 +489,25 @@ async def practice_demo_websocket(websocket: WebSocket) -> None:
                 await websocket.app.state.webrtc.close_session(session_id)
                 await pipeline.stop()
                 break
+    except ValueError as exc:
+        await websocket.send_json(
+            {
+                "type": "error",
+                "message": "모델을 준비하지 못했습니다. 다시 시도하세요.",
+                "code": str(exc),
+            }
+        )
+        await websocket.close(code=1013)
     except WebSocketDisconnect:
         pass
     finally:
         with CancelScope(shield=True):
             pipeline.unsubscribe(subscriber_id)
             await websocket.app.state.webrtc.close_session(session_id)
-            await pipeline.stop()
-            websocket.app.state.live_sessions.discard(session_id)
+            try:
+                await pipeline.stop()
+            finally:
+                websocket.app.state.live_sessions.discard(session_id)
 
 
 @router.websocket("/ws/sessions/{session_id}")
@@ -550,7 +625,13 @@ async def session_websocket(websocket: WebSocket, session_id: UUID, token: str) 
     except WebSocketDisconnect:
         pass
     finally:
-        pipeline.unsubscribe(subscriber_id)
-        websocket.app.state.websocket_counts[session_id] = max(
-            0, websocket.app.state.websocket_counts.get(session_id, 1) - 1
-        )
+        with CancelScope(shield=True):
+            pipeline.unsubscribe(subscriber_id)
+            remaining = max(0, websocket.app.state.websocket_counts.get(session_id, 1) - 1)
+            websocket.app.state.websocket_counts[session_id] = remaining
+            if remaining == 0:
+                if pipeline.completed_report is None:
+                    pipeline.incomplete = True
+                await websocket.app.state.webrtc.close_session(session_id)
+                # Retain the report for REST /complete, never the model weights.
+                await pipeline.stop()

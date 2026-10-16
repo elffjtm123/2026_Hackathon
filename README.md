@@ -9,8 +9,10 @@ FastAPI, WebRTC, WebSocket 기반의 실시간 미디어 처리 백엔드입니�
 
 먼저 [모델 준비 절차](docs/gaze-field-check.md)에 따라
 `.models/face_landmarker.task`를 준비해야 합니다. Compose는 이 파일을 읽기 전용으로
-연결하며, 없으면 시작을 거부합니다. Qwen과 MobileGaze 가중치는 첫 실행에
-다운로드되므로 인터넷 연결과 모델용 메모리가 필요합니다.
+연결하며, 없으면 시작을 거부합니다. STT는 아래의 Q8_0 파일과 네이티브 라이브러리를
+미리 준비해야 합니다. MobileGaze 가중치는 첫 실행에 다운로드됩니다.
+현재 STT 검증 대상은 Mac 직접 실행이며, 기존 Compose 예제에는 Linux용
+`libspeech.so`와 GGUF 파일의 별도 준비·마운트가 필요합니다.
 
 ```bash
 cp .env.example .env
@@ -24,7 +26,7 @@ npm run dev
 ```
 
 프론트는 `http://localhost:5173`, 백엔드는 `http://127.0.0.1:8000`에서
-실행된다. Qwen3-ASR과 UniFace를 처음 사용할 때는 각 모델 가중치 다운로드로
+실행된다. UniFace를 처음 사용할 때는 모델 가중치 다운로드로
 시작이 느려질 수 있다. 모델 로드·추론 오류는
 백엔드 터미널과 화면의 **최신 피드백** 패널에서 확인할 수 있다.
 
@@ -32,7 +34,7 @@ API 문서는 `http://localhost:8000/docs`, 상태 확인은
 `http://localhost:8000/health/ready`에서 볼 수 있습니다. Docker 시작 시 Alembic
 migration이 자동 적용됩니다.
 
-현재 Mac 로컬 검증은 Python 3.10/MPS 기준입니다(패키지 지원 선언 >=3.10).
+현재 Mac 로컬 검증은 Python 3.10/Metal 기준입니다(패키지 지원 선언 >=3.10).
 새 환경은 다음과 같이 실행하며, 기존 환경도 코드 갱신 후 `alembic upgrade head`를 적용합니다.
 
 ```bash
@@ -42,6 +44,38 @@ pip install -e '.[dev,ai]'
 alembic upgrade head
 uvicorn app.main:app --reload
 ```
+
+### 로컬 STT 준비 (Qwen3-ASR-0.6B Q8_0)
+
+Python `qwen-asr`/Transformers 로더 대신 [speech.cpp 0.8.8](https://github.com/nyosegawa/speech.cpp/releases/tag/v0.8.8)의
+C API 3 라이브러리를 기존 실시간 자식 프로세스 안에서 사용합니다. 별도 STT 서버나
+원본 음성 임시 파일을 만들지 않으며 PCM/WAV, VAD, 발화 ID, 속도·습관어 후처리는 유지합니다.
+요약 모델과 동시 실행되지 않고 세션 종료·취소 시 실시간 프로세스와 함께 메모리를 회수합니다.
+무음은 추론하지 않으며 모델 로드 실패·추론 실패·중단된 결과는 가짜 전사로 대체하지 않습니다.
+
+Apple Silicon 준비 명령(프로젝트 루트, 최초 1회):
+
+```bash
+mkdir -p .models/speech
+curl -fL -o .models/speech-0.8.8-macos-arm64-metal.zip https://github.com/nyosegawa/speech.cpp/releases/download/v0.8.8/speech-0.8.8-macos-arm64-metal.zip
+shasum -a 256 .models/speech-0.8.8-macos-arm64-metal.zip
+# 기대 SHA256: 5d9e8d7b42321b000b98d2d35cb938ad547a607f227520d74467c9c4fea25416
+unzip .models/speech-0.8.8-macos-arm64-metal.zip -d .models/speech
+curl -fL -o .models/Qwen3-ASR-0.6B-Q8_0.gguf https://huggingface.co/sakasegawa/Qwen3-ASR-0.6B-GGUF/resolve/ee78f8709547f39bea3b924a16c72403826cac92/Qwen3-ASR-0.6B-Q8_0.gguf
+shasum -a 256 .models/Qwen3-ASR-0.6B-Q8_0.gguf
+# 기대 SHA256: 416e10c15b4a3d9002bd337d18fc450233fdf68502b6e10d1379d2789838afd0
+```
+
+기존 `.env`도 `STT_MODEL=.models/Qwen3-ASR-0.6B-Q8_0.gguf`,
+`STT_LIBRARY_PATH=.models/speech/libspeech.dylib`로 변경합니다. `STT_DEVICE=auto`는
+Metal 우선이며 GPU가 없으면 CPU를 선택합니다. `mps`는 Metal을 명시하고 `cpu`는 CPU를 명시합니다.
+CPU 성능과 Linux/Windows 실행은 별도 검증 대상입니다. 라이브러리의 실제 선택 장치는 상태 API에 표시합니다.
+
+[GGUF 변환판](https://huggingface.co/sakasegawa/Qwen3-ASR-0.6B-GGUF)의 전체 파일은 841,502,336바이트입니다.
+이는 같은 0.6B 모델의 가중치 양자화이며 모델 파라미터 수를 줄인 것은 아닙니다.
+원본은 [Qwen/Qwen3-ASR-0.6B](https://huggingface.co/Qwen/Qwen3-ASR-0.6B),
+revision `5eb144179a02acc5e5ba31e748d22b0cf3e303b0`, 가중치 라이선스는 Apache-2.0입니다.
+GGUF 포맷은 엔진별로 다를 수 있으므로 위 고정 파일과 라이브러리 조합을 사용하세요.
 
 ## 로컬 실시간 v2 (공통 처리 재설계 1단계)
 
@@ -84,19 +118,19 @@ PCM 패킷은 VAD로 비중첩 발화를 조립한 후 Qwen에서 최종 전사�
 
 ### 로컬 대본 요약
 
-발표 대본 옆 **요약 시작**을 누르면 Qwen3.5-0.8B Q8_0으로 문장별 요약을 만듭니다.
+발표 대본 옆 **요약 시작**을 누르면 Qwen3.5-9B Q4_K_M으로 문장별 요약을 만듭니다.
 대본 아래 원문별 입력칸에서 결과를 확인·수정하거나 모델 없이 직접 작성할 수 있습니다.
 **대본 요약 보기**를 켜면 발표 중 확정된 현재 문장 번호의 요약을 표시하며,
 끄면 기존 대본 가이드로 돌아갑니다. 대본을 수정하면 요약을 초기화합니다.
 
 실행 전에 플랫폼에 맞는 llama.cpp `llama-server`와 그 라이브러리를
-`.models/llama/`에, `Qwen3.5-0.8B-Q8_0.gguf`를 `.models/`에 준비하세요.
+`.models/llama/`에, `Qwen3.5-9B-Q4_K_M.gguf`를 `.models/`에 준비하세요.
 다른 위치라면 `SUMMARY_SERVER_PATH`·`SUMMARY_MODEL_PATH`를 지정합니다.
 이번 Mac 검증은 기존 llama.cpp b11429 및 다음 파일을 재사용했습니다.
 
-- GGUF: `ggml-org/Qwen3.5-0.8B-GGUF`, revision `8fea620810c4afa23dd6443f999a48574c1611a3`
-- 파일: `Qwen3.5-0.8B-Q8_0.gguf` (833,592,096 bytes)
-- SHA-256: `37ae482d336108d23516fa35e8e0c4126688d81018b87178a18d752a1357814f`
+- GGUF: `unsloth/Qwen3.5-9B-GGUF`, revision `3885219b6810b007914f3a7950a8d1b469d598a5`
+- 파일: `Qwen3.5-9B-Q4_K_M.gguf` (5,680,522,464 bytes)
+- SHA-256: `03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8`
 - 모델 Apache-2.0. 가중치·네이티브 실행 파일은 Git에 포함하지 않습니다.
 
 `POST /api/v1/scripts/summarize`는 인증 없는 현재 로컬 UI에 맞춘 개발 전용 API입니다.
@@ -104,12 +138,38 @@ development 환경, loopback 접속, 허용 목록의 필수 Origin을 모두 �
 실시간 세션이 진행 중이면 요약을 거절하고, 요약·모델 정리 중에는 WebSocket·WebRTC 세션 시작을 거절합니다.
 프로세스는 요청마다 실행하고 전체 문장 처리가 끝난 뒤 종료·회수하며, 완료 응답은 종료 후 보냅니다.
 GPU offload를 요청하되 실제 사용 장치는 설치된 llama.cpp 빌드·환경에 따릅니다.
-STT·시선 모델 자체는 기존 서비스 수명주기를 유지합니다.
+서버 부모 프로세스는 STT·시선 가중치를 로드하지 않습니다. `AI_MODE=local`에서만
+메모리 배타 모드를 지원하며, 외부 HTTP AI 모드의 요약은 명시적으로 거부합니다.
+
+모델 수명주기는 **대기(미로드) → 9B 요약 → 요약 프로세스 회수 → 대기 →
+발표 시작 시 STT·시선 자식 로딩 → 마지막 음성 drain → 실시간 자식 회수**입니다.
+단일 실행권을 모든 WebSocket v1/v2·WebRTC 진입점이 공유하므로 두 종류 모델의
+가중치 상주가 겹치지 않습니다. 같은 세션의 통신 조합은 유지하지만 다른 세션의 동시 시작은 거부합니다.
+실시간 IPC는 소유자 전용 Unix socket과 크기 제한된 JSON 메타데이터·raw bytes를 사용합니다.
+STT와 시선은 자식 내부에서 독립적으로 추론하며 기존 분석 및 리포트 계약을 유지합니다.
+
+실시간 모델 준비 제한은 `REALTIME_START_TIMEOUT_SECONDS`(기본 120초),
+화면 준비 대기는 130초입니다. 로딩·보정이 끝난 뒤 연습 타이머가 시작됩니다.
+WebRTC 응답 후 30초 안에 연결되지 않은 peer는 닫습니다. 다른 연결이 없으면 실시간 모델도 회수합니다.
+종료 시 마지막 음성 처리 및 모델 종료를 기다리며 화면 완료 대기는 45초입니다.
+모델은 `idle`(미로드), `loading`(준비 중), `ready`, `unavailable`을 구분합니다.
+프로세스 회수는 모델 소유 메모리 해제의 근거이며 OS 파일 캐시·swap의 즉시 초기화를 뜻하지 않습니다.
+매 세션 시작 시 모델 재로딩 비용이 있습니다. 다른 앱의 프로세스나 모델은 종료하지 않습니다.
 
 입력은 최대 20,000자·200문장·문장당 1,000자이며 원문 문장 분리는 기존 진행 가이드와 같습니다.
-전체 처리 제한은 `SUMMARY_TIMEOUT_SECONDS`(기본 180초)입니다.
+전체 처리 제한은 `SUMMARY_TIMEOUT_SECONDS`(기본 600초)입니다.
 모델 누락·실행 실패·시간 초과·연결 종료 시 결과를 꾸미지 않고 자식 프로세스를 정리합니다.
-출력 제한에 걸리거나 비어 있는 문장에는 요약 대신 오류를 표시하며 수동 입력할 수 있습니다.
+인접한 문장들을 의미 단위로 묶어 `groups`를 반환합니다. 각 묶음의 `start_sentence`·
+`end_sentence`는 0-based inclusive이며 원문은 서버가 조합합니다. 전체 원문을 순서대로
+중복·누락 없이 포함하는지 검증합니다. 묶음 범위 안에서는 발표 힌트가 동일하게 유지됩니다.
+묶기와 요약은 같은 추론에서 처리하며 별도 분류·검증 LLM이나 자동 재추론은 없습니다.
+한 번에 최대 16문장을 후보로 넣고 실제 tokenizer로 입력 2,304토큰 이하인지 확인해
+필요하면 줄입니다. 출력 1,536토큰과 chat template 공간을 남겨 context 4,096을 유지합니다.
+긴 대본의 청크 경계를 넘는 묶음은 생성하지 않습니다.
+UI는 `Accept: application/x-ndjson`으로 `progress`·`complete`·`error` 이벤트를 받습니다.
+진행도는 실제 확인된 원문 문장 수이며 시간 추정치가 아닙니다. 모델 준비/정리를 별도로 표시합니다.
+출력 제한·잘못된 매핑 구간에는 요약 대신 오류를 표시하며 직접 작성할 수 있습니다.
+재요약에 실패 구간이 있고 기존 힌트가 있으면 기존 편집본 전체를 유지합니다.
 원문과 요약은 로그나 DB에 저장하지 않고 현재 화면 상태로만 유지합니다. 새로고침하면 초기화됩니다.
 
 요약은 의미 보존이 검증된 결과가 아닌 **AI 초안**입니다. 수치·부정·조건을 확인한 뒤 사용하세요.

@@ -28,7 +28,7 @@ class ModuleStatus(BaseModel):
     provider: str
     model: str | None = None
     device: str | None = None
-    status: Literal["ready", "unavailable"]
+    status: Literal["idle", "loading", "ready", "unavailable"]
     reason: str | None = None
 
 

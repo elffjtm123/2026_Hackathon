@@ -65,13 +65,28 @@ def native_assets(tmp_path: Path) -> tuple[Path, Path, Path]:
         '  self.send_response(200); self.end_headers(); self.wfile.write(b\'{"status":"ok"}\')\n'
         " def do_POST(self):\n"
         "  data=json.loads(self.rfile.read(int(self.headers['Content-Length'])))\n"
+        "  if self.path=='/tokenize':\n"
+        "   self.send_response(200); self.end_headers()\n"
+        "   self.wfile.write(json.dumps({'tokens':[0]*min(3000,len(data['content'])//2)})"
+        ".encode()); return\n"
         "  content=data['messages'][0]['content']\n"
+        "  if len(content)//2>2304: self.send_error(400); return\n"
         "  text=content.split('<발표문>\\n',1)[1].split('\\n</발표문>',1)[0]\n"
         "  if '대기' in text: time.sleep(5)\n"
         "  reason='length' if '실패' in text else 'stop'\n"
-        "  result={'choices':[{'message':{'content':'요약: '+text},'finish_reason':reason}]}\n"
-        "  self.send_response(200); self.end_headers()\n"
-        "  self.wfile.write(json.dumps(result).encode())\n"
+        "  rows=[line.split('] ',1) for line in text.splitlines()]\n"
+        "  groups=[]\n"
+        "  for i in range(0,len(rows),2):\n"
+        "   pair=rows[i:i+2]; groups.append({'start_sentence':int(pair[0][0][1:]),"
+        "'end_sentence':int(pair[-1][0][1:]),'hint':'요약: '+' '.join(r[1] for r in pair)})\n"
+        "  result=json.dumps({'groups':groups},ensure_ascii=False)\n"
+        "  self.send_response(200); self.send_header('Content-Type','text/event-stream')\n"
+        "  self.end_headers()\n"
+        "  for fragment in [result[i:i+20] for i in range(0,len(result),20)]:\n"
+        "   event={'choices':[{'delta':{'content':fragment},'finish_reason':None}]}\n"
+        "   self.wfile.write(('data: '+json.dumps(event)+'\\n\\n').encode()); self.wfile.flush()\n"
+        "  final=json.dumps({'choices':[{'delta':{},'finish_reason':reason}]})\n"
+        "  self.wfile.write(('data: '+final+'\\n\\ndata: [DONE]\\n\\n').encode())\n"
         "HTTPServer(('127.0.0.1',int(sys.argv[sys.argv.index('--port')+1])),Handler).serve_forever()\n"
     )
     executable.chmod(0o700)
@@ -104,11 +119,17 @@ async def test_summary_preserves_sentence_ids_and_process_exits(native_assets) -
     service = summarizer(native_assets)
     result = await service.summarize("  같은 문장.\n같은 문장. 마지막 부분  ")
     assert result["normalized_script"] == "같은 문장. 같은 문장. 마지막 부분"
-    assert result["sentences"] == [
-        {"sentence_index": 0, "original": "같은 문장.", "hint": "요약: 같은 문장.", "error": None},
-        {"sentence_index": 1, "original": "같은 문장.", "hint": "요약: 같은 문장.", "error": None},
+    assert result["groups"] == [
         {
-            "sentence_index": 2,
+            "start_sentence": 0,
+            "end_sentence": 1,
+            "original": "같은 문장. 같은 문장.",
+            "hint": "요약: 같은 문장. 같은 문장.",
+            "error": None,
+        },
+        {
+            "start_sentence": 2,
+            "end_sentence": 2,
             "original": "마지막 부분",
             "hint": "요약: 마지막 부분",
             "error": None,
@@ -122,9 +143,40 @@ async def test_summary_preserves_sentence_ids_and_process_exits(native_assets) -
 async def test_truncated_generation_is_not_a_valid_hint(native_assets) -> None:
     service = summarizer(native_assets)
     result = await service.summarize("정상 문장. 실패 문장.")
-    assert result["sentences"][0]["hint"] == "요약: 정상 문장."
-    assert result["sentences"][1]["hint"] is None
-    assert result["sentences"][1]["error"]
+    assert result["groups"][0]["hint"] is None
+    assert result["groups"][0]["end_sentence"] == 1
+    assert result["groups"][0]["error"]
+    assert_process_gone(native_assets[2])
+
+
+@pytest.mark.asyncio
+async def test_grouped_batches_cover_long_input_and_real_progress(native_assets) -> None:
+    service = summarizer(native_assets)
+    updates = []
+    result = await service.summarize(" ".join(f"문장{i}." for i in range(34)), updates.append)
+    assert [(g["start_sentence"], g["end_sentence"]) for g in result["groups"]] == [
+        (i, i + 1) for i in range(0, 34, 2)
+    ]
+    counts = [p["completed_sentences"] for p in updates]
+    assert counts == sorted(counts) and counts[0] == 0 and counts[-1] == 34
+    assert any(0 < count < 34 for count in counts)
+    assert updates[0]["stage"] == "preparing" and updates[-1]["stage"] == "cleaning"
+    assert_process_gone(native_assets[2])
+
+
+@pytest.mark.asyncio
+async def test_context_budget_splits_before_inference_and_reports_failed_ranges(native_assets):
+    service = summarizer(native_assets)
+    updates = []
+    script = " ".join(("가" * 350) + "." for _ in range(20))
+    result = await service.summarize(script, updates.append)
+    cursor = 0
+    for group in result["groups"]:
+        assert group["start_sentence"] == cursor
+        assert group["hint"] is None and group["error"]
+        cursor = group["end_sentence"] + 1
+    assert cursor == 20 and len(result["groups"]) > 2
+    assert updates[-1]["failed_sentences"] == 20
     assert_process_gone(native_assets[2])
 
 
@@ -241,7 +293,10 @@ def test_summary_blocks_session_start_until_model_exit(client: TestClient) -> No
 
 
 @pytest.mark.asyncio
-async def test_disconnect_through_http_middleware_stops_summary(client, native_assets) -> None:
+@pytest.mark.parametrize("stream", [False, True])
+async def test_disconnect_through_http_middleware_stops_summary(
+    client, native_assets, stream
+) -> None:
     service = summarizer(native_assets)
     client.app.state.script_summarizer = service
     messages = asyncio.Queue()
@@ -257,7 +312,11 @@ async def test_disconnect_through_http_middleware_stops_summary(client, native_a
         "path": "/api/v1/scripts/summarize",
         "raw_path": b"/api/v1/scripts/summarize",
         "query_string": b"",
-        "headers": [(b"content-type", b"application/json"), (b"origin", b"http://testserver")],
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"origin", b"http://testserver"),
+            (b"accept", b"application/x-ndjson" if stream else b"application/json"),
+        ],
         "client": ("127.0.0.1", 50000),
         "server": ("testserver", 80),
     }
@@ -282,7 +341,7 @@ async def test_disconnect_through_http_middleware_stops_summary(client, native_a
         assert not service.busy, "HTTP disconnect did not cancel inference"
         assert_process_gone(native_assets[2])
         await asyncio.wait_for(task, timeout=2)
-        assert sent[0]["status"] == 499
+        assert sent[0]["status"] == (200 if stream else 499)
     finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)

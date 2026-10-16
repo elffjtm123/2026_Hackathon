@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { analyzeScript, formatTime } from "../scriptTools";
-import type { ScriptProgress } from '../../../lib/realtimeProtocol';
+import type { ScriptProgress, SessionPhase } from '../../../lib/realtimeProtocol';
 
 type KaraokeGuideProps = {
   script: string;
@@ -10,6 +10,7 @@ type KaraokeGuideProps = {
   keywordHintEnabled: boolean;
   progress?: ScriptProgress;
   sentenceHints?: Record<number, string>;
+  phase?: SessionPhase;
 };
 
 export function KaraokeGuide({
@@ -20,6 +21,7 @@ export function KaraokeGuide({
   keywordHintEnabled,
   progress,
   sentenceHints = {},
+  phase,
 }: KaraokeGuideProps) {
   const plan = useMemo(
     () => analyzeScript(script, timeLimitSeconds),
@@ -45,7 +47,14 @@ export function KaraokeGuide({
     sentenceStart,
     Math.min(plan.timeline.length, sentenceEnd)
   );
-  const hint = progress?.current_sentence_index == null ? '' : sentenceHints[progress.current_sentence_index]?.trim();
+  const hint = sentenceHints[progress?.current_sentence_index ?? 0]?.trim();
+  const guideStatus = currentIndex >= 0
+    ? progress?.alignment_status === 'uncertain' ? '정렬 불확실 · 마지막 위치 유지' : '대본 위치 확인'
+    : phase === 'preparing' ? '모델 준비 중 · 첫 문장 미리보기'
+    : phase === 'calibrating' ? '정면 보정 후 대본을 읽어 주세요'
+    : progress?.alignment_status === 'uncertain' ? '대본과 일치하는 발화를 찾지 못했습니다. 원문을 확인해 주세요.'
+    : phase === 'running' && elapsedSeconds >= 10 ? '음성 인식 결과 대기 · 마이크 입력을 확인해 주세요'
+    : '대본을 읽으면 인식된 위치에 맞춰 진행합니다';
 
   if ((!karaokeEnabled && !keywordHintEnabled) || !plan.normalizedScript) {
     return null;
@@ -58,11 +67,11 @@ export function KaraokeGuide({
       </div>
       {keywordHintEnabled ? (
         <div className="keyword-hints" aria-live="polite">
-          <span>{currentIndex < 0 ? '인식된 대본 위치 대기' : hint || '힌트 미설정 · 대본을 확인하세요.'}</span>
+          <span>{hint || '힌트 미설정 · 대본을 확인하세요.'}</span>
         </div>
       ) : (
         <div className="karaoke-line" aria-live="polite">
-          {currentIndex < 0 ? <span>인식된 대본 위치 대기</span> : sentenceTokens.length ? (
+          {sentenceTokens.length ? (
             sentenceTokens.map((item) => (
               <span
                 key={`${item.index}-${item.text}`}
@@ -83,7 +92,7 @@ export function KaraokeGuide({
         </div>
       )}
       <div className="karaoke-stats">
-        <span>실제 진행 {actualPercent}% · {progress?.alignment_status === 'uncertain' ? '정렬 불확실 · 마지막 위치 유지' : currentIndex < 0 ? '인식 대기' : '대본 위치 확인'}</span>
+        <span>실제 진행 {actualPercent}% · {guideStatus}</span>
         <span>목표 진행 {Math.min(100, Math.round(elapsedSeconds / Math.max(timeLimitSeconds, 1) * 100))}%</span>
         <span>{formatTime(elapsedSeconds)} / {formatTime(timeLimitSeconds)}</span>
         <span>남은 시간 {formatTime(remainingSeconds)}</span>

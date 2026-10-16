@@ -11,6 +11,7 @@ from aiortc import (
     RTCSessionDescription,
 )
 from aiortc.mediastreams import MediaStreamError
+from anyio import CancelScope
 from av import AudioResampler
 
 from app.ai.base import MediaPayload
@@ -18,6 +19,7 @@ from app.core.config import Settings
 from app.realtime.pipeline import SessionPipeline
 
 logger = logging.getLogger(__name__)
+CONNECT_TIMEOUT_SECONDS = 30
 
 
 class WebRTCManager:
@@ -44,6 +46,7 @@ class WebRTCManager:
         pc = RTCPeerConnection(self._configuration())
         self.connections.setdefault(session_id, set()).add(pc)
         subscriber_id = f"webrtc-{uuid4()}"
+        connect_timeout: asyncio.Task[None] | None = None
 
         @pc.on("datachannel")
         def on_datachannel(channel: object) -> None:
@@ -78,17 +81,44 @@ class WebRTCManager:
 
         @pc.on("connectionstatechange")
         async def on_connectionstatechange() -> None:
+            if pc.connectionState in {"connected", "failed", "closed", "disconnected"}:
+                if connect_timeout is not None and connect_timeout is not asyncio.current_task():
+                    connect_timeout.cancel()
             if pc.connectionState in {"failed", "closed", "disconnected"}:
+                pipeline.unsubscribe(subscriber_id)
+                peers = self.connections.get(session_id, set())
+                unplanned = pc in peers
+                peers.discard(pc)
+                await pc.close()
+                if unplanned and not self.connections.get(session_id) and not pipeline.subscribers:
+                    pipeline.incomplete = True
+                    await pipeline.stop()
+
+        try:
+            await pc.setRemoteDescription(RTCSessionDescription(sdp=sdp, type=offer_type))
+            answer = await pc.createAnswer()
+            await pc.setLocalDescription(answer)
+            if pc.localDescription is None:
+                raise RuntimeError("WebRTC answer was not created")
+
+            async def expire_unconnected() -> None:
+                nonlocal connect_timeout
+                await asyncio.sleep(CONNECT_TIMEOUT_SECONDS)
+                if pc.connectionState in {"new", "connecting"}:
+                    connect_timeout = None
+                    await pc.close()
+
+            connect_timeout = asyncio.create_task(
+                expire_unconnected(), name=f"webrtc-connect-{session_id}"
+            )
+            self._track(connect_timeout)
+            return pc.localDescription
+        except BaseException:
+            with CancelScope(shield=True):
                 pipeline.unsubscribe(subscriber_id)
                 await pc.close()
                 self.connections.get(session_id, set()).discard(pc)
-
-        await pc.setRemoteDescription(RTCSessionDescription(sdp=sdp, type=offer_type))
-        answer = await pc.createAnswer()
-        await pc.setLocalDescription(answer)
-        if pc.localDescription is None:
-            raise RuntimeError("WebRTC answer was not created")
-        return pc.localDescription
+            raise
 
     def _track(self, task: asyncio.Task[None]) -> None:
         self.tasks.add(task)

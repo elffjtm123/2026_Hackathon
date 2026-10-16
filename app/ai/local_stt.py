@@ -1,9 +1,12 @@
-import importlib.util
 import io
 import time
 from typing import Any
 
 from app.ai.base import AIResult, InferenceGate, MediaPayload
+from app.ai.native_stt import QwenGGUF
+
+DEFAULT_STT_MODEL = ".models/Qwen3-ASR-0.6B-Q8_0.gguf"
+DEFAULT_STT_LIBRARY = ".models/speech/libspeech.dylib"
 
 
 def active_speech_duration(
@@ -54,38 +57,21 @@ def has_speech(audio: Any, sample_rate: int) -> bool:
 class LocalQwenSpeechAdapter:
     def __init__(
         self,
-        model_name: str = "Qwen/Qwen3-ASR-0.6B",
+        model_name: str = DEFAULT_STT_MODEL,
         device: str = "auto",
         context: str = "",
         silence_rms_threshold: float = 0.003,
+        library_path: str = DEFAULT_STT_LIBRARY,
     ) -> None:
-        if importlib.util.find_spec("qwen_asr") is None:
-            raise RuntimeError("qwen-asr package is not installed")
-
         import numpy as np
         import soundfile as sf
-        import torch
-        from qwen_asr import Qwen3ASRModel
-
-        resolved_device = (
-            "mps" if device == "auto" and torch.backends.mps.is_available() else device
-        )
-        if resolved_device == "auto":
-            resolved_device = "cpu"
-        self.device = resolved_device
-        dtype = torch.float16 if resolved_device == "mps" else torch.float32
 
         self.np = np
         self.sf = sf
         self.context = context
         self.silence_rms_threshold = silence_rms_threshold
-        self.stt = Qwen3ASRModel.from_pretrained(
-            model_name,
-            device_map=resolved_device,
-            dtype=dtype,
-            max_inference_batch_size=1,
-            max_new_tokens=128,
-        )
+        self.stt = QwenGGUF(model_name, device, library_path)
+        self.device = self.stt.device
         self.gate = InferenceGate()
 
     async def infer(self, media: MediaPayload) -> AIResult:
@@ -94,6 +80,11 @@ class LocalQwenSpeechAdapter:
 
     def close(self) -> None:
         self.gate.close()
+        # A cancelled asyncio waiter may still have native inference using these weights.
+        if self.gate.busy and self.gate.future is not None:
+            self.gate.future.add_done_callback(lambda _: self.stt.close())
+        else:
+            self.stt.close()
 
     def _infer_sync(self, media: MediaPayload, started: float) -> AIResult:
         if media.format != "pcm16" and media.payload.startswith(b"RIFF"):
@@ -127,13 +118,13 @@ class LocalQwenSpeechAdapter:
             audio=(audio, sample_rate),
             context=self.context,
             language="Korean",
-        )[0]
+        )
         speech_duration = (
             media.voiced_ms / 1000
             if media.voiced_ms is not None
             else active_speech_duration(audio, sample_rate, self.silence_rms_threshold)
         )
-        return self._analyze_result(media, result.text, speech_duration, started, rms=rms)
+        return self._analyze_result(media, result, speech_duration, started, rms=rms)
 
     def _analyze_result(
         self,
@@ -165,9 +156,10 @@ class LocalQwenSpeechAdapter:
 
 
 def create_local_qwen_speech_adapter(
-    model_name: str = "Qwen/Qwen3-ASR-0.6B",
+    model_name: str = DEFAULT_STT_MODEL,
     device: str = "auto",
     context: str = "",
     silence_rms_threshold: float = 0.003,
+    library_path: str = DEFAULT_STT_LIBRARY,
 ) -> LocalQwenSpeechAdapter:
-    return LocalQwenSpeechAdapter(model_name, device, context, silence_rms_threshold)
+    return LocalQwenSpeechAdapter(model_name, device, context, silence_rms_threshold, library_path)

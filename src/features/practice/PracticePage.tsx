@@ -15,8 +15,9 @@ import { useUserMedia } from "./hooks/useUserMedia";
 import { completePracticeSession } from "./sessionLifecycle";
 import type { PracticeMode } from "./types";
 import {selectVisibleFeedback} from './feedbackState';
-import {summaryHints} from './scriptTools';
+import {manualSummaryGroups, groupHints, replacementSummaryGroups, type ScriptSummaryGroup, type SummaryProgress} from './scriptTools';
 import {requestScriptSummary} from './scriptSummary';
+import {modelStatusLabel} from '../../lib/realtimeProtocol';
 
 export function PracticePage() {
   const session = usePracticeSession();
@@ -38,10 +39,12 @@ export function PracticePage() {
     "안녕하세요. 오늘은 실시간 발표 피드백 서비스의 핵심 기능을 소개하겠습니다. 이 서비스는 시선, 발화 속도, 대본 일치도를 확인해 발표자가 더 안정적으로 연습할 수 있도록 돕습니다."
   );
   const [timeLimitSeconds, setTimeLimitSeconds] = useState(180);
-  const [sentenceHints, setSentenceHints] = useState<Record<number, string>>({});
+  const [summaryGroups, setSummaryGroups] = useState<ScriptSummaryGroup[] | null>(null);
+  const groups = summaryGroups ?? manualSummaryGroups(presentationScript);
+  const sentenceHints = groupHints(groups);
   const [isSummarizing, setIsSummarizing] = useState(false);
   const [summaryError, setSummaryError] = useState<string | null>(null);
-  const [sentenceErrors, setSentenceErrors] = useState<Record<number, string>>({});
+  const [summaryProgress, setSummaryProgress] = useState<SummaryProgress | null>(null);
   const [summarySeconds, setSummarySeconds] = useState<number | null>(null);
   const summaryRequest = useRef<AbortController | null>(null);
   const scriptVersion = useRef(0);
@@ -49,7 +52,7 @@ export function PracticePage() {
 
   const handleScriptChange = (script: string) => {
     scriptVersion.current++;
-    setPresentationScript(script); setSentenceHints({}); setSentenceErrors({});
+    setPresentationScript(script); setSummaryGroups(null); setSummaryProgress(null);
     setSummaryError(null); setSummarySeconds(null);
   };
   const handleSummarize = async () => {
@@ -59,14 +62,13 @@ export function PracticePage() {
     const controller = new AbortController();
     const version = scriptVersion.current;
     summaryRequest.current = controller;
-    setIsSummarizing(true); setSummaryError(null);
+    setIsSummarizing(true); setSummaryError(null); setSummaryProgress(null);
     try {
-      const result = await requestScriptSummary(presentationScript, controller.signal);
+      const result = await requestScriptSummary(presentationScript, controller.signal, progress => {
+        if (!controller.signal.aborted && version === scriptVersion.current) setSummaryProgress(progress);
+      });
       if (controller.signal.aborted || version !== scriptVersion.current) return;
-      const hints = summaryHints(presentationScript, result);
-      setSentenceHints(current => ({...current, ...hints}));
-      setSentenceErrors(Object.fromEntries(result.sentences
-        .filter(item => item.error).map(item => [item.sentence_index, item.error!])));
+      setSummaryGroups(replacementSummaryGroups(presentationScript, result, groups));
       setSummarySeconds(result.elapsed_seconds);
     } catch (error) {
       if (!controller.signal.aborted && version === scriptVersion.current)
@@ -215,15 +217,15 @@ export function PracticePage() {
             disabled={session.isActive || isStarting}
             onScriptChange={handleScriptChange}
             onTimeLimitChange={handleTimeLimitChange}
-            sentenceHints={sentenceHints}
+            groups={groups}
             onHintChange={(index, hint) => {
-              setSentenceHints(current => ({...current, [index]:hint}));
-              setSentenceErrors(current => ({...current, [index]:''}));
+              setSummaryGroups(current => (current ?? manualSummaryGroups(presentationScript))
+                .map((group, i) => i === index ? {...group, hint, error:null} : group));
             }}
             onSummarize={() => void handleSummarize()}
             isSummarizing={isSummarizing}
             summaryError={summaryError}
-            sentenceErrors={sentenceErrors}
+            summaryProgress={summaryProgress}
             summarySeconds={summarySeconds}
           />
           <FeatureToggles
@@ -236,11 +238,12 @@ export function PracticePage() {
 
       {media.error ? <p className="error-banner">{media.error}</p> : null}
       {operationError ? <p className="error-banner" role="alert">{operationError}</p> : null}
+      {session.phase === 'preparing' ? <p role="status">음성·시선 모델을 준비 중입니다. 준비와 보정이 끝난 뒤 연습 시간이 시작됩니다.</p> : null}
       {session.phase === 'calibrating' ? <p role="status">카메라를 바라보며 보정 중입니다. 연습 시간은 보정 완료 후 시작합니다.</p> : null}
       {['calibrating', 'running'].includes(session.phase) && socket.status === 'connected' ? <button type="button" className="secondary-button" onClick={socket.startCalibration}>다시 보정</button> : null}
       {session.phase === 'draining' ? <p role="status">마지막 음성을 분석하고 있습니다.</p> : null}
       <div aria-label="모델 상태">{Object.entries(socket.modules).map(([name, module]) =>
-        <span key={name}>{name === 'gaze' ? '시선' : '음성'}: {module.status === 'unavailable' ? '사용 불가' : module.model ?? module.provider}{module.device ? ' (' + module.device + ')' : ''} · </span>
+        <span key={name}>{name === 'gaze' ? '시선' : '음성'}: {modelStatusLabel(module)} · {module.model ?? module.provider}{module.device ? ' (' + module.device + ')' : ''} · </span>
       )}</div>
 
       {session.mode === "interview" ? (
@@ -271,6 +274,7 @@ export function PracticePage() {
                 keywordHintEnabled={session.featureSettings.keywordHintEnabled}
                 progress={session.feedbackState.scriptProgress}
                 sentenceHints={sentenceHints}
+                phase={session.phase}
               />
             </section>
             <FeedbackPanel

@@ -108,12 +108,10 @@ def test_text_cannot_bypass_qwen_inference(monkeypatch: pytest.MonkeyPatch) -> N
 
 
 def test_confirmed_100ms_segment_is_transcribed_without_second_vad_gate():
-    from types import SimpleNamespace
-
     class Model:
         def transcribe(self, **kwargs):
             assert len(kwargs["audio"][0]) == 1600
-            return [SimpleNamespace(text="네")]
+            return "네"
 
     adapter = LocalQwenSpeechAdapter.__new__(LocalQwenSpeechAdapter)
     adapter.np, adapter.sf = np, sf

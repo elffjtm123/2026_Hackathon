@@ -5,6 +5,7 @@ from uuid import UUID
 from anyio import CancelScope
 
 from app.ai.base import GazeAdapter, SpeechAdapter
+from app.ai.model_execution import ModelExecution
 from app.ai.script_summary import LocalScriptSummarizer
 from app.core.config import Settings
 from app.realtime.pipeline import SessionPipeline
@@ -19,12 +20,14 @@ class PipelineRegistry:
         gaze: GazeAdapter,
         speech: SpeechAdapter,
         summarizer: LocalScriptSummarizer,
+        execution: ModelExecution | None = None,
     ) -> None:
         self.settings = settings
         self.state_store = state_store
         self.gaze = gaze
         self.speech = speech
         self.summarizer = summarizer
+        self.execution = execution
         self.pipelines: dict[UUID, SessionPipeline] = {}
         self._lock = asyncio.Lock()
 
@@ -35,6 +38,8 @@ class PipelineRegistry:
             if self.summarizer.busy:
                 raise ValueError("SUMMARY_BUSY")
             pipeline = self.pipelines.get(session_id)
+            if pipeline is not None and pipeline.phase in {"draining", "completed"}:
+                raise ValueError("SESSION_NOT_ACTIVE")
             if pipeline is not None and protocol == 2:
                 raise ValueError("SESSION_ALREADY_CONNECTED")
             if pipeline is None:
@@ -45,6 +50,7 @@ class PipelineRegistry:
                     self.gaze,
                     self.speech,
                     analysis_settings,
+                    self.execution,
                 )
                 pipeline.protocol = protocol
                 self.pipelines[session_id] = pipeline

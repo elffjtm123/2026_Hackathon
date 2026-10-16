@@ -38,7 +38,8 @@ class Settings(BaseSettings):
     vision_provider: Literal["legacy", "uniface"] = "uniface"
     face_landmarker_path: str = ".models/face_landmarker.task"
     stt_provider: Literal["qwen3_asr"] = "qwen3_asr"
-    stt_model: str = "Qwen/Qwen3-ASR-0.6B"
+    stt_model: str = ".models/Qwen3-ASR-0.6B-Q8_0.gguf"
+    stt_library_path: str = ".models/speech/libspeech.dylib"
     stt_device: str = "auto"
     stt_context: str = ""
     stt_silence_rms_threshold: float = 0.003
@@ -57,8 +58,9 @@ class Settings(BaseSettings):
     module_timeout_seconds: float = 3.0
     max_script_chars: int = 20_000
     summary_server_path: str = ".models/llama/llama-server"
-    summary_model_path: str = ".models/Qwen3.5-0.8B-Q8_0.gguf"
-    summary_timeout_seconds: float = Field(default=180, gt=0, le=600)
+    summary_model_path: str = ".models/Qwen3.5-9B-Q4_K_M.gguf"
+    summary_timeout_seconds: float = Field(default=600, gt=0, le=600)
+    realtime_start_timeout_seconds: float = Field(default=120, gt=0, le=120)
     min_time_limit_seconds: int = 30
     max_time_limit_seconds: int = 3_600
 

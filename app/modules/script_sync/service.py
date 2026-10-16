@@ -1,4 +1,5 @@
 import re
+from bisect import bisect_right
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from typing import Any
@@ -7,6 +8,10 @@ HANGUL_PATTERN = re.compile(r"[\uac00-\ud7a3]")
 TOKEN_PATTERN = re.compile(r"\S+")
 SENTENCE_END_PATTERN = re.compile(r"[.!?。！？]+$")
 CLAUSE_END_PATTERN = re.compile(r"[,;:，；：]+$")
+
+
+def _alignment_text(text: str) -> str:
+    return re.sub(r"[^0-9a-z가-힣]", "", text.lower())
 
 
 def normalize_script(text: str) -> str:
@@ -100,26 +105,43 @@ class ScriptSyncService:
         self.plan = plan
         self.cursor = -1
         self.confirmed_cursor = -1
+        self.tokens = [_alignment_text(str(item["text"])) for item in plan.timeline]
+        self.text = "".join(self.tokens)
+        self.ends: list[int] = []
+        offset = 0
+        for token in self.tokens:
+            offset += len(token)
+            self.ends.append(offset)
 
     def update(self, transcript: str, timestamp_ms: int, *, is_final: bool) -> dict[str, Any]:
-        def normalize(text: str) -> str:
-            return re.sub(r"[^0-9a-z가-힣]", "", text.lower())
-
-        text = normalize(transcript)
-        tokens = [normalize(str(item["text"])) for item in self.plan.timeline]
+        text = _alignment_text(transcript)
+        tokens = self.tokens
         candidates: list[tuple[float, int, int]] = []
         if is_final and len(text) >= 4:
             start = max(0, self.confirmed_cursor - 3)
-            stop = min(len(tokens), start + 40)
-            for left in range(start, stop):
-                joined = ""
-                for right in range(left, stop):
-                    joined += tokens[right]
-                    if len(joined) > len(text) * 1.6:
-                        break
-                    if len(joined) >= len(text) * 0.6:
-                        score = SequenceMatcher(None, text, joined, autojunk=False).ratio()
-                        candidates.append((score, left, right))
+            offset = self.ends[start - 1] if start else 0
+            exact = self.text.find(text, offset)
+            if exact >= 0:
+                if self.text.find(text, exact + 1) < 0:
+                    candidates.append(
+                        (
+                            1.0,
+                            bisect_right(self.ends, exact),
+                            bisect_right(self.ends, exact + len(text) - 1),
+                        )
+                    )
+                # Repeated exact phrases remain ambiguous, even outside the local window.
+            else:
+                for left in range(start, min(len(tokens), start + 40)):
+                    joined = ""
+                    # Bound by transcript length, not a fixed 40-token end position.
+                    for right in range(left, len(tokens)):
+                        joined += tokens[right]
+                        if len(joined) > len(text) * 1.6:
+                            break
+                        if len(joined) >= len(text) * 0.6:
+                            score = SequenceMatcher(None, text, joined, autojunk=False).ratio()
+                            candidates.append((score, left, right))
         candidates.sort(reverse=True)
         best = candidates[0] if candidates else (0.0, 0, 0)
         # Alternate lengths of the same span are not independent competing matches.
