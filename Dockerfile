@@ -18,5 +18,12 @@ RUN pip install '.[ai]'
 COPY alembic.ini ./
 COPY alembic ./alembic
 
+# The API only needs to read its own code, so it must not run as root.
+RUN groupadd --system --gid 10001 app \
+    && useradd --system --uid 10001 --gid app --no-create-home app \
+    && chown -R app:app /app
+
+USER app
+
 EXPOSE 8000
 CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"]

@@ -1,4 +1,6 @@
+import asyncio
 import logging
+import re
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
@@ -20,7 +22,12 @@ from app.api.v1.auth import router as auth_router
 from app.api.v1.scripts import router as scripts_router
 from app.api.v1.sessions import router as sessions_router
 from app.api.v1.websocket import router as websocket_router
-from app.core.config import Settings, get_settings
+from app.core.config import (
+    KNOWN_WEAK_SECRETS,
+    PRODUCTION_SECRET_MIN_LENGTH,
+    Settings,
+    get_settings,
+)
 from app.core.errors import AppError
 from app.core.logging import configure_logging
 from app.db import models  # noqa: F401 -- registers SQLAlchemy metadata
@@ -31,6 +38,24 @@ from app.realtime.state import SessionStateStore
 from app.realtime.webrtc import WebRTCManager
 
 logger = logging.getLogger(__name__)
+
+# Only opaque, log-safe identifiers are echoed back; anything else is replaced.
+_REQUEST_ID_PATTERN = re.compile(r"[A-Za-z0-9._:-]{1,128}")
+
+
+def assert_secure_settings(settings: Settings) -> None:
+    """Refuse to boot production with a guessable signing key."""
+    if settings.app_env != "production":
+        return
+    if len(settings.jwt_secret) < PRODUCTION_SECRET_MIN_LENGTH:
+        raise RuntimeError(
+            f"A JWT_SECRET of at least {PRODUCTION_SECRET_MIN_LENGTH} characters is required "
+            "in production"
+        )
+    if settings.jwt_secret.strip().lower() in KNOWN_WEAK_SECRETS:
+        raise RuntimeError(
+            "JWT_SECRET is a documented placeholder and cannot be used in production"
+        )
 
 
 def create_realtime_process(settings: Settings) -> Any:
@@ -67,8 +92,7 @@ def error_body(
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
-    if settings.app_env == "production" and settings.jwt_secret.startswith("development-"):
-        raise RuntimeError("A secure JWT_SECRET is required in production")
+    assert_secure_settings(settings)
     configure_logging()
 
     @asynccontextmanager
@@ -123,6 +147,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         app.state.webrtc = WebRTCManager(settings)
         app.state.websocket_counts = {}
+        # Guards the check-then-increment of websocket_counts across concurrent handshakes.
+        app.state.websocket_lock = asyncio.Lock()
         if settings.auto_create_tables:
             await database.create_tables()
         try:
@@ -151,10 +177,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.middleware("http")
     async def request_context(request: Request, call_next: object) -> object:
-        request_id = request.headers.get("X-Request-ID", str(uuid4()))[:128]
+        supplied = request.headers.get("X-Request-ID", "")
+        request_id = supplied if _REQUEST_ID_PATTERN.fullmatch(supplied) else str(uuid4())
         request.state.request_id = request_id
         response = await call_next(request)  # type: ignore[operator]
         response.headers["X-Request-ID"] = request_id
+        # Browser-facing defaults for an API that only returns JSON.
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("Referrer-Policy", "no-referrer")
+        if request.url.path.startswith(settings.api_prefix):
+            # Authenticated payloads must not be cached by proxies or the browser.
+            response.headers.setdefault("Cache-Control", "no-store")
         return response
 
     @app.exception_handler(AppError)
@@ -168,11 +202,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def validation_error_handler(
         request: Request, exc: RequestValidationError
     ) -> JSONResponse:
+        # pydantic errors carry the rejected input and raw exception objects; echoing
+        # them would leak submitted values (passwords) and can break JSON encoding.
+        details = [
+            {
+                "loc": [str(part) for part in error.get("loc", ())],
+                "msg": str(error.get("msg", "invalid value")),
+                "type": str(error.get("type", "value_error")),
+            }
+            for error in exc.errors()
+        ]
         return JSONResponse(
             status_code=422,
-            content=error_body(
-                request, "VALIDATION_ERROR", "입력값이 올바르지 않습니다.", exc.errors()
-            ),
+            content=error_body(request, "VALIDATION_ERROR", "입력값이 올바르지 않습니다.", details),
         )
 
     @app.exception_handler(HTTPException)

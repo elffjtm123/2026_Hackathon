@@ -145,6 +145,9 @@ async def _negotiate_webrtc(
                             registry.pipelines.pop(session.id, None)
         if not isinstance(exc, Exception):
             raise
+        if isinstance(exc, AppError):
+            # Capacity and policy rejections keep their own status code.
+            raise
         raise AppError(
             "WEBRTC_NEGOTIATION_FAILED", "WebRTC 연결 협상에 실패했습니다.", 400
         ) from exc

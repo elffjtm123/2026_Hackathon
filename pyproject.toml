@@ -19,7 +19,8 @@ dependencies = [
   "PyJWT>=2.9,<3",
   "python-multipart>=0.0.12,<1",
   "redis>=5,<7",
-  "SQLAlchemy[asyncio]>=2.0,<3",
+  # SQLAlchemy 2.1 removed sqlalchemy.ext.mypy.plugin, which the mypy config below uses.
+  "SQLAlchemy[asyncio]>=2.0,<2.1",
   "uvicorn[standard]>=0.30,<1",
 ]
 

@@ -530,10 +530,14 @@ async def session_websocket(websocket: WebSocket, session_id: UUID, token: str) 
         if session.status not in {SessionStatus.created, SessionStatus.active}:
             await websocket.close(code=4409, reason="session is not active")
             return
-        connection_count = websocket.app.state.websocket_counts.get(session_id, 0)
-        if connection_count >= settings.max_connections_per_session:
-            await websocket.close(code=4429, reason="too many connections")
-            return
+        # Check and reserve under one lock: two simultaneous handshakes must not both
+        # observe the same free slot.
+        async with websocket.app.state.websocket_lock:
+            connection_count = websocket.app.state.websocket_counts.get(session_id, 0)
+            if connection_count >= settings.max_connections_per_session:
+                await websocket.close(code=4429, reason="too many connections")
+                return
+            websocket.app.state.websocket_counts[session_id] = connection_count + 1
         if session.status == SessionStatus.created:
             from app.services.session_service import activate_session
 
@@ -544,8 +548,14 @@ async def session_websocket(websocket: WebSocket, session_id: UUID, token: str) 
             "time_limit_seconds": session.time_limit_seconds,
         }
 
-    await websocket.accept()
-    websocket.app.state.websocket_counts[session_id] = connection_count + 1
+    try:
+        await websocket.accept()
+    except BaseException:
+        # The reserved slot must be released if the handshake never completes.
+        websocket.app.state.websocket_counts[session_id] = max(
+            0, websocket.app.state.websocket_counts.get(session_id, 1) - 1
+        )
+        raise
     if websocket.query_params.get("protocol") == "2":
         try:
             await _v2_session(websocket, session_id, analysis_settings, claims.subject)

@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
 from app.db.models.session import PracticeType, SessionStatus
 
@@ -29,6 +29,15 @@ class SessionCreate(BaseModel):
     script: str | None = None
     time_limit_seconds: int | None = None
     settings: AnalysisSettings = Field(default_factory=AnalysisSettings)
+
+    @field_validator("title")
+    @classmethod
+    def title_must_not_be_blank(cls, value: str) -> str:
+        # min_length alone accepts "   ", which would be stored as an empty title.
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("title must contain a visible character")
+        return stripped
 
 
 class SessionResponse(BaseModel):

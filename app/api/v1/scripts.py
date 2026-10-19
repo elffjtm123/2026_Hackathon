@@ -43,21 +43,27 @@ async def script_summarize(payload: ScriptSummaryRequest, request: Request) -> A
         async def stream() -> AsyncIterator[str]:
             queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=512)
 
+            def progress(data: dict[str, Any]) -> None:
+                # Progress is advisory: drop frames instead of failing the request
+                # when a slow reader has filled the queue.
+                try:
+                    queue.put_nowait({"event": "progress", "data": data})
+                except asyncio.QueueFull:
+                    pass
+
             async def produce() -> None:
                 try:
                     result = await request.app.state.script_summarizer.summarize(
-                        payload.script,
-                        on_progress=lambda data: queue.put_nowait(
-                            {"event": "progress", "data": data}
-                        ),
+                        payload.script, on_progress=progress
                     )
-                    queue.put_nowait({"event": "complete", "data": result})
+                    # The terminal frame must never be dropped or the client hangs.
+                    await queue.put({"event": "complete", "data": result})
                 except AppError as exc:
-                    queue.put_nowait(
+                    await queue.put(
                         {"event": "error", "data": {"code": exc.code, "message": exc.message}}
                     )
                 except Exception:
-                    queue.put_nowait(
+                    await queue.put(
                         {
                             "event": "error",
                             "data": {

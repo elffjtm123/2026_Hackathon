@@ -1,8 +1,19 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Values that ship in documentation or compose files and must never reach production.
+KNOWN_WEAK_SECRETS = frozenset(
+    {
+        "development-only-secret-change-me-now",
+        "replace-with-at-least-32-random-characters",
+        "changeme",
+        "secret",
+    }
+)
+PRODUCTION_SECRET_MIN_LENGTH = 32
 
 
 class Settings(BaseSettings):
@@ -17,9 +28,14 @@ class Settings(BaseSettings):
     auto_create_tables: bool = True
 
     jwt_secret: str = "development-only-secret-change-me-now"
-    jwt_algorithm: str = "HS256"
+    # Symmetric algorithms only: the secret is shared, so "none"/RS* would be a downgrade.
+    jwt_algorithm: Literal["HS256", "HS384", "HS512"] = "HS256"
     access_token_minutes: int = 15
     refresh_token_days: int = 14
+    auth_attempts_per_minute: int = Field(default=20, gt=0, le=1_000)
+    # Enable only when a trusted reverse proxy overwrites X-Forwarded-For. Otherwise a
+    # client could pick its own rate-limit bucket.
+    trust_proxy_headers: bool = False
 
     cors_origins: list[str] = Field(
         default_factory=lambda: [
@@ -74,6 +90,22 @@ class Settings(BaseSettings):
         if len(value) < 16:
             raise ValueError("JWT_SECRET must contain at least 16 characters")
         return value
+
+    @model_validator(mode="after")
+    def require_production_secret(self) -> "Settings":
+        # A short or documented secret lets anyone mint tokens for any account.
+        if self.app_env != "production":
+            return self
+        if len(self.jwt_secret) < PRODUCTION_SECRET_MIN_LENGTH:
+            raise ValueError(
+                f"JWT_SECRET must contain at least {PRODUCTION_SECRET_MIN_LENGTH} characters "
+                "when APP_ENV=production"
+            )
+        if self.jwt_secret.strip().lower() in KNOWN_WEAK_SECRETS:
+            raise ValueError(
+                "JWT_SECRET is a documented placeholder and cannot be used in production"
+            )
+        return self
 
 
 @lru_cache
