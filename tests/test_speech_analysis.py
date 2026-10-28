@@ -102,17 +102,6 @@ def test_multi_word_fillers_are_not_counted_again_as_single_words():
     assert result.filler_counts == {"뭔가 좀": 1, "솔직히 말해서": 1}
 
 
-def test_standalone_analyzers_reuse_korean_rate_and_filler_rules():
-    from stt import FillerWordAnalyzer, SpeechRateAnalyzer
-
-    rate = SpeechRateAnalyzer().analyze("가" * 38 + " API 123", 6)
-    assert rate["cpm"] == 380
-    assert rate["level"] == "FAST"
-    fillers = FillerWordAnalyzer().analyze("음, 그 그 뭔가 좀")
-    assert fillers["counts"] == {"음": 1, "그": 2, "뭔가 좀": 1}
-    assert fillers["repeat_count"] == 1
-
-
 def test_warning_episodes_are_not_counted_per_event_and_silence_resets_episode():
     from app.ai.base import AIResult
     from app.realtime.aggregator import FeedbackAggregator

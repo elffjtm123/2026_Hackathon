@@ -15,6 +15,5 @@ dist
 .models
 tests
 docs
-Sample
 *.csv
 *.pkl

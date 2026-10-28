@@ -59,8 +59,6 @@ def test_silent_audio_skips_qwen_inference(wav: bool) -> None:
 
 
 def test_low_level_microphone_noise_does_not_reach_qwen() -> None:
-    from stt import FillerWordAnalyzer, SpeechRateAnalyzer
-
     class FailIfCalled:
         def transcribe(self, **_: object) -> object:
             raise AssertionError("microphone noise must not reach Qwen")
@@ -69,8 +67,6 @@ def test_low_level_microphone_noise_does_not_reach_qwen() -> None:
     adapter.np = np
     adapter.silence_rms_threshold = 0.003
     adapter.stt = FailIfCalled()
-    adapter.rate = SpeechRateAnalyzer()
-    adapter.filler = FillerWordAnalyzer()
 
     noise = np.random.default_rng(7).normal(0, 0.005, 32_000)
     payload = MediaPayload(uuid4(), 1000, (noise * 32767).astype("<i2").tobytes())
@@ -84,8 +80,6 @@ def test_low_level_microphone_noise_does_not_reach_qwen() -> None:
 
 
 def test_text_cannot_bypass_qwen_inference(monkeypatch: pytest.MonkeyPatch) -> None:
-    from stt import FillerWordAnalyzer, SpeechRateAnalyzer
-
     class FailingModel:
         def transcribe(self, **_: object) -> object:
             raise RuntimeError("model inference failed")
@@ -94,8 +88,6 @@ def test_text_cannot_bypass_qwen_inference(monkeypatch: pytest.MonkeyPatch) -> N
     adapter.np = np
     adapter.silence_rms_threshold = 0.003
     adapter.stt = FailingModel()
-    adapter.rate = SpeechRateAnalyzer()
-    adapter.filler = FillerWordAnalyzer()
     monkeypatch.setattr("app.ai.local_stt.has_speech", lambda *_: True)
     payload = b'{"text":"invented transcript","duration_ms":2000}'
     # Also valid, long PCM bytes: the former text shortcut must not take precedence.
