@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { acceptCurrentMedia } from '../sessionLifecycle.ts';
+import { acceptCurrentMedia, MICROPHONE_CONSTRAINTS } from '../sessionLifecycle.ts';
 
 export function mediaErrorMessage(error: unknown) {
   if (error instanceof DOMException) {
@@ -56,7 +56,7 @@ export function useUserMedia() {
       void resumed.catch(() => undefined);
       const nextStream = await navigator.mediaDevices.getUserMedia({
         video: true,
-        audio: true,
+        audio: MICROPHONE_CONSTRAINTS,
       });
       acquired = nextStream;
       acceptCurrentMedia(nextStream, generation, generationRef.current);

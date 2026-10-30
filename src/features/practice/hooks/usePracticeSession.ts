@@ -29,6 +29,7 @@ export function usePracticeSession() {
     useState<PresentationFeatureSettings>({
       karaokeGuideEnabled: true,
       keywordHintEnabled: false,
+      deliveryEnabled: true,
     });
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [startedAt, setStartedAt] = useState<number | null>(null);

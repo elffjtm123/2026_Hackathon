@@ -111,6 +111,7 @@ export type PracticeMode = "interview" | "presentation";
 export type PresentationFeatureSettings = {
   karaokeGuideEnabled: boolean;
   keywordHintEnabled: boolean;
+  deliveryEnabled: boolean;
 };
 
 export type RealtimeFeedback = {

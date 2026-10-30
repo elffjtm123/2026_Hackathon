@@ -1,6 +1,7 @@
 """Session-scoped delivery feature aggregation. No raw PCM is retained."""
 
 import itertools
+import threading
 from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any
@@ -68,6 +69,8 @@ class DeliveryAnalyzer:
         self.last_ms = 0
         self.sentences: dict[int, _Sentence] = {}
         self.pending: list[tuple[int, int, float]] = []
+        # observe_frame runs on the event loop while observe_utterance runs in a worker thread.
+        self._pending_lock = threading.Lock()
         self.burst_items: list[tuple[int, int, int, int]] = []
         self.voiced_clock = 0
         self.last_sentence_index = 0
@@ -86,7 +89,8 @@ class DeliveryAnalyzer:
         self.first_ms = start_ms if self.first_ms is None else min(self.first_ms, start_ms)
         self.last_ms = max(self.last_ms, end_ms)
         if voiced:
-            self.pending.append((start_ms, end_ms, rms))
+            with self._pending_lock:
+                self.pending.append((start_ms, end_ms, rms))
 
     def observe_utterance(
         self,
@@ -112,8 +116,9 @@ class DeliveryAnalyzer:
         # Frames are contiguous across a max_length cut, so no gap is inferred there.
         sentence = self.sentences.setdefault(sentence_index, _Sentence())
         before = sentence.voiced_ms
-        frames = [x for x in self.pending if start_ms <= x[0] < end_ms]
-        self.pending = [x for x in self.pending if x[0] >= end_ms]
+        with self._pending_lock:
+            frames = [x for x in self.pending if start_ms <= x[0] < end_ms]
+            self.pending = [x for x in self.pending if x[0] >= end_ms]
         slot_ms: Counter[int] = Counter()
         for start, end, rms in frames:
             sentence.add_frame(start, end, rms)
@@ -235,7 +240,7 @@ class DeliveryAnalyzer:
                     "end_ms": start + self.window_ms,
                     "voiced_ms": w.voiced_ms,
                     "observed_ms": observed,
-                    "coverage": w.voiced_ms / observed,
+                    "coverage": min(1.0, w.voiced_ms / observed) if observed > 0 else None,
                     "syllables": w.syllables,
                     "disfluencies": w.disfluencies,
                     "speech_rate": acoustic(features.speech_rate(w.syllables, observed)),

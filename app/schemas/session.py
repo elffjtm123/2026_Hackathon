@@ -21,6 +21,9 @@ class AnalysisSettings(BaseModel):
     karaoke_guide_enabled: bool = Field(
         True, validation_alias=AliasChoices("karaoke_guide_enabled", "karaokeGuideEnabled")
     )
+    delivery_enabled: bool = Field(
+        True, validation_alias=AliasChoices("delivery_enabled", "deliveryEnabled")
+    )
 
 
 class SessionCreate(BaseModel):
@@ -102,5 +105,6 @@ class ReportResponse(BaseModel):
     speech_rate_metrics: dict[str, Any]
     pronunciation_metrics: dict[str, Any]
     script_sync_metrics: dict[str, Any]
+    delivery_metrics: dict[str, Any]
     scoring_version: str
     created_at: datetime

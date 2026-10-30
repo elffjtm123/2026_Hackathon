@@ -18,6 +18,7 @@ class MediaPayload:
     utterance_id: str | None = None
     end_ms: int | None = None
     voiced_ms: int | None = None
+    cut_reason: str | None = None
 
 
 @dataclass(slots=True, frozen=True)

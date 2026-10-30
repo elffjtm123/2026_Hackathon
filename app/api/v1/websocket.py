@@ -53,9 +53,13 @@ async def _v2_session(
     calibration_timer: asyncio.Task[None] | None = None
     live_registered = False
     pending_message: Message | None = None
+    # Latest audio settings that arrive while the model is still preparing (the pipeline may be
+    # swapped). Only the last value matters, so a flooding client cannot grow memory.
+    early_audio_settings: Any = None
+    has_early_audio_settings = False
 
     async def prepare_or_cancel(operation: asyncio.Task[None]) -> bool:
-        nonlocal client_sequence, pending_message
+        nonlocal client_sequence, pending_message, early_audio_settings, has_early_audio_settings
         receiving = asyncio.create_task(websocket.receive())
         try:
             while True:
@@ -77,6 +81,18 @@ async def _v2_session(
                         client_sequence = event.sequence
                         pipeline.incomplete = True
                         return False
+                    if event.event == "session.audio_settings" and event.session_id in {
+                        None,
+                        session_id,
+                    }:
+                        if event.sequence <= client_sequence:
+                            raise ValueError("INVALID_CONTROL_SESSION_OR_SEQUENCE")
+                        client_sequence = event.sequence
+                        early_audio_settings = event.data.get("audio_settings")
+                        has_early_audio_settings = True
+                        # Always re-arm: the consumed message must never be re-captured.
+                        receiving = asyncio.create_task(websocket.receive())
+                        continue
                     if operation in done:
                         pending_message = message
                         await operation
@@ -136,7 +152,11 @@ async def _v2_session(
                 if raw is None or len(raw.encode()) > settings.max_json_message_bytes:
                     raise ValueError("INVALID_MESSAGE_SIZE")
                 event = V2ClientEvent.model_validate(json.loads(raw))
-                early_end = event.event == "session.end" and event.session_id is None
+                # The client may not know the session id yet (model still preparing).
+                early_end = (
+                    event.event in {"session.end", "session.audio_settings"}
+                    and event.session_id is None
+                )
                 if event.sequence <= client_sequence or (
                     started and event.session_id != session_id and not early_end
                 ):
@@ -150,13 +170,17 @@ async def _v2_session(
                     if websocket.app.state.script_summarizer.busy:
                         raise ValueError("SUMMARY_BUSY")
                     data = SessionStartData.model_validate(event.data)
+                    raw_audio_settings = event.data.get("audio_settings")
                     analysis = {
                         **data.settings.model_dump(),
                         "script": data.script,
                         "time_limit_seconds": data.time_limit_seconds,
                     }
 
-                    async def prepare(analysis_settings: dict[str, Any] = analysis) -> None:
+                    async def prepare(
+                        analysis_settings: dict[str, Any] = analysis,
+                        raw_audio_settings: Any = raw_audio_settings,
+                    ) -> None:
                         nonlocal pipeline, live_registered
                         if stored_settings is not None:
                             prepared = await websocket.app.state.pipelines.get_or_create(
@@ -168,6 +192,7 @@ async def _v2_session(
                         pipeline.update_analysis_settings(
                             stored_settings if stored_settings is not None else analysis_settings
                         )
+                        pipeline.set_audio_settings(raw_audio_settings)
                         websocket.app.state.live_sessions.add(session_id)
                         live_registered = True
                         await pipeline.prepare()
@@ -176,6 +201,8 @@ async def _v2_session(
                         await pipeline.stop()
                         break
                     started = True
+                    if has_early_audio_settings:
+                        pipeline.set_audio_settings(early_audio_settings)
                     await pipeline.emit(
                         "session.ready",
                         pipeline.elapsed_ms(),
@@ -187,6 +214,11 @@ async def _v2_session(
                             },
                         },
                     )
+                elif event.event == "session.audio_settings":
+                    # Sent by the client once the microphone is acquired; may trail session.start.
+                    # A late message after a failed prepare must not mask the real error.
+                    if started:
+                        pipeline.set_audio_settings(event.data.get("audio_settings"))
                 elif event.event == "calibration.start":
                     if not started:
                         raise ValueError("SESSION_NOT_READY")
@@ -477,6 +509,7 @@ async def practice_demo_websocket(websocket: WebSocket) -> None:
                         "karaokeGuideEnabled"
                     ]
                 analysis_updates["pronunciation_enabled"] = True
+                pipeline.set_audio_settings(client_event.data.get("audio_settings"))
                 pipeline.update_analysis_settings(
                     {
                         **analysis_updates,

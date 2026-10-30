@@ -118,6 +118,20 @@
 - F0 추출은 발화당 수십 ms 수준으로 예상되므로 메인 프로세스에서 `asyncio.to_thread`로 실행한다. 모델 자식 프로세스의 배타 수명주기는 바꾸지 않는다.
 - 리포트에 `delivery_metrics` JSON 컬럼을 추가한다(마이그레이션 `0004`). 분석 설정에 `delivery_enabled`(기본 켜짐)를 추가하고 `FeatureToggles`에 노출한다.
 
+## 파이프라인 연결 (Q36–Q42)
+
+- 세그먼터의 `observe_frame` 훅은 `DeliveryAnalyzer.observe_frame`에 연결한다. `SpeechChangeDetector`와 그 테스트는 삭제한다.
+- 음성 워커는 발화 하나의 STT와 대본 진행 갱신을 마친 뒤 `observe_utterance`를 호출한다.
+  - 넘기는 값: 그 시점의 `current_sentence_index`, `analyze_utterance`의 음절 수, 습관어+반복 수.
+  - STT가 결과를 버린 발화도 음절 0으로 넘긴다.
+  - 대본이 없으면 문장 번호는 0이다.
+- `observe_utterance`는 `asyncio.to_thread`로 실행한다.
+- 세션이 끝나면 `report()`와 `windows()` 결과를 `delivery_metrics` JSON 컬럼(마이그레이션 0004)에 저장하고, 세션 조회 API에도 넣는다.
+- `delivery_enabled`(기본 켜짐)를 분석 설정과 `FeatureToggles`에 추가한다. 꺼져 있으면 상태는 `disabled`다.
+- 프론트엔드는 `autoGainControl: false`로 마이크를 받고, 실제 적용값을 `session.start` 이벤트로 보낸다. AGC가 켜져 있으면 `delivery_metrics.agc_on`을 `true`로 표시한다.
+- 창 계산에서 0 나누기를 막고, 신뢰도는 1.0을 넘지 않게 자른다.
+- 판정 규칙, 하이라이트, 예상 등급, 리포트 화면은 다음 단계로 둔다.
+
 ## 근거
 
 | 특징 | 근거 | 확인 수준 |

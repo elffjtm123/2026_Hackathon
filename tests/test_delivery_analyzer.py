@@ -477,3 +477,21 @@ def test_spectral_balance_aligns_pcm_to_a_non_zero_utterance_start():
     s = sentence(a)
     assert s["alpha_ratio_db"] > 20
     assert s["hammarberg_db"] > 20
+
+
+def test_zero_length_frames_give_null_rates_instead_of_dividing_by_zero():
+    a = DeliveryAnalyzer(extract_f0=fake_f0())
+    a.observe_frame(100, 100, 0.1, False)
+    row = a.windows()["windows"][0]
+    assert row["observed_ms"] == 0
+    assert row["coverage"] is None and row["speech_rate"] is None
+    assert row["articulation_rate"] is None and row["disfluency_density"] is None
+
+
+def test_window_coverage_never_exceeds_one():
+    a = DeliveryAnalyzer(extract_f0=fake_f0())
+    a.observe_frame(9990, 10010, 0.1, True)
+    utter(a, 9990, 10010, syllables=1)
+    first = a.windows()["windows"][0]
+    assert first["voiced_ms"] == 20 and first["observed_ms"] == 10
+    assert first["coverage"] == 1.0
