@@ -96,3 +96,14 @@ def test_real_vad_rejects_silence_and_seeded_microphone_noise():
     ]:
         s = SpeechSegmenter()
         assert s.feed(MediaPayload(uuid4(), 0, data, format="pcm16")) + s.flush() == []
+
+
+def test_cut_reason_distinguishes_endpoint_max_length_and_flush():
+    s = segmenter()
+    session = uuid4()
+    endpoint = s.feed(MediaPayload(session, 0, frames(10, 30), format="pcm16"))
+    assert [x.cut_reason for x in endpoint] == ["endpoint"]
+    s = segmenter()
+    data = frames(450)
+    outputs = s.feed(MediaPayload(uuid4(), 0, data, format="pcm16")) + s.flush()
+    assert [x.cut_reason for x in outputs] == ["max_length", "flush"]

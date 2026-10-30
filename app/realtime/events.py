@@ -69,6 +69,7 @@ class ClientEvent(BaseModel):
         "ping",
         "session.start",
         "session.end",
+        "session.audio_settings",
         "calibration.start",
     ]
     timestamp_ms: int = Field(default=0, ge=0)

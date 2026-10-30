@@ -5,11 +5,14 @@ import struct
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Literal
 
 from app.ai.base import MediaPayload
 
 SAMPLE_RATE = 16_000
 FRAME_SAMPLES = 320
+
+CutReason = Literal["endpoint", "max_length", "flush"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,6 +33,7 @@ class SpeechSegment:
     voiced_ms: int
     pcm: bytes
     start_sample: int
+    cut_reason: CutReason = "endpoint"
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,6 +45,23 @@ class _Frame:
     @property
     def end(self) -> int:
         return self.start + len(self.pcm) // 2
+
+
+def pcm_rms(pcm: bytes) -> float:
+    samples = [x[0] for x in struct.iter_unpack("<h", pcm)]
+    return math.sqrt(sum(x * x for x in samples) / len(samples)) / 32768
+
+
+def default_is_speech(silence_rms_threshold: float = 0.003) -> Callable[[bytes], bool]:
+    import webrtcvad
+
+    vad = webrtcvad.Vad(2)
+
+    def is_speech(pcm: bytes) -> bool:
+        padded = pcm.ljust(FRAME_SAMPLES * 2, b"\0")
+        return pcm_rms(pcm) >= silence_rms_threshold and vad.is_speech(padded, SAMPLE_RATE)
+
+    return is_speech
 
 
 class SpeechSegmenter:
@@ -59,15 +80,7 @@ class SpeechSegmenter:
         if not (0 < onset_ms <= pre_roll_ms < max_ms and 0 <= post_roll_ms < endpoint_ms):
             raise ValueError("INVALID_SEGMENT_SETTINGS")
         if is_speech is None:
-            import webrtcvad
-
-            vad = webrtcvad.Vad(2)
-
-            def is_speech(pcm: bytes) -> bool:
-                padded = pcm.ljust(FRAME_SAMPLES * 2, b"\0")
-                samples = [x[0] for x in struct.iter_unpack("<h", pcm)]
-                rms = math.sqrt(sum(x * x for x in samples) / len(samples)) / 32768
-                return rms >= silence_rms_threshold and vad.is_speech(padded, SAMPLE_RATE)
+            is_speech = default_is_speech(silence_rms_threshold)
 
         self.is_speech = is_speech
         self.observe_frame = observe_frame
@@ -123,7 +136,7 @@ class SpeechSegmenter:
             self.pending_start += len(self.pending) // 2
             self.pending = b""
         if self.active:
-            outputs.extend(self._finish(self.active[-1].end))
+            outputs.extend(self._finish(self.active[-1].end, "flush"))
         self.active = None
         self.history.clear()
         self.onset = 0
@@ -133,8 +146,7 @@ class SpeechSegmenter:
         samples = frame.end - frame.start
         if self.observe_frame is not None:
             assert self.origin_ms is not None
-            values = [x[0] for x in struct.iter_unpack("<h", frame.pcm)]
-            rms = math.sqrt(sum(x * x for x in values) / len(values)) / 32768
+            rms = pcm_rms(frame.pcm)
             self.observe_frame(
                 self.origin_ms + frame.start * 1000 // SAMPLE_RATE,
                 self.origin_ms + frame.end * 1000 // SAMPLE_RATE,
@@ -163,12 +175,12 @@ class SpeechSegmenter:
             return self._finish(self.last_voiced_end + self.post_roll_samples)
         if frame.end - self.active[0].start >= self.max_samples:
             # ponytail: hard maximum may cut a word; no overlap until revision-aware STT.
-            outputs = self._finish(frame.end)
+            outputs = self._finish(frame.end, "max_length")
             self.active = []  # Continue confirmed speech at the very next sample.
             return outputs
         return []
 
-    def _finish(self, end: int) -> list[SpeechSegment]:
+    def _finish(self, end: int, reason: CutReason = "endpoint") -> list[SpeechSegment]:
         frames = self.active or []
         outputs = []
         if frames and self.voiced_samples:
@@ -184,6 +196,7 @@ class SpeechSegmenter:
                     self.voiced_samples * 1000 // SAMPLE_RATE,
                     b"".join(x.pcm for x in frames)[: (end - start) * 2],
                     start,
+                    reason,
                 )
             )
         for frame in frames:

@@ -131,6 +131,8 @@ def decode_media(metadata: Any, payload: bytes) -> MediaPayload:
         _integer(metadata[name], optional=True)
     if not isinstance(metadata["format"], str) or not 0 < len(metadata["format"]) <= 64:
         raise ProtocolError()
+    if metadata["cut_reason"] not in (None, "endpoint", "max_length", "flush"):
+        raise ProtocolError()
     utterance = metadata["utterance_id"]
     if utterance is not None and (not isinstance(utterance, str) or len(utterance) > 256):
         raise ProtocolError()
