@@ -197,6 +197,8 @@ async def _v2_session(
                         live_registered = True
                         await pipeline.prepare()
 
+                    # A failed earlier attempt must not leak its early settings into this one.
+                    early_audio_settings, has_early_audio_settings = None, False
                     if not await prepare_or_cancel(asyncio.create_task(prepare())):
                         await pipeline.stop()
                         break

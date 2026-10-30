@@ -175,6 +175,57 @@ def test_audio_settings_after_a_failed_prepare_does_not_replace_the_real_error(c
         assert following["event"] == "pong"
 
 
+def test_early_audio_settings_of_a_failed_prepare_do_not_override_the_retry(
+    client, auth, monkeypatch
+):
+    gate = {"open": asyncio.Event(), "calls": 0}
+    original_prepare = SessionPipeline.prepare
+    original_receive = WebSocket.receive
+
+    async def flaky_prepare(self):
+        gate["calls"] += 1
+        if gate["calls"] == 1:
+            await gate["open"].wait()
+            await asyncio.sleep(0.05)  # let the early message be consumed before failing
+            raise ValueError("MODEL_UNAVAILABLE_OR_BUSY")
+        await original_prepare(self)
+
+    async def receive(self, *args, **kwargs):
+        message = await original_receive(self, *args, **kwargs)
+        if "session.audio_settings" in (message.get("text") or ""):
+            gate["open"].set()
+        return message
+
+    monkeypatch.setattr(SessionPipeline, "prepare", flaky_prepare)
+    monkeypatch.setattr(WebSocket, "receive", receive)
+    created = client.post(
+        "/api/v1/sessions",
+        headers=bearer(auth),
+        json={"type": "presentation", "title": "t", "settings": {"gaze_enabled": False}},
+    ).json()
+    with client.websocket_connect(
+        f"/api/v1/ws/sessions/{created['id']}?protocol=2&token={auth['access_token']}"
+    ) as ws:
+        send_v2(ws, "session.start", 1)
+        send_v2(
+            ws,
+            "session.audio_settings",
+            2,
+            data={"audio_settings": {"autoGainControl": True}},
+        )
+        failed = ws.receive_json()
+        assert failed["event"] == "error"
+        assert failed["data"]["code"] == "MODEL_UNAVAILABLE_OR_BUSY"
+        send_v2(ws, "session.start", 3, data={"audio_settings": {"autoGainControl": False}})
+        ready = ws.receive_json()
+        assert ready["event"] == "session.ready"
+        send_v2(ws, "session.end", 4, ready["session_id"])
+        while ws.receive_json()["event"] != "session.completed":
+            pass
+    saved = client.post(f"/api/v1/sessions/{created['id']}/complete", headers=bearer(auth)).json()
+    assert saved["delivery_metrics"]["agc_on"] is False
+
+
 def test_agc_may_arrive_after_session_ready(client, auth):
     follow_up = {"audio_settings": {"autoGainControl": True}}
     _, saved = run_session(client, auth, follow_up=follow_up, after_ready=True)
