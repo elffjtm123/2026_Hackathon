@@ -1,9 +1,9 @@
 import type {FaceFeatures} from '../face-features/features';
 import type {PulseResult} from '../pulse/signal';
-import type {DeliveryMetrics, DeliveryRow} from '../delivery/metrics';
+import {deliveryForUser,type DeliveryMetrics,type DeliveryRow} from '../delivery/metrics.ts';
 import type {PracticeSummary} from '../../lib/realtimeProtocol';
 
-export type FaceSample = {time:number; smile:number; frown:number; brow:number; eyeWide:number};
+export type FaceSample = {time:number; eyeWide:number};
 export type PulseSample = {time:number; bpm:number};
 export type SessionSignals = {faces:FaceSample[]; pulses:PulseSample[]};
 const finite=(v:unknown):v is number=>typeof v==='number'&&Number.isFinite(v);
@@ -21,14 +21,15 @@ export class SessionSignalRecorder {
   face(result:FaceFeatures){
     const t=result.timestampMs,c=result.coefficients;
     if(result.status!=='observed'||!finite(t)||!c||t-this.lastFace<180)return;
-    const sample={time:t,smile:pair(c,'mouthSmile'),frown:pair(c,'mouthFrown'),
-      brow:pair(c,'browDown'),eyeWide:pair(c,'eyeWide')};
+    const sample={time:t,eyeWide:pair(c,'eyeWide')};
     if(!Object.values(sample).every(finite))return;
     this.lastFace=t;this.data.faces.push(sample);this.data.faces=this.data.faces.slice(-20000);
   }
   pulse(result:PulseResult,now:number){
     const age=result.ageSeconds??result.diagnostics?.resultAgeSeconds;
-    const key=[result.model,result.diagnostics?.resets,result.modelWindows].join(':');
+    // A model estimate is new per completed window; a browser POS estimate per new camera frames.
+    const key=[result.model,result.diagnostics?.resets,result.modelWindows,
+      result.model==='POS'?result.diagnostics?.totalFrames:''].join(':');
     if(result.status!=='observed'||result.held||result.ended||!finite(result.bpm)||!finite(age)
       ||age<0||age>6.5||!finite(result.modelWindows)||key===this.lastPulse)return;
     this.lastPulse=key;this.data.pulses.push({time:now-age*1000,bpm:result.bpm});
@@ -37,71 +38,110 @@ export class SessionSignalRecorder {
   snapshot():SessionSignals{return {faces:[...this.data.faces],pulses:[...this.data.pulses]};}
 }
 
-export type AffectPoint={startMs:number;endMs:number;status:'baseline'|'estimated'|'insufficient';
-  label:string;valence:number|null;arousal:number|null;missing:string[];
-  evidence:{faceCoverage:number;pulseCount:number;pulseBpm:number|null;f0:number|null;loudness:number|null;rate:number|null};
-  contributions?:{pulse:number;voice:number;face:number}};
-export type AffectAnalysis={version:'circumplex-rules.v1';points:AffectPoint[];baselineCount:number;
-  estimatedCount:number;coverage:number;dominant:string;overall:{valence:number;arousal:number}|null};
+export type ActivationLevel='higher'|'similar'|'lower';
+export type ActivationPoint={startMs:number;endMs:number;status:'compared'|'insufficient';inBaseline:boolean;
+  level:ActivationLevel|null;label:string;activation:number|null;missing:string[];
+  // Voice evidence relative to the speaker's own baseline; loudness only when AGC was confirmed off.
+  evidence:{voicedMs:number;faceCoverage:number;f0Semitones:number|null;rateChange:number|null;loudnessDb:number|null};
+  contributions:{voice:number;face:number|null}|null;
+  // Reference trend only (unvalidated rPPG). Never part of activation and never exported.
+  pulse:{count:number;bpm:number|null}};
+export type ActivationAnalysis={version:'voice-activation.v2';status:'ok'|'not-enough-data';
+  baseline:{windowCount:number;required:number;startsAtMs:number};points:ActivationPoint[];
+  comparedCount:number;overall:number|null;label:string};
 
-export function affectLabel(valence:number,arousal:number):string{
-  if(Math.abs(valence)<.2||Math.abs(arousal)<.2)return '중립·혼합 경향';
-  if(arousal>=.2)return valence>=.2?'활기·기대 경향':'긴장·불편 경향';
-  return valence>=.2?'차분·편안 경향':'저활성·불편 경향';
+// Early speech is not the speaker's usual voice (our AI Hub check: F0 about half a semitone lower
+// in the first 30 s), so the baseline is the median of qualified windows that start at or after it.
+export const BASELINE_START_MS=30000;
+export const BASELINE_MIN_WINDOWS=3;
+const LEVEL_THRESHOLD=.2;
+
+export function activationLabel(level:ActivationLevel|null):string{
+  if(level==='higher')return '본인 기준보다 목소리 활성도가 높음';
+  if(level==='lower')return '본인 기준보다 목소리 활성도가 낮음';
+  if(level==='similar')return '본인 기준과 목소리 활성도가 비슷함';
+  return '판단 보류';
+}
+const levelOf=(activation:number):ActivationLevel=>activation>=LEVEL_THRESHOLD?'higher':activation<=-LEVEL_THRESHOLD?'lower':'similar';
+
+// The backend reports observed_ms, the span between the first and last observed frame in a slot.
+// A partial first slot is observed up to its end; any other partial slot from its start.
+function observedRange(row:DeliveryRow,index:number,count:number):[number,number]|null{
+  const start=row.start_ms,end=row.end_ms;
+  if(!finite(start)||!finite(end)||end<=start)return null;
+  const observed=finite(row.observed_ms)?Math.max(0,Math.min(end-start,row.observed_ms)):end-start;
+  if(observed<=0)return null; // nothing observed in the slot: withhold the window
+  if(observed>=end-start)return [start,end];
+  return index===0&&count>1?[end-observed,end]:[start,start+observed];
 }
 
-export function analyzeAffect(signals:SessionSignals,delivery?:DeliveryMetrics):AffectAnalysis{
+type Window={point:ActivationPoint;f0:number;rate:number;loudness:number|null;eye:number|null};
+export function analyzeActivation(signals:SessionSignals,delivery?:DeliveryMetrics):ActivationAnalysis{
   const rows=delivery?.windows?.windows??[];
-  const points:AffectPoint[]=[], baselines:{pulse:number;f0:number;rate:number;loudness:number|null;alpha:number|null;eye:number}[]=[];
-  for(const row of rows){
-    const start=row.start_ms,end=Math.min(row.end_ms??0,(row.start_ms??0)+(row.observed_ms??0));
-    if(!finite(start)||!finite(end)||end<=start)continue;
+  const points:ActivationPoint[]=[],qualified:Window[]=[];
+  rows.forEach((row,index)=>{
+    const range=observedRange(row,index,rows.length);
+    if(!range)return;
+    const [start,end]=range;
     const faces=signals.faces.filter(v=>v.time>=start&&v.time<end);
     const pulses=signals.pulses.filter(v=>v.time>=start&&v.time<end);
     // 200 ms sampling buckets avoid overstating coverage from clustered frames.
     const buckets=new Set(faces.map(v=>Math.floor((v.time-start)/200)));
     const faceCoverage=Math.min(1,buckets.size*200/(end-start));
-    const f0=finite(row.f0_median_hz)?row.f0_median_hz:null, rate=finite(row.articulation_rate)?row.articulation_rate:null;
-    const loudness=finite(row.loudness_dbfs)?row.loudness_dbfs:null;
+    const f0=finite(row.f0_median_hz)&&row.f0_median_hz>0?row.f0_median_hz:null;
+    const rate=finite(row.articulation_rate)&&row.articulation_rate>0?row.articulation_rate:null;
+    const voicedMs=finite(row.voiced_ms)?row.voiced_ms:0;
     const missing:string[]=[];
     if(end-start<5000)missing.push('비교 구간 5초 미만');
-    if(faceCoverage<.5)missing.push('표정 유효 관찰 50% 미만');
-    if(!pulses.length)missing.push('해당 구간의 새 맥박 추정 없음');
-    if((row.voiced_ms??0)<1000||f0===null||f0<=0||rate===null||rate<=0)missing.push('음성·음높이 근거 부족');
-    const point:AffectPoint={startMs:start,endMs:end,status:'insufficient',label:'판단 보류',valence:null,arousal:null,missing,
-      evidence:{faceCoverage,pulseCount:pulses.length,pulseBpm:pulses.length?median(pulses.map(p=>p.bpm)):null,f0,loudness,rate}};
-    if(missing.length){points.push(point);continue;}
-    const current={pulse:point.evidence.pulseBpm!,f0:f0!,rate:rate!,loudness,
-      alpha:finite(row.alpha_ratio_db)?row.alpha_ratio_db:null,eye:mean(faces.map(v=>v.eyeWide))};
-    if(baselines.length<3){
-      // Only complete 10 s slots establish the initial personal comparison reference.
-      if(end-start<9500){point.missing.push('기준 구간은 완전한 10초 필요');points.push(point);continue;}
-      baselines.push(current);point.status='baseline';point.label='개인 비교 기준 수집';points.push(point);continue;
-    }
-    const reference=(key:'pulse'|'f0'|'rate'|'eye')=>median(baselines.map(v=>v[key]));
-    const pulse=clamp((current.pulse-reference('pulse'))/15);
-    const voiceTerms:[number,number][]=[
-      [clamp(12*Math.log2(current.f0/reference('f0'))/4),.45],
-      [clamp((current.rate/reference('rate')-1)/.25),.35],
-    ];
-    const baseLoud=baselines.flatMap(v=>v.loudness===null?[]:[v.loudness]);
-    if(delivery?.agc_on===false&&loudness!==null&&baseLoud.length===3)voiceTerms.push([clamp((loudness-median(baseLoud))/6),.2]);
-    const voice=voiceTerms.reduce((s,[v,w])=>s+v*w,0)/voiceTerms.reduce((s,[,w])=>s+w,0);
-    const face=clamp((current.eye-reference('eye'))/.25);
-    const valence=clamp(1.6*mean(faces.map(v=>v.smile-v.frown))-.25*mean(faces.map(v=>v.brow)));
-    const arousal=clamp(.45*pulse+.45*voice+.1*face);
-    point.status='estimated';point.valence=valence;point.arousal=arousal;point.label=affectLabel(valence,arousal);
-    point.contributions={pulse,voice,face};points.push(point);
+    if(voicedMs<1000||f0===null||rate===null)missing.push('음성·음높이 근거 부족');
+    const point:ActivationPoint={startMs:start,endMs:end,status:'insufficient',inBaseline:false,level:null,
+      label:activationLabel(null),activation:null,missing,
+      evidence:{voicedMs,faceCoverage,f0Semitones:null,rateChange:null,loudnessDb:null},contributions:null,
+      pulse:{count:pulses.length,bpm:pulses.length?median(pulses.map(p=>p.bpm)):null}};
+    points.push(point);
+    if(missing.length)return;
+    point.inBaseline=start>=BASELINE_START_MS;
+    qualified.push({point,f0:f0!,rate:rate!,loudness:finite(row.loudness_dbfs)?row.loudness_dbfs:null,
+      eye:faceCoverage>=.5?mean(faces.map(v=>v.eyeWide)):null});
+  });
+  const base=qualified.filter(v=>v.point.inBaseline);
+  const baseline={windowCount:base.length,required:BASELINE_MIN_WINDOWS,startsAtMs:BASELINE_START_MS};
+  if(base.length<BASELINE_MIN_WINDOWS){
+    for(const v of qualified)v.point.missing.push(`30초 이후 개인 기준 구간 ${BASELINE_MIN_WINDOWS}개 필요`);
+    return {version:'voice-activation.v2',status:'not-enough-data',baseline,points,comparedCount:0,overall:null,
+      label:'근거 부족 · 30초 이후 구간이 부족해 개인 기준을 만들지 못했습니다'};
   }
-  const estimated=points.filter(v=>v.status==='estimated');
-  const duration=estimated.reduce((sum,p)=>sum+p.endMs-p.startMs,0);
-  const overall=duration?{valence:estimated.reduce((s,p)=>s+p.valence!*(p.endMs-p.startMs),0)/duration,
-    arousal:estimated.reduce((s,p)=>s+p.arousal!*(p.endMs-p.startMs),0)/duration}:null;
-  const counts=new Map<string,number>();for(const p of estimated)counts.set(p.label,(counts.get(p.label)??0)+p.endMs-p.startMs);
-  const order=[...counts].sort((a,b)=>b[1]-a[1]);
-  const dominant=order.length?(order[1]?.[1]===order[0][1]?'여러 경향 혼재':order[0][0]):'측정 근거 부족';
-  return {version:'circumplex-rules.v1',points,baselineCount:baselines.length,estimatedCount:estimated.length,
-    coverage:points.length?estimated.length/points.length:0,dominant,overall};
+  const values=(pick:(v:Window)=>number|null)=>base.flatMap(v=>{const x=pick(v);return x===null?[]:[x];});
+  const refF0=median(values(v=>v.f0)),refRate=median(values(v=>v.rate));
+  const loudBase=values(v=>v.loudness),eyeBase=values(v=>v.eye);
+  const refLoud=delivery?.agc_on===false&&loudBase.length>=BASELINE_MIN_WINDOWS?median(loudBase):null;
+  const refEye=eyeBase.length>=BASELINE_MIN_WINDOWS?median(eyeBase):null;
+  for(const v of qualified){
+    const f0Semitones=12*Math.log2(v.f0/refF0),rateChange=v.rate/refRate-1;
+    const loudnessDb=refLoud!==null&&v.loudness!==null?v.loudness-refLoud:null;
+    const terms:[number,number][]=[[clamp(f0Semitones/4),.45],[clamp(rateChange/.25),.35]];
+    if(loudnessDb!==null)terms.push([clamp(loudnessDb/6),.2]);
+    const voice=terms.reduce((s,[x,w])=>s+x*w,0)/terms.reduce((s,[,w])=>s+w,0);
+    const face=refEye!==null&&v.eye!==null?clamp((v.eye-refEye)/.25):null;
+    const activation=face===null?voice:clamp(.9*voice+.1*face);
+    const level=levelOf(activation);
+    Object.assign(v.point,{status:'compared',activation,level,label:activationLabel(level),
+      contributions:{voice,face},evidence:{...v.point.evidence,f0Semitones,rateChange,loudnessDb}});
+  }
+  const compared=qualified.map(v=>v.point);
+  const duration=compared.reduce((sum,p)=>sum+p.endMs-p.startMs,0);
+  const overall=compared.reduce((s,p)=>s+p.activation!*(p.endMs-p.startMs),0)/duration;
+  return {version:'voice-activation.v2',status:'ok',baseline,points,comparedCount:compared.length,overall,
+    label:activationLabel(levelOf(overall))};
+}
+
+// User-triggered export. Pulse estimates are not part of the end report (see
+// docs/pretrained-presentation-pulse.md), and delivery measures withheld from users stay out.
+export function insightsExport(sessionId:string,analysis:ActivationAnalysis,coaching:Coaching,delivery?:DeliveryMetrics){
+  return {schema:'session-insights.v2',sessionId,
+    method:'Rule-based voice activation relative to the speaker\'s own session baseline (windows from 30 s); not validated',
+    analysis:{...analysis,points:analysis.points.map(point=>{const copy:Partial<ActivationPoint>={...point};delete copy.pulse;return copy;})},
+    coaching,delivery:deliveryForUser(delivery)};
 }
 
 export type Coaching={strengths:string[];improvements:string[];nextPractice:string[]};

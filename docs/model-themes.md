@@ -1,7 +1,7 @@
 # 전체 서비스 모델 테마 비교
 
-로컬 사이트의 첫 화면에서 현재 서비스 Q8, Qwen Q8, Whisper Small INT8,
-Whisper Base INT8, Korean Zipformer INT8를 선택합니다.
+로컬 사이트의 모델 테마 화면(`#themes`)에서 현재 서비스 Q8, Qwen Q8, Whisper Small INT8,
+Whisper Base INT8, Korean Zipformer INT8를 선택합니다. 첫 화면(빈 해시)은 현재 서비스 테마의 일반 연습입니다.
 선택한 모델은 WebSocket v2 `session.start.stt_model_id`로 서버에 전달되며,
 실제 모델 로딩이 성공한 뒤 기존 카메라 보정과 연습을 시작합니다.
 실패한 모델을 다른 모델로 대체하거나 예시 전사로 채우지 않습니다.

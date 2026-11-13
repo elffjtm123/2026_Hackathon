@@ -1,11 +1,9 @@
-import type {DeliveryMetrics, DeliveryRow} from './metrics';
+import {deliveryForUser, type DeliveryMetrics, type DeliveryRow} from './metrics';
 
 const fmt = (n: unknown, digits=1) => typeof n === 'number' && Number.isFinite(n) ? n.toFixed(digits) : '—';
 const columns = [
   ['speech_rate','발화 속도','음절/분'], ['articulation_rate','조음 속도','음절/분'],
-  ['f0_median_hz','음높이 F0','Hz'], ['f0_st','상대 음높이','반음'], ['pvq','음높이 변동 PVQ',''],
-  ['loudness_dbfs','음량','dBFS'], ['loudness_rel_db','기준 대비 음량','dB'],
-  ['alpha_ratio_db','Alpha ratio','dB'], ['hammarberg_db','Hammarberg','dB'],
+  ['f0_median_hz','음높이 F0','Hz'], ['f0_st','상대 음높이','반음'], ['loudness_rel_db','기준 대비 음량','dB'],
   ['pause_count','쉼','회'], ['longest_pause_ms','최장 쉼','ms'],
   ['sentence_end_pause_ms','다음 문장까지 쉼','ms'], ['disfluency_density','습관어·반복 밀도','회/유성 분'],
 ] as const;
@@ -20,11 +18,13 @@ function FeatureTable({rows, windows}: {rows: DeliveryRow[]; windows?: boolean})
       : `${(row.sentence_index ?? index)+1}번`}</th>
       <td>{fmt(row.voiced_ms == null ? null : row.voiced_ms/1000)}초</td>
       {windows && <td>{fmt(row.coverage == null ? null : row.coverage*100,0)}%</td>}
-      {visible.map(([key]) => <td key={key}>{fmt(row[key],key==='pvq'?3:1)}</td>)}
+      {visible.map(([key]) => <td key={key}>{fmt(row[key])}</td>)}
     </tr>)}</tbody></table></div>;
 }
 
-export function DeliveryReport({metrics,sessionId}: {metrics?: DeliveryMetrics;sessionId:string}) {
+// User-facing view: PVQ, absolute loudness and spectral balance are withheld (deliveryForUser).
+export function DeliveryReport({metrics: raw,sessionId}: {metrics?: DeliveryMetrics;sessionId:string}) {
+  const metrics = deliveryForUser(raw);
   if (!metrics) return null;
   const windows=metrics.windows?.windows ?? [], sentences=metrics.report?.sentences ?? [];
   const last=windows.filter(row=>(row.voiced_ms??0)>=1000).at(-1);
@@ -41,10 +41,11 @@ export function DeliveryReport({metrics,sessionId}: {metrics?: DeliveryMetrics;s
       : <>
         <p>유성 발화 {fmt((metrics.report?.total_voiced_ms??0)/1000)}초 · 대본 문장 {sentences.length}개 · 시간 구간 {windows.length}개</p>
         {metrics.status==='unavailable' && <p className="delivery-note">전체 유성 발화가 60초 미만이거나 분석 근거가 부족합니다. 추출된 구간 특징만 표시합니다.</p>}
-        {metrics.agc_on===true && <p className="delivery-note">마이크 자동 음량 조절이 켜져 있어 음량과 스펙트럼 비교에 영향을 줄 수 있습니다.</p>}
-        {metrics.agc_on===null && <p className="delivery-meta">마이크 자동 음량 조절 적용 여부를 확인하지 못했습니다.</p>}
+        {metrics.agc_on===true && <p className="delivery-note">마이크 자동 음량 조절이 켜져 있어 음량 변화는 표시하지 않습니다.</p>}
+        {metrics.agc_on===null && <p className="delivery-meta">마이크 자동 음량 조절 적용 여부를 확인하지 못해 음량 변화는 표시하지 않습니다.</p>}
         {last && <><h3>마지막 유효 구간의 특징</h3><div className="delivery-cards">
-          {[['음높이 F0',last.f0_median_hz,'Hz'],['음량',last.loudness_dbfs,'dBFS'],
+          {[['음높이 F0',last.f0_median_hz,'Hz'],
+            ...(metrics.agc_on===false ? [['기준 대비 음량',last.loudness_rel_db,'dB']] : []),
             ['발화 속도 · 쉼 포함',last.speech_rate,'음절/분'],['습관어·반복 밀도',last.disfluency_density,'회/유성 분']].map(([label,value,unit])=>
             <div key={String(label)}><span>{label}</span><strong>{fmt(value)} <small>{unit}</small></strong></div>)}
         </div></>}
@@ -55,6 +56,6 @@ export function DeliveryReport({metrics,sessionId}: {metrics?: DeliveryMetrics;s
           <p className="delivery-meta">문장 번호는 STT와 대본 정렬 결과에 연결됩니다. 면접처럼 대본이 없으면 같은 문장 번호로 집계될 수 있습니다.</p></details>}
         <button className="secondary-button" onClick={download} disabled={!sentences.length&&!windows.length}>음성 특징 JSON 내려받기</button>
       </>}
-    <p className="delivery-meta">음높이·음량·스펙트럼·쉼의 관측값입니다. 개별 음성 지표 자체는 감정 점수나 검증된 전달력 등급이 아닙니다. 원본 음성은 이 결과에 포함하지 않습니다.</p>
+    <p className="delivery-meta">음높이·속도·쉼·습관어의 관측값입니다. 음량은 자동 음량 조절이 꺼진 경우에만 이번 연습 안의 상대 변화로 보여 줍니다. 개별 음성 지표는 검증된 전달력 등급이 아닙니다. 원본 음성은 이 결과에 포함하지 않습니다.</p>
   </section>;
 }

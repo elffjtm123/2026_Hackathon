@@ -13,13 +13,8 @@ from typing import Any
 
 import httpx
 
-MODEL_IDS = (
-    "service_qwen",
-    "qwen_q8",
-    "whisper_small_int8",
-    "whisper_base_int8",
-    "zipformer_int8",
-)
+from app.ai.stt_models import MODEL_IDS
+
 LABELS = {
     "service_qwen": "현재 서비스 · Qwen3-ASR-0.6B Q8_0 (speech.cpp)",
     "qwen_q8": "Qwen3-ASR-0.6B · Q8_0",
@@ -34,6 +29,15 @@ ZIP_FILES = (
     "tokens.txt",
 )
 QWEN_FILES = ("Qwen3-ASR-0.6B-Q8_0.gguf", "mmproj-Qwen3-ASR-0.6B-Q8_0.gguf")
+
+
+def service_threads() -> int | None:
+    """Thread count of the existing service STT, when torch reports one."""
+    try:
+        import torch
+    except ImportError:
+        return None
+    return torch.get_num_threads()
 
 
 def llama_binary(root: Path) -> Path | None:
@@ -59,7 +63,7 @@ def catalog(root: Path, speech: Any) -> list[dict[str, Any]]:
             module = "sherpa_onnx" if model_id == "zipformer_int8" else "faster_whisper"
             if model_id != "qwen_q8" and importlib.util.find_spec(module) is None:
                 missing.append(f"{module} 패키지 설치 필요")
-            files = ZIP_FILES if model_id == "zipformer_int8" else QWEN_FILES
+            files: tuple[str, ...] = ZIP_FILES if model_id == "zipformer_int8" else QWEN_FILES
             if model_id.startswith("whisper_"):
                 files = ("model.bin", "config.json", "tokenizer.json")
             for filename in files:
@@ -207,7 +211,7 @@ class QwenQ8Engine:
             ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),  # Windows-only flag
         )
         self.metadata = {"engine": "llama.cpp", "precision": "Q8_0 + Q8_0 mmproj"}
         try:

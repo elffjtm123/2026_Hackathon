@@ -7,9 +7,10 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-from app.ai.experimental_stt import LABELS, MODEL_IDS, catalog
+from app.ai.experimental_stt import LABELS, MODEL_IDS, catalog, service_threads
 from app.ai.live_stt import LiveCandidateSpeechAdapter
 from app.realtime.events import ModuleStatus
+from app.realtime.experiment_recorder import ExperimentRecorder
 
 
 class LiveSpeechManager:
@@ -50,15 +51,11 @@ class LiveSpeechManager:
             adapter = await asyncio.shield(self.loading)
             self.adapter = adapter
             metadata = dict(adapter.engine.metadata)
-        if model_id == "service_qwen":
-            try:
-                import torch
-
-                threads = torch.get_num_threads()
-            except ImportError:
-                threads = None
-        else:
-            threads = self.settings.stt_experiment_threads
+        threads = (
+            service_threads()
+            if model_id == "service_qwen"
+            else self.settings.stt_experiment_threads
+        )
         info = {
             "model_id": model_id,
             "label": LABELS[model_id],
@@ -116,3 +113,67 @@ class LiveSpeechManager:
     async def close(self) -> None:
         if self.owner is not None:
             await self.release(self.owner)
+
+
+class SessionSpeechLease:
+    """One practice WebSocket's STT choice, lent from LiveSpeechManager.
+
+    Contract: ``attach`` runs inside every prepare attempt and first returns any lease an
+    earlier failed attempt held, restoring the service adapter; ``refresh`` runs after a
+    successful ``pipeline.prepare``; ``release`` runs once the pipeline has stopped, on
+    every exit path. ``release`` is idempotent, so a session that never borrowed is fine.
+    ``modules`` is the per-session module status the client sees.
+    """
+
+    def __init__(
+        self,
+        manager: LiveSpeechManager,
+        session_id: UUID,
+        service_speech: Any,
+        module_status: dict[str, ModuleStatus],
+        *,
+        enabled: bool,
+        authenticated: bool,
+    ) -> None:
+        self.manager, self.session_id = manager, session_id
+        self.service_speech = service_speech
+        self.service_modules = module_status  # live service status; read, never mutated
+        self.modules = dict(module_status)
+        self.enabled, self.authenticated = enabled, authenticated
+
+    async def attach(self, pipeline: Any, model_id: str | None, mode: str) -> None:
+        """Raises ValueError with the client-facing error code when the choice is refused."""
+        await self.release()
+        pipeline.speech, pipeline.experiment = self.service_speech, None
+        self.modules["speech"] = self.service_modules["speech"]
+        if model_id is not None and self.authenticated:
+            raise ValueError("STT_SELECTION_LOCAL_DEMO_ONLY")
+        if model_id is None or model_id == "service_qwen":
+            return
+        if not self.enabled:
+            raise ValueError("STT_SELECTION_DISABLED")
+        try:
+            adapter, status, info = await self.manager.acquire(self.session_id, model_id)
+        except Exception as exc:
+            # acquire reserves before loading; return the reservation so a retry can run.
+            await self.release()
+            reason = str(exc)[:300]
+            self.modules["speech"] = self.modules["speech"].model_copy(
+                update={"status": "unavailable", "model": LABELS[model_id], "reason": reason}
+            )
+            raise ValueError("STT_MODEL_LOAD_FAILED") from exc
+        pipeline.speech = adapter
+        pipeline.experiment = ExperimentRecorder(
+            {**info, "mode": mode, "gaze": self.modules["gaze"].model_dump()}
+        )
+        self.modules["speech"] = status
+
+    def refresh(self, pipeline: Any) -> None:
+        for name, module in self.service_modules.items():
+            if name != "speech" or pipeline.experiment is None:
+                self.modules[name] = module
+        if pipeline.experiment is not None:
+            pipeline.experiment.annotate(gaze=self.modules["gaze"].model_dump())
+
+    async def release(self) -> None:
+        await self.manager.release(self.session_id)

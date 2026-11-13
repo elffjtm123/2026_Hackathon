@@ -65,3 +65,68 @@ test('shared worker extracts real-shaped coefficients while pulse is off; face l
   const missing=replies.filter(v=>v.type==='face-features').at(-1).result;
   assert.equal(missing.status,'unavailable'); assert.equal(missing.coefficients,null);
 });
+
+// Loads the real worker with a fake FaceLandmarker; `detect(delegate, stamp)` stands in for detectForVideo.
+async function loadWorker(detect, {failCreate = () => false} = {}) {
+  const replies = [], created = [], stamps = [];
+  class Canvas {
+    constructor(w,h){this.width=w;this.height=h;}
+    getContext(){return {drawImage(){},getImageData(_x,_y,w,h){const data=new Uint8ClampedArray(w*h*4);data.fill(120);return {data};}};}
+  }
+  const self={PulseSignal:signal,PulseRegions:regions,FaceFeatures:faceFeatures,postMessage(message){replies.push(message);}};
+  const context=vm.createContext({self,importScripts(){},OffscreenCanvas:Canvas,Vision:{
+    FilesetResolver:{forVisionTasks:async()=>({})},
+    FaceLandmarker:{createFromOptions:async(_resolver,input)=>{
+      const delegate=input.baseOptions.delegate; created.push(delegate);
+      if(failCreate(delegate)) throw new Error(`${delegate} not available`);
+      return {close(){},detectForVideo(_image,stamp){
+        if(stamps.length && stamp<=stamps.at(-1).stamp) throw new Error('timestamps must increase');
+        stamps.push({delegate,stamp,ready:replies.some(v=>v.type==='ready')});
+        return detect(delegate,stamp);
+      }};
+    }},
+  }});
+  vm.runInContext(await readFile(new URL('../public/pulse-worker.js',import.meta.url),'utf8'),context);
+  return {self, replies, created, stamps};
+}
+const busyWait = ms => { const end = Date.now() + ms; while (Date.now() < end); };
+
+test('init warms the detector up before ready, and a real first frame at mediaTime 0 still detects', async () => {
+  const {self, replies, stamps} = await loadWorker(() => ({faceLandmarks: [], faceBlendshapes: []}));
+  await self.onmessage({data:{type:'init',mode:'pos',featuresEnabled:true,pulseEnabled:false}});
+  const warmups = stamps.filter(v => !v.ready);
+  assert.ok(warmups.length >= 1 && warmups.length <= 2, 'one or two warm-up detects during init');
+  assert.equal(replies.at(-1).type, 'ready');
+  assert.equal(replies.at(-1).delegate, 'GPU');
+  await self.onmessage({data:{type:'frame',time:0,sessionTimeMs:0,bitmap:{width:640,height:480,close(){}},epoch:0}});
+  assert.equal(stamps.filter(v => v.ready).length, 1, 'the real frame reached the detector');
+  assert.equal(replies.some(v => v.type === 'face-features-error'), false);
+  assert.equal(replies.at(-1).type, 'ack');
+});
+
+test('a GPU delegate that stays slow after warm-up is replaced by CPU before ready', async () => {
+  const {self, replies, created} = await loadWorker(delegate => {
+    if (delegate === 'GPU') busyWait(300);
+    return {faceLandmarks: [], faceBlendshapes: []};
+  });
+  await self.onmessage({data:{type:'init',mode:'pos',featuresEnabled:true,pulseEnabled:false}});
+  assert.deepEqual(created, ['GPU', 'CPU']);
+  assert.equal(replies.at(-1).type, 'ready');
+  assert.equal(replies.at(-1).delegate, 'CPU');
+});
+
+test('a warm-up failure on GPU falls back to CPU; a CPU failure reports the existing error', async () => {
+  const gpuBroken = await loadWorker(delegate => { if (delegate === 'GPU') throw new Error('shader'); return {faceLandmarks: []}; });
+  await gpuBroken.self.onmessage({data:{type:'init',mode:'pos',featuresEnabled:true,pulseEnabled:false}});
+  assert.equal(gpuBroken.replies.at(-1).delegate, 'CPU');
+  const allBroken = await loadWorker(() => { throw new Error('wasm'); });
+  await allBroken.self.onmessage({data:{type:'init',mode:'pos',featuresEnabled:true,pulseEnabled:false}});
+  assert.equal(allBroken.replies.at(-1).type, 'error');
+});
+
+test('the hook can ask a fresh worker for CPU only after a hung GPU frame', async () => {
+  const {self, replies, created} = await loadWorker(() => ({faceLandmarks: []}));
+  await self.onmessage({data:{type:'init',mode:'pos',featuresEnabled:true,pulseEnabled:false,delegate:'CPU'}});
+  assert.deepEqual(created, ['CPU']);
+  assert.equal(replies.at(-1).delegate, 'CPU');
+});

@@ -59,3 +59,39 @@ test('speech panel shows server cumulative filler counts and Korean pace label',
     assert.doesNotMatch(html,/>normal</);
   } finally {await server.close();}
 });
+
+function partialEvent(utterance_id, text, start_ms = 0, end_ms = 1600) {
+  return {event:'transcript.partial',version:2,session_id:'one',sequence:1,timestamp_ms:end_ms,
+    module:'speech_rate',level:'info',data:{text,utterance_id,start_ms,end_ms}};
+}
+
+test('a partial transcript is shown until the final of the same utterance replaces it', () => {
+  const partial = feedbackForUi(partialEvent('u1','안녕하세요 오늘은'));
+  let state = reduceFeedback(emptyFeedbackState, partial, 100);
+  assert.deepEqual(state.partialTranscript, {utteranceId:'u1', text:'안녕하세요 오늘은', startMs:0, endMs:1600});
+  // A partial is display-only: it is not the latest speech feedback.
+  assert.equal(state.speech, null);
+  assert.equal(partial.transcriptSnapshot, undefined);
+  state = reduceFeedback(state, feedbackForUi(partialEvent('u1','안녕하세요 오늘은 발표', 0, 3200)), 200);
+  assert.equal(state.partialTranscript.text, '안녕하세요 오늘은 발표');
+  const final = feedbackForUi(event({pace:'normal',utterance_id:'u1',revision:1}, '안녕하세요 오늘은 발표를'));
+  state = reduceFeedback(state, final, 300);
+  assert.equal(state.partialTranscript, null);
+  assert.equal(state.speech.transcript, '안녕하세요 오늘은 발표를');
+  // A late preview of an already finalized utterance never comes back.
+  assert.equal(reduceFeedback(state, feedbackForUi(partialEvent('u1','늦은 미리보기')), 400).partialTranscript, null);
+});
+
+test('a final of an earlier utterance keeps the newer partial', () => {
+  let state = reduceFeedback(emptyFeedbackState, feedbackForUi(partialEvent('u2','다음 문장', 8000, 9600)), 100);
+  state = reduceFeedback(state, feedbackForUi(event({pace:'normal',utterance_id:'u1',revision:1})), 200);
+  assert.equal(state.partialTranscript.utteranceId, 'u2');
+});
+
+test('silence or an empty result after the partial started clears it', () => {
+  const partial = reduceFeedback(emptyFeedbackState, feedbackForUi(partialEvent('u3','말하던', 5000, 6600)), 100);
+  const waiting = {...feedbackForUi(event({pace:'unknown',filler_status:'unavailable'}, null)), timestamp:9000};
+  assert.equal(reduceFeedback(partial, waiting, 200).partialTranscript, null);
+  const older = {...waiting, timestamp:1000};
+  assert.equal(reduceFeedback(partial, older, 200).partialTranscript.utteranceId, 'u3');
+});

@@ -11,6 +11,10 @@ const buffer = new PulseBuffer();
 let detector, previous, lastAnalysis = -Infinity, lastDisplay = -Infinity, lastResult = emptyPulse(), epoch = 0;
 let totalFrames = 0, acceptedFrames = 0, frameTimes = [], boxes = [], lightLevel = null, frameTime = 0;
 let cachedFaces = [], lastDetection = -Infinity;
+// MediaPipe VIDEO mode needs strictly increasing timestamps, across warm-up and real frames.
+const SLOW_GPU_DETECT_MS = 250;
+let lastStamp = -Infinity;
+const nextStamp = time => (lastStamp = Math.max(time, lastStamp + 1));
 let mode = 'pos', segment = 0, neuralBusy = false, crops = [], wave = [], neuralWindows = 0;
 let lastInference = null, lastFrameAccepted = -Infinity;
 let lastNeuralAttempt = -Infinity;
@@ -85,13 +89,25 @@ self.onmessage = async ({data}) => {
           minFacePresenceConfidence: 0.65, minTrackingConfidence: 0.65,
           outputFaceBlendshapes: featuresEnabled, outputFacialTransformationMatrixes: featuresEnabled,
         });
-      featureDelegate = featuresEnabled ? 'GPU' : 'CPU';
-      try { detector = await createDetector(featureDelegate); }
+      // Warm-up moves shader compilation into init; a GPU still slow afterwards is worse than CPU.
+      const prepare = async delegate => {
+        const next = await createDetector(delegate);
+        try {
+          next.detectForVideo(canvas, nextStamp(0));
+          const started = Date.now();
+          next.detectForVideo(canvas, nextStamp(0));
+          if (delegate === 'GPU' && Date.now() - started > SLOW_GPU_DETECT_MS) throw new Error('GPU delegate too slow');
+        } catch (error) { next.close?.(); throw error; }
+        return next;
+      };
+      // The hook asks for CPU after a GPU worker stopped answering a frame.
+      featureDelegate = data.delegate === 'CPU' || !featuresEnabled ? 'CPU' : 'GPU';
+      try { detector = await prepare(featureDelegate); }
       catch (error) {
         if (featureDelegate !== 'GPU') throw error;
-        featureDelegate = 'CPU'; detector = await createDetector('CPU');
+        featureDelegate = 'CPU'; detector = await prepare('CPU');
       }
-      self.postMessage({type: 'ready'});
+      self.postMessage({type: 'ready', delegate: featureDelegate});
     } catch { self.postMessage({type: 'error', message: '얼굴 모델 준비 실패 · npm run prepare:pulse-assets와 브라우저 WebGL 지원을 확인해 주세요.'}); }
     return;
   }
@@ -137,7 +153,7 @@ self.onmessage = async ({data}) => {
       : mode === 'efficientphys' ? 200 : 100;
     if (time - lastDetection >= faceInterval || time < lastDetection) {
       const detectionStarted = Date.now();
-      const detection = detector.detectForVideo(canvas, time);
+      const detection = detector.detectForVideo(canvas, nextStamp(time));
       detectionCost = detectionCost * .7 + (Date.now() - detectionStarted) * .3;
       cachedFaces = detection.faceLandmarks;
       lastDetection = time;

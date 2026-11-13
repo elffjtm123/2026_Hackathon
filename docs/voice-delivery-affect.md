@@ -1,6 +1,6 @@
-# Voice features, experimental affect, and final coaching
+# Voice features, voice activation, and final coaching
 
-Updated 2026-11-13. The user requested the GitHub voice extraction changes, then explicitly requested a circumplex-style multimodal affect prototype and an end-of-session coaching popup.
+Updated 2026-11-13. Covers the GitHub voice extraction changes, the end-of-session voice activation chart and the coaching popup. Everything here stays inside the rules of the [voice delivery design](superpowers/specs/2026-10-30-voice-delivery-design.md): no emotion labels, no first-30-second baseline, arousal-side signals only, and only the metrics that design marks as user-facing.
 
 ## Upstream source integrated
 
@@ -20,38 +20,38 @@ Outputs: voiced time, Korean syllables, speech rate including pauses, articulati
 
 Browser requests `autoGainControl: false`, reports the actual setting independently after permission acquisition, and does not hold up model preparation. The delivery toggle is locked during a session; the existing guide/hint toggles remain editable.
 
-Authenticated sessions retain upstream end/report persistence. Upstream pipeline live events still exclude delivery features. Since the local demo has no authenticated REST report, its WebSocket wrapper adds sanitized delivery aggregates **only** to its completion response. `DeliveryReport` displays sentence/10-second tables and a user-triggered JSON download after ending. It does not show live voice emotion scores.
+Authenticated sessions retain upstream end/report persistence. Upstream pipeline live events still exclude delivery features. Since the local demo has no authenticated REST report, its WebSocket wrapper adds sanitized delivery aggregates **only** to its completion response. `DeliveryReport` displays sentence/10-second tables and a user-triggered JSON download after ending. It does not show live voice scores.
 
-## Experimental affect: `circumplex-rules.v1`
+### What users see (`deliveryForUser`)
 
-This extension follows the user's later request; the upstream design document's earlier no-emotion scope is not a restriction on this new requested prototype. It is not a pretrained or validated affect classifier.
+The report and its JSON download hide PVQ, absolute loudness (dBFS), alpha ratio and Hammarberg index. These are still computed and stored for analysis, but the design withholds them: PVQ showed no relation to expert ratings, absolute loudness depends on the microphone and room, and spectral balance is not validated. Loudness appears only as `loudness_rel_db`, the change against this session's window baseline, and only when the applied microphone setting reports AGC off (`delivery_metrics.agc_on === false`, set from the `session.audio_settings` event). With AGC on or unreported, no loudness value is shown.
 
-- During running/draining, retain bounded in-memory, timestamped facial samples and distinct actual rPPG estimates. No automatic upload or database storage of these browser signals.
-- Only rPPG status `observed`, not provisional/held/ended, age <=6.5 seconds, and a new model-window identity is accepted. Repeated displays of one value are deduplicated. Assign it using its measurement time, not the render time.
-- Align browser samples to the backend voice windows. Require face coverage >=50% using 200 ms buckets, at least one new accepted BPM, >=1 second voice and finite positive F0/articulation rate. Comparison intervals shorter than 5 seconds are withheld.
-- The first three complete valid 10-second windows establish a personal reference. They are not classified and are not assumed to be physiological rest. Later qualified windows are compared. Missing signals never become neutral emotion.
-- Arousal is a weighted heuristic: 45% pulse change, 45% voice change, 10% eye widening. Change scales: 15 BPM, 4 semitones, 25% articulation-rate change, 6 dB. Voice uses F0/speed and loudness only when applied AGC is confirmed off.
-- Valence is a facial-movement heuristic: `clip(1.6*mean(smile-frown)-0.25*mean(browDown))`. It is not a direct measure of subjective pleasantness.
-- Both axes are clipped to [-1,1]. Axis magnitudes under .2 are labelled neutral/mixed; otherwise the four labels are activated/pleasant, activated/unpleasant, low-activation/pleasant, low-activation/unpleasant, shown in Korean as tendencies. These thresholds/weights are initial engineering choices, not coefficients validated by Russell's paper.
-- Overall coordinates and dominant label are duration weighted across classified intervals. The display is radially bounded to the circle. Baseline/missing intervals do not contribute to a score.
-- The UI exposes quality/missingness and the criteria, provides per-window selection and JSON export, and identifies the method as experimental. No probability, psychiatric diagnosis, employment eligibility, or ability score is inferred. Self-report labels and held-out user validation are future work.
+## Voice activation: `voice-activation.v2`
+
+A rule-based, unvalidated description of how the speaker's voice in each 10-second window differs from their own voice in the same session. It names no emotion or inner state, and it is not a classifier.
+
+- **Baseline.** The median of qualified windows that **start at or after 30 s**. Our AI Hub 71663 check found F0 about half a semitone lower in the first 30 s, so an early baseline would push every later window upward. Fewer than 3 eligible windows → the analysis returns `status: 'not-enough-data'` and the UI shows 근거 부족 instead of any number.
+- **Qualified window.** At least 5 s observed, at least 1 s voiced, finite positive F0 and articulation rate. A partial first slot is aligned to the end of the slot (its observations end there); other partial slots are aligned to their start. Every qualified window, including those in the first 30 s, is compared against the baseline.
+- **Activation.** Voice terms relative to the baseline: F0 change in semitones (scale 4 st, weight .45), articulation-rate change (25%, .35) and loudness change (6 dB, .2, only when AGC is confirmed off). When the face is visible for at least half of the window and the baseline has 3 such windows, eye-widening change adds 10%. Clipped to [-1, 1]; ±.2 or more is shown as 본인 기준보다 목소리 활성도가 높음/낮음, otherwise 비슷함. Weights and thresholds are initial engineering choices.
+- **Pulse is not fused.** rPPG accuracy is unvalidated and a pulse rise must not be read as a state. The per-window median BPM is drawn as a separate reference trend labelled 참고용·미검증, on screen only. It is not part of activation and is not in the JSON export (see [pretrained-presentation-pulse.md](pretrained-presentation-pulse.md)).
+- **No valence.** Facial smile/frown values are no longer recorded or used; the recorder keeps only timestamped eye-widening values and accepted BPM estimates, bounded and in memory.
+- **Export.** `insightsExport` writes the activation analysis without pulse values, the coaching, and the `deliveryForUser` view of the delivery metrics.
 
 ## Final feedback
 
-`SessionInsights` opens a native dialog after ending, re-openable from the report. It separates experimental affect from coaching based on measured gaze coverage/deviation, existing pace settings (140/360 syllables/min), recognized filler counts and script progress. Missing/disabled inputs are not reported as good measured zero. It offers concrete next-practice actions rather than conclusions about personality or ability. Speech clarity remains a script/STT agreement estimate.
+`SessionInsights` opens a native dialog after ending, re-openable from the report. It shows the voice activation result separately from coaching based on measured gaze coverage/deviation, existing pace settings (140/360 syllables/min), recognized filler counts and script progress. Missing/disabled inputs are not reported as good measured zero. It offers concrete next-practice actions rather than conclusions about personality or ability. Speech clarity remains a script/STT agreement estimate.
 
 ## Evidence and limits
 
-- Full backend regression: 436 passed, 4 platform skips. Existing Starlette/httpx and SciPy deprecation warnings remain.
+- Backend regression (`.venv310/bin/python -m pytest -q`) passes with platform-specific skips; existing Starlette/httpx and SciPy deprecation warnings remain.
 - Real public Korean audio smoke: Qwen Q8 on Vulkan0 produced a nonempty transcript; delivery observed 2,880 ms voiced, F0 about 268.1 Hz, loudness about -18.0 dBFS, and spectral/window features; completion succeeded and model processes returned idle. Overall delivery status correctly remained unavailable for this short sample. This checks integration, not acoustic/affect accuracy against a sensor or human annotation.
 - The real public result is in `tests/fixtures/voice-delivery-public.json`; no user recording is included.
-- `tests/session-insights-smoke.html` has explicitly synthetic face/physiology/voice examples for quadrant, missingness and popup UI QA, plus the real public voice result with affect withheld because it has no face/pulse recording. It never requests camera/microphone.
-- No actual user's emotional state, true heart rate, or accuracy of full concurrent camera/audio inference was validated. rPPG dropout remains a legitimate reason to withhold the combined estimate.
+- `tests/session-insights-smoke.html` has synthetic eye-openness/pulse/voice examples (voice activation above, below and similar to the baseline, too little data after 30 s, missing pulse) for popup UI QA, plus the real public voice result (too short for a baseline, so activation is withheld). It never requests camera/microphone.
+- No true heart rate, relation of voice activation to any human rating, or accuracy of full concurrent camera/audio inference was validated.
 
 ## References
 
 - [Project upstream](https://github.com/elffjtm123/2026_Hackathon)
-- [Russell, A circumplex model of affect (1980)](https://doi.org/10.1037/h0077714)
 - [Barrett et al., Emotional Expressions Reconsidered (2019)](https://www.psychologicalscience.org/journals/pspi/1529100619832930/)
 - [Praat-Parselmouth](https://github.com/YannickJadoul/Parselmouth)
 

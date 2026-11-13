@@ -1,8 +1,8 @@
 import asyncio
-import ipaddress
 
 from fastapi import APIRouter, Request
 
+from app.api.local_only import local_request_verdict
 from app.core.errors import AppError
 from app.services.pretrained_pulse import PULSE_MODELS, pulse_contract, pulse_limit
 
@@ -10,14 +10,15 @@ router = APIRouter(prefix="/pulse", tags=["local-pretrained-pulse"])
 
 
 def check_local(request: Request, write: bool = False) -> None:
-    settings = request.app.state.settings
-    try:
-        local = bool(request.client and ipaddress.ip_address(request.client.host).is_loopback)
-    except ValueError:
-        local = False
-    if settings.app_env == "production" or not settings.pulse_enabled:
+    verdict = local_request_verdict(
+        request,
+        environments={"development", "test"},
+        enabled=request.app.state.settings.pulse_enabled,
+        origin="required" if write else "ignore",
+    )
+    if verdict == "disabled":
         raise AppError("NOT_FOUND", "맥박 실험 기능을 사용할 수 없습니다.", 404)
-    if not local or write and request.headers.get("origin") not in settings.cors_origins:
+    if verdict == "not_local":
         raise AppError("LOCAL_ONLY", "허용된 로컬 발표 화면에서만 실행할 수 있습니다.", 403)
 
 
@@ -31,7 +32,10 @@ async def model(request: Request, model_id: str = 'pure_efficientphys') -> dict:
         "model_id": model_id,
         "training_dataset": contract['dataset'],
         "available": manager.available(model_id),
-        "models": [{"id": key, **value, "available": manager.available(key)} for key,value in PULSE_MODELS.items()],
+        "models": [
+            {"id": key, **value, "available": manager.available(key)}
+            for key, value in PULSE_MODELS.items()
+        ],
         "loaded": manager.session is not None,
         "busy": manager.busy,
         "runtime": "ONNX Runtime CPU",

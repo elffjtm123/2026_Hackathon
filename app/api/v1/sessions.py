@@ -19,6 +19,7 @@ from app.schemas.session import (
     WebRTCAnswer,
     WebRTCOffer,
 )
+from app.services.experiment_exclusion import ExperimentRunning
 from app.services.session_service import (
     activate_session,
     complete_session,
@@ -90,14 +91,11 @@ async def webrtc_offer(
     user: CurrentUser,
     db: DBSession,
 ) -> WebRTCAnswer:
-    state = request.app.state
-    if state.stt_experiments.busy or state.live_speech.busy:
-        raise AppError("EXPERIMENT_BUSY", "비교 실험을 종료한 뒤 시작해 주세요.", 409)
-    state.experiment_session_count += 1
     try:
-        return await _create_webrtc_answer(session_id, payload, request, user, db)
-    finally:
-        state.experiment_session_count -= 1
+        with request.app.state.experiment_exclusion.practice_connection():
+            return await _create_webrtc_answer(session_id, payload, request, user, db)
+    except ExperimentRunning as exc:
+        raise AppError("EXPERIMENT_BUSY", "비교 실험을 종료한 뒤 시작해 주세요.", 409) from exc
 
 
 async def _create_webrtc_answer(

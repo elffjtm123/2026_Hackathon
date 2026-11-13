@@ -1,21 +1,28 @@
-import { useEffect, useState, type RefObject } from 'react';
+import { useCallback, useEffect, useState, type RefObject } from 'react';
 import { usePulse, type FaceFeatureOptions } from './usePulse';
 import './pulse.css';
 import { VideoPreview } from '../practice/components/VideoPreview';
 import { emptyPulse, type PulseResult } from './signal';
 import { pulseModels, type PulseModelId } from './models';
+import { initialPulseMode, pulseMethodLabel, pulseModeAfterCheck } from './pulseMode';
 
-export function PulsePanel({stream, showPreview = false, mode = 'pos', embedded = false, videoRef, onResult, faceFeatures}: {
+export function PulsePanel({stream, showPreview = false, mode: requestedMode = 'pos', embedded = false, videoRef, onResult, faceFeatures, autoFallback = false}: {
   stream: MediaStream | null; showPreview?: boolean; mode?: 'pos' | 'efficientphys'; embedded?: boolean;
   videoRef?: RefObject<HTMLVideoElement | null>; onResult?: (result: PulseResult) => void;
   faceFeatures?: FaceFeatureOptions;
+  /** Switch to browser POS, instead of failing, when the backend model cannot run. */
+  autoFallback?: boolean;
 }) {
-  const [enabled, setEnabled] = useState(mode === 'efficientphys');
+  const [enabled, setEnabled] = useState(requestedMode === 'efficientphys');
+  const [modeState, setModeState] = useState(() => initialPulseMode(requestedMode));
+  const mode = modeState.mode;
+  const fallBack = useCallback((reason: string) =>
+    setModeState(current => pulseModeAfterCheck(current, {ok: false, reason}, true)), []);
   const [baseline, setBaseline] = useState<number | null>(null);
   const [modelId, setModelId] = useState<PulseModelId>('ma_ubfc_tscan');
   const model = pulseModels.find(v=>v.id===modelId)!;
   useEffect(() => { setBaseline(null); }, [stream]);
-  const result = usePulse(stream, enabled, mode, videoRef, modelId, faceFeatures);
+  const result = usePulse(stream, enabled, mode, videoRef, modelId, faceFeatures, autoFallback ? fallBack : undefined);
   useEffect(() => { onResult?.(enabled && (stream || result.ended) ? result : emptyPulse(enabled ? '발표 시작 대기' : '맥박 분석 꺼짐')); }, [result, enabled, stream, onResult]);
   const observed = enabled && !!stream && !result.held && result.status === 'observed' && result.bpm !== null;
   const numeric = enabled && (!!stream || result.ended) && result.bpm !== null;
@@ -32,6 +39,7 @@ export function PulsePanel({stream, showPreview = false, mode = 'pos', embedded 
       <h2>{mode === 'efficientphys' ? '발표 영상 맥박 추정 · 사전학습 모델' : '얼굴 색 변화로 보는 맥박'}</h2></div>
       <label className="pulse-toggle"><input type="checkbox" checked={enabled}
         onChange={e => { setEnabled(e.target.checked); setBaseline(null); }} />{mode === 'efficientphys' ? '발표 중 맥박 분석' : '실험용 분석 켜기'}</label></div>
+    {autoFallback && <p className="pulse-meta pulse-method">추정 방식: {pulseMethodLabel(modeState, model.name)} · 참고용·미검증{modeState.fallbackReason ? ` · 백엔드 모델을 쓸 수 없어 전환했습니다 (${modeState.fallbackReason})` : ''}</p>}
     <p>{mode === 'efficientphys' ? `${model.name} 사전학습 가중치 · ONNX Runtime · 발표 카메라의 같은 영상을 분석합니다.` : 'MediaPipe 얼굴 추적 + POS 신호 분석 · 기존 시선·음성 기능과 별도로 실행합니다.'}</p>
     {mode === 'efficientphys' && <div className="pulse-model-picker"><label>맥박 추정 모델 <select aria-label="맥박 추정 모델" value={modelId} disabled={!!stream}
       onChange={e=>{setModelId(e.target.value as PulseModelId);setBaseline(null);}}>

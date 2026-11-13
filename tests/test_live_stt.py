@@ -2,10 +2,11 @@
 
 import asyncio
 import struct
+import sys
 import threading
 import time
 from dataclasses import replace
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from uuid import uuid4
 
 import numpy as np
@@ -20,6 +21,15 @@ from app.realtime.events import SessionStartData
 from app.services.live_stt import LiveSpeechManager
 
 TEXT = "음 오늘은 발표 연습을 시작하겠습니다"
+
+
+@pytest.fixture(autouse=True)
+def soundfile_optional(monkeypatch):
+    """soundfile (ai extra) only decodes WAV uploads; live candidates receive PCM16 only."""
+    try:
+        import soundfile  # noqa: F401
+    except ImportError:
+        monkeypatch.setitem(sys.modules, "soundfile", ModuleType("soundfile"))
 
 
 class Engine:
@@ -278,7 +288,7 @@ def test_failed_native_load_returns_reason_and_releases_lease(client, monkeypatc
         assert error["data"]["modules"]["speech"]["model"] == LABELS["qwen_q8"]
     assert not client.app.state.live_speech.busy
     assert client.app.state.speech is baseline
-    assert client.app.state.experiment_session_count == 0
+    assert not client.app.state.experiment_exclusion.experiment_blocked
 
 
 def test_theme_lease_blocks_batch_experiment_and_other_demo_session(client):
@@ -290,4 +300,54 @@ def test_theme_lease_blocks_batch_experiment_and_other_demo_session(client):
         with client.websocket_connect("/api/v1/ws/practice-demo?protocol=2"):
             pass
     assert error.value.code == 1013
-    assert client.app.state.experiment_session_count == 0
+    client.app.state.live_speech.owner = None  # the refused peer must not stay counted
+    assert not client.app.state.experiment_exclusion.experiment_blocked
+
+
+def test_failed_load_does_not_hold_the_lease_while_the_socket_stays_open(client, monkeypatch):
+    allow_models(monkeypatch)
+
+    def fail_load(*_):
+        raise RuntimeError("candidate test weights failed to load")
+
+    monkeypatch.setattr("app.services.live_stt.LiveCandidateSpeechAdapter", fail_load)
+    with client.websocket_connect("/api/v1/ws/practice-demo?protocol=2") as socket:
+        socket.send_json(control("session.start", 1, data={"stt_model_id": "qwen_q8"}))
+        assert socket.receive_json()["data"]["code"] == "STT_MODEL_LOAD_FAILED"
+        assert not client.app.state.live_speech.busy
+        # The same socket can retry, and the reason is the real load error, not "busy".
+        socket.send_json(control("session.start", 2, data={"stt_model_id": "qwen_q8"}))
+        error = socket.receive_json()["data"]
+        assert error["code"] == "STT_MODEL_LOAD_FAILED"
+        assert "weights failed" in error["message"]
+
+
+def test_retry_with_service_model_returns_the_candidate_and_restores_service_stt(
+    client, monkeypatch, tmp_path
+):
+    allow_models(monkeypatch)
+    adapter, engine = candidate(monkeypatch, tmp_path, "whisper_base_int8")
+    monkeypatch.setattr("app.services.live_stt.LiveCandidateSpeechAdapter", lambda *_: adapter)
+    from app.realtime.pipeline import SessionPipeline
+
+    original_prepare = SessionPipeline.prepare
+    seen = []
+
+    async def prepare_once_failing(self):
+        seen.append(self.speech)
+        if len(seen) == 1:
+            raise ValueError("MODEL_UNAVAILABLE_OR_BUSY")
+        await original_prepare(self)
+
+    monkeypatch.setattr(SessionPipeline, "prepare", prepare_once_failing)
+    with client.websocket_connect("/api/v1/ws/practice-demo?protocol=2") as socket:
+        start = {"stt_model_id": "whisper_base_int8"}
+        socket.send_json(control("session.start", 1, data=start))
+        assert socket.receive_json()["data"]["code"] == "MODEL_UNAVAILABLE_OR_BUSY"
+        socket.send_json(control("session.start", 2, data={}))
+        ready = until(socket, "session.ready")
+        assert ready["data"]["comparison"] is None
+        assert ready["data"]["modules"]["speech"]["model"] != LABELS["whisper_base_int8"]
+        assert not client.app.state.live_speech.busy
+        assert engine.closed
+    assert seen == [adapter, client.app.state.speech]

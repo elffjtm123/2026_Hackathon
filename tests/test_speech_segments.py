@@ -107,3 +107,33 @@ def test_cut_reason_distinguishes_endpoint_max_length_and_flush():
     data = frames(450)
     outputs = s.feed(MediaPayload(uuid4(), 0, data, format="pcm16")) + s.flush()
     assert [x.cut_reason for x in outputs] == ["max_length", "flush"]
+
+
+def test_snapshot_previews_active_segment_with_the_id_its_final_will_get():
+    s = segmenter()
+    session = uuid4()
+    assert s.snapshot() is None
+    data = frames(0, 5) + frames(60)
+    assert s.feed(MediaPayload(session, 1000, data, format="pcm16")) == []
+    preview = s.snapshot()
+    assert preview is not None
+    # 200 ms pre-roll is kept, as in the final segment.
+    assert (preview.utterance_id, preview.start_ms, preview.end_ms) == ("u1", 1000, 2300)
+    assert preview.voiced_ms == 1200
+    assert preview.pcm == data
+    assert s.snapshot() == preview  # A snapshot never mutates segmenter state.
+    final = s.feed(MediaPayload(session, 2300, frames(0, 25), start_sample=20800, format="pcm16"))
+    assert [(x.utterance_id, x.start_ms) for x in final] == [("u1", 1000)]
+    assert final[0].pcm.startswith(preview.pcm)
+    assert s.snapshot() is None
+
+
+def test_snapshot_after_max_length_cut_uses_next_utterance_id():
+    s = segmenter()
+    data = frames(450)
+    outputs = s.feed(MediaPayload(uuid4(), 0, data, format="pcm16"))
+    assert [x.utterance_id for x in outputs] == ["u1"]
+    preview = s.snapshot()
+    assert preview is not None
+    assert (preview.utterance_id, preview.start_ms, preview.end_ms) == ("u2", 8000, 9000)
+    assert s.flush()[0].utterance_id == "u2"

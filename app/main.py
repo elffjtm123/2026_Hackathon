@@ -38,6 +38,7 @@ from app.realtime.events import ModuleStatus
 from app.realtime.registry import PipelineRegistry
 from app.realtime.state import SessionStateStore
 from app.realtime.webrtc import WebRTCManager
+from app.services.experiment_exclusion import ExperimentExclusion
 from app.services.live_stt import LiveSpeechManager
 from app.services.pretrained_pulse import PretrainedPulse
 from app.services.stt_experiments import ExperimentManager
@@ -152,9 +153,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         app.state.webrtc = WebRTCManager(settings)
         app.state.websocket_counts = {}
-        app.state.experiment_session_count = 0
         app.state.stt_experiments = ExperimentManager(settings, speech, execution)
         app.state.live_speech = LiveSpeechManager(settings, speech)
+        app.state.experiment_exclusion = ExperimentExclusion(
+            experiments=app.state.stt_experiments,
+            live_speech=app.state.live_speech,
+            execution=execution,
+            pipelines=app.state.pipelines,
+            webrtc=app.state.webrtc,
+        )
         app.state.pretrained_pulse = PretrainedPulse(settings.pulse_model_dir)
         pulse_cleanup = asyncio.create_task(app.state.pretrained_pulse.idle_cleanup())
         # Guards the check-then-increment of websocket_counts across concurrent handshakes.

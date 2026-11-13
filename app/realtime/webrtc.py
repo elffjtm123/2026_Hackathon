@@ -29,6 +29,11 @@ class WebRTCManager:
         self.connections: dict[UUID, set[RTCPeerConnection]] = {}
         self.tasks: set[asyncio.Task[None]] = set()
 
+    @property
+    def busy(self) -> bool:
+        """True while any session holds an open peer connection."""
+        return any(self.connections.values())
+
     def _configuration(self) -> RTCConfiguration:
         servers: list[RTCIceServer] = []
         if self.settings.turn_url:

@@ -32,7 +32,7 @@ export function FeedbackPanel({
 
       {socketError ? <p className="error-text">{socketError}</p> : null}
 
-      {feedback.gaze || feedback.speech || feedback.gazeStale ? (
+      {feedback.gaze || feedback.speech || feedback.gazeStale || feedback.partialTranscript ? (
         <div className="feedback-detail">
           <div>
             <span className="label">시선 상태</span>
@@ -61,10 +61,15 @@ export function FeedbackPanel({
               .map(([word,count]) => `${word} ${count}회`).join(', ') || '검출 없음'}</p>
             <small>음성 인식에서 생략된 습관어는 집계되지 않을 수 있습니다.</small>
           </div> : null}
-          {feedback.speech?.transcript ? (
+          {feedback.speech?.transcript || feedback.partialTranscript ? (
             <div>
               <span className="label">인식된 음성</span>
-              <p>{feedback.speech.transcript}</p>
+              {feedback.speech?.transcript ? <p>{feedback.speech.transcript}</p> : null}
+              {feedback.partialTranscript ? (
+                <p className="transcript-partial" aria-live="polite">
+                  {feedback.partialTranscript.text} <small>(인식 중)</small>
+                </p>
+              ) : null}
             </div>
           ) : null}
         </div>

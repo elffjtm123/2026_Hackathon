@@ -4,11 +4,10 @@ import type { BackendClientEvent, ClientRealtimeMessage, ConnectionStatus, Pract
 import type { ModuleStatus, RealtimeEvent, SessionPhase, SessionReadyData } from '../../../lib/realtimeProtocol.ts';
 import { completionForUi, feedbackForUi } from '../../../lib/realtimeProtocol.ts';
 import { encodeMediaV2, type MediaPacket } from '../../../lib/mediaProtocol.ts';
+import { feedbackWsUrl } from '../../../lib/apiBase.ts';
 import type { ModelId } from '../../model-themes/modelThemes';
 import { acceptServerEvent, checkMediaBacklog, sessionStartData, deliverAudioSettings, type AudioSettings } from '../sessionLifecycle.ts';
 
-const feedbackWsUrl = (import.meta.env?.VITE_FEEDBACK_WS_URL as string | undefined)
-  ?? 'ws://127.0.0.1:8000/api/v1/ws/practice-demo';
 
 // v1 compatibility adapter; live capture uses v2.
 export function toBackendEvent(message: ClientRealtimeMessage): BackendClientEvent {
@@ -121,7 +120,8 @@ export function useFeedbackSocket(onFeedback: (feedback: RealtimeFeedback) => vo
           const sequence = Number(message.data.accepted_sequence);
           const value = ackRef.current.get(sequence);
           if (value) {clearTimeout(value.pending.timer); value.pending.resolve(); ackRef.current.delete(sequence); acknowledgedRef.current = Math.max(acknowledgedRef.current, sequence);}
-        } else if (message.event === 'feedback' || message.event === 'script.progress') {
+        } else if (message.event === 'feedback' || message.event === 'script.progress'
+            || message.event === 'transcript.partial') {
           callbacks.current.onFeedback(feedbackForUi(message));
         } else if (message.event === 'session.completed') {
           if (readyRef.current) {clearTimeout(readyRef.current.timer); readyRef.current.reject(new Error('모델 준비가 취소되었습니다.')); readyRef.current = null;}

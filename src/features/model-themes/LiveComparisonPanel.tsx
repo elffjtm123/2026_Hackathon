@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { PracticeSummary } from '../../lib/realtimeProtocol';
-import { storeRun } from './runHistory';
+import { storeRun, summaryForUser } from './runHistory';
 
 function ms(value: number | null | undefined) { return value == null ? '미측정' : `${Math.round(value)} ms`; }
 
@@ -17,7 +17,8 @@ export function LiveComparisonPanel({summary}: {summary: PracticeSummary | null}
     } catch { setStorageWarning('브라우저 저장 공간이 없어 기록을 보관하지 못했습니다. JSON을 직접 저장하거나 복사해 주세요.'); }
   }, [summary, comparison, note, createdAt]);
   if (!summary || !comparison) return null;
-  const data = JSON.stringify({created_at: createdAt, note, summary, report: summary.backendReport}, null, 2);
+  const shown = summaryForUser(summary);
+  const data = JSON.stringify({created_at: createdAt, note, summary: shown, report: shown.backendReport}, null, 2);
   const errors = Object.entries(comparison.errors ?? {});
   function download() {
     const blob = new Blob([data], {type: 'application/json'});
@@ -45,7 +46,7 @@ export function LiveComparisonPanel({summary}: {summary: PracticeSummary | null}
     <p>종료 결과와 메모는 이 탭의 세션 저장소에 최신 20개까지 보관합니다. 녹음·영상 파일은 저장하지 않습니다.</p>
     {storageWarning && <p className="error-banner" role="alert">{storageWarning}</p>}
     <div className="live-comparison-actions"><button className="secondary-button" onClick={download}>통합 결과 JSON 저장</button>
-      <a href="#" className="secondary-button theme-link">다른 테마와 비교하기</a></div>
+      <a href="#themes" className="secondary-button theme-link">다른 테마와 비교하기</a></div>
     <details><summary>저장이 안 되면 결과 원문 복사</summary><textarea aria-label="통합 결과 JSON 원문" readOnly rows={8} value={data} /></details>
     <details><summary>실행 설정 및 해석 주의</summary><ul>{comparison.notes.map(text => <li key={text}>{text}</li>)}</ul>
       <pre>{JSON.stringify(comparison, null, 2)}</pre></details>

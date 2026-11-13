@@ -1,8 +1,11 @@
 import type { RealtimeFeedback } from "./types";
-import type { ScriptProgress } from '../../lib/realtimeProtocol';
+import type { PartialTranscript, ScriptProgress } from '../../lib/realtimeProtocol';
 
 export type FeedbackState = {
   scriptProgress?: ScriptProgress;
+  // Live caption of the utterance in progress; display-only, never summarized or exported.
+  partialTranscript?: PartialTranscript | null;
+  lastFinalUtteranceId?: string;
   gaze: RealtimeFeedback | null;
   speech: RealtimeFeedback | null;
   pronunciation: RealtimeFeedback | null;
@@ -25,10 +28,24 @@ export function reduceFeedback(
   if (feedback.source === "gaze") {
     return { ...state, gaze: feedback, receivedAt: {...state.receivedAt, gaze: receivedAt}, gazeStale: false };
   }
+  if (feedback.source === 'transcript_partial') {
+    const partial = feedback.partialTranscript;
+    if (!partial?.text || partial.utteranceId === state.lastFinalUtteranceId) return state;
+    return {...state, partialTranscript: partial};
+  }
   if (feedback.source === "speech_rate") {
+    const partial = state.partialTranscript;
+    // The final of the same utterance replaces its preview; silence or an empty result after
+    // the preview started means that utterance is over.
+    const partialEnded = partial != null && (feedback.utteranceId
+      ? feedback.utteranceId === partial.utteranceId
+      : !feedback.transcript && feedback.timestamp >= partial.startMs);
+    const next = {...state,
+      ...(partialEnded ? {partialTranscript: null} : {}),
+      ...(feedback.transcript && feedback.utteranceId ? {lastFinalUtteranceId: feedback.utteranceId} : {})};
     if (feedback.utteranceId && feedback.utteranceId === state.speech?.utteranceId &&
-        feedback.revision === state.speech?.revision) return state;
-    return { ...state, speech: feedback, receivedAt: {...state.receivedAt, speech: receivedAt} };
+        feedback.revision === state.speech?.revision) return partialEnded ? next : state;
+    return { ...next, speech: feedback, receivedAt: {...state.receivedAt, speech: receivedAt} };
   }
   if (feedback.source === "pronunciation") {
     return { ...state, pronunciation: feedback, receivedAt: {...state.receivedAt, pronunciation: receivedAt} };

@@ -7,7 +7,7 @@ import json
 import struct
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     import numpy as np
@@ -92,12 +92,12 @@ def prepare_pulse_tensor(times: np.ndarray, frames: np.ndarray, model_id: str = 
 class PretrainedPulse:
     def __init__(self, directory: str) -> None:
         self.directory = Path(directory)
-        self.session = None
+        self.session: Any = None  # onnxruntime.InferenceSession once loaded
         self.busy = False
         self.closed = False
         self.request_active = False
         self.last_used = 0.0
-        self.loaded_model_id = None
+        self.loaded_model_id: str | None = None
 
     def paths(self, model_id: str):
         pulse_contract(model_id)
@@ -151,15 +151,15 @@ class PretrainedPulse:
             raise AppError("PULSE_UNAVAILABLE", "맥박 모델이 종료되었습니다.", 503)
         if self.busy:
             raise AppError("PULSE_BUSY", "다른 맥박 입력을 처리 중입니다.", 409)
-        pulse_contract(model_id)
-        if not (self.available() if model_id == 'pure_efficientphys' else self.available(model_id)):
-            raise AppError(
-                "PULSE_MODEL_MISSING", "선택한 맥박 모델 파일이 준비되지 않았습니다.", 503
-            )
+        # A malformed packet is the client's error whatever the model state, so validate first.
         try:
             times, frames = read_pulse_packet(payload, model_id)
         except ValueError as exc:
             raise AppError(str(exc), "유효 영상과 촬영 시각을 확인해 주세요.", 422) from exc
+        if not (self.available() if model_id == 'pure_efficientphys' else self.available(model_id)):
+            raise AppError(
+                "PULSE_MODEL_MISSING", "선택한 맥박 모델 파일이 준비되지 않았습니다.", 503
+            )
         self.busy = True
         task = asyncio.create_task(asyncio.to_thread(self._run, times, frames, model_id))
         try:

@@ -3,6 +3,7 @@ from uuid import UUID, uuid4
 
 from pydantic import AliasChoices, BaseModel, Field, model_validator
 
+from app.ai.stt_models import SttModelId
 from app.schemas.session import AnalysisSettings
 
 EventName = Literal[
@@ -35,12 +36,7 @@ class ModuleStatus(BaseModel):
 class SessionStartData(BaseModel):
     mode: Literal["presentation", "interview"] = "presentation"
     settings: AnalysisSettings = Field(default_factory=AnalysisSettings)
-    stt_model_id: (
-        Literal[
-            "service_qwen", "qwen_q8", "whisper_small_int8", "whisper_base_int8", "zipformer_int8"
-        ]
-        | None
-    ) = None
+    stt_model_id: SttModelId | None = None
     script: str | None = Field(default=None, max_length=20_000)
     time_limit_seconds: int | None = Field(
         default=None,

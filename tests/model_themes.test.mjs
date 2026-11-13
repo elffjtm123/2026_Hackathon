@@ -67,6 +67,19 @@ test('every model reuses the complete practice screen rather than an STT-only pa
   }
 });
 
+test('practice screen links to theme selection at #themes, never back to the bare hash', async () => {
+  const { PracticePage } = await server.ssrLoadModule('/src/features/practice/PracticePage.tsx');
+  const html = renderToStaticMarkup(createElement(PracticePage));
+  assert.match(html, /<a href="#themes"[^>]*>테마 선택<\/a>/);
+  assert.doesNotMatch(html, /href="#"/);
+  const { LiveComparisonPanel } = await server.ssrLoadModule('/src/features/model-themes/LiveComparisonPanel.tsx');
+  const summary = { sessionId: 's', durationSeconds: 1, incomplete: false, transcript: null,
+    comparison: { model_id: 'qwen_q8', label: 'Qwen Q8', notes: [] } };
+  const panel = renderToStaticMarkup(createElement(LiveComparisonPanel, { summary }));
+  assert.match(panel, /href="#themes"/);
+  assert.doesNotMatch(panel, /href="#"/);
+});
+
 test('pulse panel starts off with no invented reading and identifies unconnected research tools', async () => {
   const { PulsePanel } = await server.ssrLoadModule('/src/features/pulse/PulsePanel.tsx');
   const html = renderToStaticMarkup(createElement(PulsePanel, {stream: null}));
@@ -106,4 +119,33 @@ test('provisional and ended pulse values are labeled instead of presented as ver
   assert.match(live,/72 BPM/); assert.match(live,/잠정 추정/); assert.match(live,/TS-CAN/);
   const ended=renderToStaticMarkup(createElement(PulseOverlay,{result:{...result,ended:true},active:false}));
   assert.match(ended,/72 BPM/); assert.match(ended,/종료 · 마지막 잠정값/);
+});
+
+const withheldKeys = ['pvq', 'loudness_dbfs', 'alpha_ratio_db', 'hammarberg_db', 'loudness_rel_db'];
+function summaryWithRawDelivery() {
+  const row = {start_ms: 0, end_ms: 10000, speech_rate: 300, pvq: .12, loudness_dbfs: -21.5, loudness_rel_db: 2.5,
+    alpha_ratio_db: -8, hammarberg_db: 14};
+  const delivery_metrics = {status: 'observed', agc_on: null,
+    report: {total_voiced_ms: 60000, sentences: [{...row}], baseline: {...row}, bursts: []},
+    windows: {window_ms: 10000, baseline: {...row}, windows: [{...row}]}};
+  const report = completionForUi({incomplete: false, delivery_metrics,
+    comparison: {model_id: 'qwen_q8', label: 'Qwen Q8', notes: []}});
+  return {sessionId: 's', durationSeconds: 1, incomplete: false, transcript: null,
+    comparison: report.comparison, backendReport: report.backendReport, deliveryMetrics: report.deliveryMetrics};
+}
+
+test('stored comparison runs never keep delivery measures withheld from users', () => {
+  const data = new Map();
+  const storage = {getItem: key => data.get(key) ?? null, setItem: (key, value) => data.set(key, value)};
+  storeRun(storage, {id: 's', createdAt: '2026-11-13', note: '', summary: summaryWithRawDelivery()});
+  const stored = data.get(historyKey);
+  for (const key of withheldKeys) assert.ok(!stored.includes(`"${key}"`), key);
+  assert.ok(stored.includes('"speech_rate"'));
+});
+
+test('comparison JSON export never shows delivery measures withheld from users', async () => {
+  const { LiveComparisonPanel } = await server.ssrLoadModule('/src/features/model-themes/LiveComparisonPanel.tsx');
+  const panel = renderToStaticMarkup(createElement(LiveComparisonPanel, { summary: summaryWithRawDelivery() }));
+  for (const key of withheldKeys) assert.ok(!panel.includes(`&quot;${key}&quot;`), key);
+  assert.ok(panel.includes('&quot;speech_rate&quot;'));
 });

@@ -1,6 +1,5 @@
 import asyncio
 import contextlib
-import ipaddress
 import json
 import time
 from functools import wraps
@@ -14,13 +13,15 @@ from pydantic import ValidationError
 from sqlalchemy import select
 from starlette.types import Message
 
-from app.ai.experimental_stt import LABELS
 from app.ai.model_execution import finish
+from app.api.local_only import local_request_verdict
 from app.core.security import decode_token
 from app.db.models.session import PracticeSession, SessionStatus
 from app.realtime.events import ClientEvent, RealtimeEvent, SessionStartData, V2ClientEvent
 from app.realtime.media import decode_media_v2
 from app.realtime.pipeline import SessionPipeline
+from app.services.experiment_exclusion import ExperimentRunning
+from app.services.live_stt import SessionSpeechLease
 from app.services.session_service import safe_delivery_metrics
 
 router = APIRouter(tags=["realtime"])
@@ -31,14 +32,11 @@ def exclude_stt_experiment(handler: Any) -> Any:
 
     @wraps(handler)
     async def guarded(websocket: WebSocket, *args: Any, **kwargs: Any) -> None:
-        if websocket.app.state.stt_experiments.busy or websocket.app.state.live_speech.busy:
-            await websocket.close(code=1013, reason="STT comparison experiment is running")
-            return
-        websocket.app.state.experiment_session_count += 1
         try:
-            await handler(websocket, *args, **kwargs)
-        finally:
-            websocket.app.state.experiment_session_count -= 1
+            with websocket.app.state.experiment_exclusion.practice_connection():
+                await handler(websocket, *args, **kwargs)
+        except ExperimentRunning:
+            await websocket.close(code=1013, reason="STT comparison experiment is running")
 
     return guarded
 
@@ -67,18 +65,22 @@ async def _v2_session(
         # The local demo has no authenticated REST report. Return aggregates only after stop;
         # keep the upstream authenticated persistence and live-event contracts unchanged.
         if event.event == "session.completed" and user_id is None and pipeline.completed_report:
-            event = event.model_copy(update={"data": {
-                **event.data,
-                "report": {**event.data.get("report", {}), "delivery_metrics": safe_delivery_metrics(
-                    pipeline.completed_report.get("delivery_metrics")
-                )},
-            }})
+            metrics = safe_delivery_metrics(pipeline.completed_report.get("delivery_metrics"))
+            report = {**event.data.get("report", {}), "delivery_metrics": metrics}
+            event = event.model_copy(update={"data": {**event.data, "report": report}})
         async with send_lock:
             await websocket.send_text(event.model_dump_json())
 
     pipeline.subscribe(subscriber, send)
     started = False
-    session_modules = dict(websocket.app.state.module_status)
+    speech_lease = SessionSpeechLease(
+        websocket.app.state.live_speech,
+        session_id,
+        websocket.app.state.speech,
+        websocket.app.state.module_status,
+        enabled=settings.stt_experiments_enabled,
+        authenticated=stored_settings is not None,
+    )
     client_sequence = 0
     calibration_timer: asyncio.Task[None] | None = None
     live_registered = False
@@ -213,35 +215,9 @@ async def _v2_session(
                         raw_audio_settings: Any = raw_audio_settings,
                     ) -> None:
                         nonlocal pipeline, live_registered
-                        if start_data.stt_model_id is not None and stored_settings is not None:
-                            raise ValueError("STT_SELECTION_LOCAL_DEMO_ONLY")
-                        if start_data.stt_model_id not in {None, "service_qwen"}:
-                            if not settings.stt_experiments_enabled:
-                                raise ValueError("STT_SELECTION_DISABLED")
-                            try:
-                                (
-                                    adapter,
-                                    status,
-                                    comparison,
-                                ) = await websocket.app.state.live_speech.acquire(
-                                    session_id, start_data.stt_model_id
-                                )
-                            except Exception as exc:
-                                session_modules["speech"] = session_modules["speech"].model_copy(
-                                    update={
-                                        "status": "unavailable",
-                                        "model": LABELS[start_data.stt_model_id],
-                                        "reason": str(exc)[:300],
-                                    }
-                                )
-                                raise ValueError("STT_MODEL_LOAD_FAILED") from exc
-                            pipeline.speech = adapter
-                            pipeline.comparison = {
-                                **comparison,
-                                "mode": start_data.mode,
-                                "gaze": session_modules["gaze"].model_dump(),
-                            }
-                            session_modules["speech"] = status
+                        await speech_lease.attach(
+                            pipeline, start_data.stt_model_id, start_data.mode
+                        )
                         if stored_settings is not None:
                             prepared = await websocket.app.state.pipelines.get_or_create(
                                 session_id, stored_settings, protocol=2
@@ -256,14 +232,7 @@ async def _v2_session(
                         websocket.app.state.live_sessions.add(session_id)
                         live_registered = True
                         await pipeline.prepare()
-                        for name, module in websocket.app.state.module_status.items():
-                            if name != "speech" or start_data.stt_model_id in {
-                                None,
-                                "service_qwen",
-                            }:
-                                session_modules[name] = module
-                        if pipeline.comparison is not None:
-                            pipeline.comparison["gaze"] = session_modules["gaze"].model_dump()
+                        speech_lease.refresh(pipeline)
 
                     # A failed earlier attempt must not leak its early settings into this one.
                     early_audio_settings, has_early_audio_settings = None, False
@@ -280,9 +249,11 @@ async def _v2_session(
                             "transport": "websocket",
                             "modules": {
                                 name: module.model_dump()
-                                for name, module in session_modules.items()
+                                for name, module in speech_lease.modules.items()
                             },
-                            "comparison": pipeline.comparison,
+                            "comparison": pipeline.experiment.info
+                            if pipeline.experiment is not None
+                            else None,
                         },
                     )
                 elif event.event == "session.audio_settings":
@@ -312,8 +283,12 @@ async def _v2_session(
             except (ValueError, ValidationError) as exc:
                 pipeline.incomplete = True
                 code = "INVALID_SETTINGS" if isinstance(exc, ValidationError) else str(exc)
-                modules = {name: module.model_dump() for name, module in session_modules.items()}
-                reasons = [module.reason for module in session_modules.values() if module.reason]
+                modules = {
+                    name: module.model_dump() for name, module in speech_lease.modules.items()
+                }
+                reasons = [
+                    module.reason for module in speech_lease.modules.values() if module.reason
+                ]
                 await pipeline.emit(
                     "error",
                     pipeline.elapsed_ms(),
@@ -343,7 +318,8 @@ async def _v2_session(
             finally:
                 if live_registered:
                     websocket.app.state.live_sessions.discard(session_id)
-                await websocket.app.state.live_speech.release(session_id)
+                # Only after the pipeline stopped: the lent adapter may be mid-inference.
+                await speech_lease.release()
 
 
 def _frontend_feedback(event: RealtimeEvent) -> dict[str, Any] | None:
@@ -471,23 +447,16 @@ def _frontend_feedback(event: RealtimeEvent) -> dict[str, Any] | None:
 
 
 @router.websocket("/ws/practice-demo")
-@exclude_stt_experiment
 async def practice_demo_websocket(websocket: WebSocket) -> None:
-    try:
-        loopback = (
-            websocket.client is not None and ipaddress.ip_address(websocket.client.host).is_loopback
-        )
-    except ValueError:
-        loopback = False
-    settings = websocket.app.state.settings
-    origin = websocket.headers.get("origin")
-    if (
-        settings.app_env != "development"
-        or not loopback
-        or (origin is not None and origin not in settings.cors_origins)
-    ):
+    # Refuse remote peers before they are counted as practice connections.
+    if local_request_verdict(websocket, origin="if_present") != "allowed":
         await websocket.close(code=4403, reason="development endpoint")
         return
+    await _practice_demo(websocket)
+
+
+@exclude_stt_experiment
+async def _practice_demo(websocket: WebSocket) -> None:
     await websocket.accept()
     settings = websocket.app.state.settings
     if websocket.query_params.get("protocol") == "2":

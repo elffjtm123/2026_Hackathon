@@ -31,6 +31,11 @@ class PipelineRegistry:
         self.pipelines: dict[UUID, SessionPipeline] = {}
         self._lock = asyncio.Lock()
 
+    @property
+    def busy(self) -> bool:
+        """True while any session pipeline is open."""
+        return bool(self.pipelines)
+
     async def get_or_create(
         self, session_id: UUID, analysis_settings: dict[str, bool], protocol: int = 1
     ) -> SessionPipeline:

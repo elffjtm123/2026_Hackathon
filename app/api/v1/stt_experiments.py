@@ -4,16 +4,22 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 
 from app.ai.experimental_stt import MODEL_IDS
+from app.api.local_only import local_request_verdict
 from app.core.errors import AppError
 from app.services.stt_experiments import MAX_AUDIO_BYTES, read_wav
 
 
 def local_development_only(request: Request) -> None:
-    settings = request.app.state.settings
-    if settings.app_env == "production" or not settings.stt_experiments_enabled:
+    verdict = local_request_verdict(
+        request,
+        environments={"development", "test"},
+        enabled=request.app.state.settings.stt_experiments_enabled,
+        origin="if_present",
+        any_peer_in_test=True,
+    )
+    if verdict == "disabled":
         raise AppError("NOT_FOUND", "실험 기능을 사용할 수 없습니다.", 404)
-    host = request.client.host if request.client else ""
-    if settings.app_env != "test" and host not in {"127.0.0.1", "::1"}:
+    if verdict == "not_local":
         raise AppError("LOCAL_ONLY", "비교 실험은 로컬 컴퓨터에서만 실행할 수 있습니다.", 403)
 
 
@@ -24,23 +30,12 @@ router = APIRouter(
 )
 
 
-def service_session_active(request: Request) -> bool:
-    state = request.app.state
-    return bool(
-        state.experiment_session_count
-        or state.live_speech.busy
-        or (state.model_execution is not None and state.model_execution.owner is not None)
-        or state.pipelines.pipelines
-        or any(state.webrtc.connections.values())
-    )
-
-
 @router.get("/models")
 async def models(request: Request) -> dict:
     manager = request.app.state.stt_experiments
     return {
         "models": manager.models(),
-        "busy": manager.busy or service_session_active(request),
+        "busy": request.app.state.experiment_exclusion.experiment_blocked,
         "max_audio_seconds": 60,
     }
 
@@ -55,7 +50,8 @@ async def start_job(
     warmup: Annotated[bool, Form()] = True,
 ) -> dict:
     manager = request.app.state.stt_experiments
-    if manager.busy or service_session_active(request):
+    exclusion = request.app.state.experiment_exclusion
+    if exclusion.experiment_blocked:
         raise AppError("EXPERIMENT_BUSY", "연습 세션이나 다른 비교 실험을 먼저 종료해 주세요.", 409)
     try:
         ids = json.loads(models)
@@ -75,9 +71,9 @@ async def start_job(
     finally:
         await audio.close()
     # Upload reading yielded control; recheck before reserving the model worker.
-    if manager.busy or service_session_active(request):
+    if exclusion.experiment_blocked:
         raise AppError("EXPERIMENT_BUSY", "다른 세션 또는 실험이 실행 중입니다.", 409)
-    return manager.start(pcm, ids, reference, chunk_seconds, True, warmup)
+    return manager.start(pcm, ids, reference, chunk_seconds, warmup)
 
 
 @router.get("/jobs/{job_id}")

@@ -102,6 +102,26 @@ class SpeechSegmenter:
     def speaking(self) -> bool:
         return self.active is not None and self.quiet_samples < self.endpoint_samples
 
+    def snapshot(self) -> SpeechSegment | None:
+        """Preview the in-progress segment under the id its final segment will get.
+
+        Display-only: it never changes segmenter state, and the final may end earlier
+        (endpoint post-roll) than this preview.
+        """
+        frames = self.active
+        if not frames or not self.voiced_samples:
+            return None
+        assert self.origin_ms is not None
+        start, end = frames[0].start, frames[-1].end
+        return SpeechSegment(
+            f"u{self.counter + 1}",
+            self.origin_ms + start * 1000 // SAMPLE_RATE,
+            self.origin_ms + end * 1000 // SAMPLE_RATE,
+            self.voiced_samples * 1000 // SAMPLE_RATE,
+            b"".join(x.pcm for x in frames),
+            start,
+        )
+
     def feed(self, media: MediaPayload) -> list[SpeechSegment]:
         count = len(media.payload) // 2
         if media.format != "pcm16" or len(media.payload) % 2 or not count:

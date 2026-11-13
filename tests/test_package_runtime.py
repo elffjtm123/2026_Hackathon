@@ -67,6 +67,21 @@ def test_demo_requires_loopback_peer(client):
         assert error.value.code == 4403
 
 
+def test_remote_demo_peer_is_refused_as_remote_even_while_experiment_runs(client):
+    from fastapi.testclient import TestClient
+
+    with TestClient(client.app, client=("192.0.2.1", 12345)) as remote:
+        # Entering the client reruns the lifespan, so mark the experiment on the fresh state.
+        remote.app.state.stt_experiments.busy = True
+        try:
+            with pytest.raises(WebSocketDisconnect) as error:
+                with remote.websocket_connect("/api/v1/ws/practice-demo?protocol=2"):
+                    pass
+            assert error.value.code == 4403
+        finally:
+            remote.app.state.stt_experiments.busy = False
+
+
 def test_demo_rejects_untrusted_browser_origin(client):
     with pytest.raises(WebSocketDisconnect) as error:
         with client.websocket_connect(

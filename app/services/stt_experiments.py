@@ -17,7 +17,7 @@ from typing import Any
 from uuid import uuid4
 
 from app.ai.base import MediaPayload
-from app.ai.experimental_stt import LABELS, catalog, create_engine
+from app.ai.experimental_stt import LABELS, catalog, create_engine, service_threads
 from app.ai.local_stt import has_speech
 from app.modules.speech.analysis import filler_counts
 
@@ -120,7 +120,6 @@ class ExperimentManager:
         model_ids: list[str],
         reference: str,
         chunk_seconds: int,
-        use_gate: bool,
         warmup: bool,
     ) -> dict[str, Any]:
         if self.busy:
@@ -135,7 +134,8 @@ class ExperimentManager:
             "audio_seconds": len(pcm) / 32000,
             "reference": reference,
             "chunk_seconds": chunk_seconds,
-            "use_gate": use_gate,
+            # Always on: the service STT's own RMS/VAD gate cannot be bypassed for comparison.
+            "use_gate": True,
             "warmup": warmup,
             "models": model_ids,
             "results": [],
@@ -233,10 +233,6 @@ class ExperimentManager:
             available = next(m for m in self.models() if m["id"] == model_id)
             if not available["available"]:
                 raise RuntimeError(available["reason"])
-            if model_id == "service_qwen" and not job["use_gate"]:
-                raise RuntimeError(
-                    "현재 서비스의 내장 RMS/VAD를 끌 수 없어 비교 기준은 게이트 ON입니다."
-                )
             sampler = MemorySampler()
             sampler.start()
             started = time.perf_counter()
@@ -260,17 +256,15 @@ class ExperimentManager:
                 }
             )
             if not engine:
-                import torch
-
-                result["metadata"]["threads"] = torch.get_num_threads()
+                result["metadata"]["threads"] = service_threads()
             size = job["chunk_seconds"] * 32000
             chunks = [pcm[start : start + size] for start in range(0, len(pcm), size)]
             gates = []
             for chunk in chunks:
                 audio = np.frombuffer(chunk, dtype="<i2").astype(np.float32) / 32768
                 rms = float(np.sqrt(np.mean(audio * audio)))
-                voiced = not job["use_gate"] or (
-                    rms >= self.settings.stt_silence_rms_threshold and has_speech(audio, 16000)
+                voiced = rms >= self.settings.stt_silence_rms_threshold and has_speech(
+                    audio, 16000
                 )
                 gates.append((voiced, rms))
             if job["warmup"] and not job["cancel_requested"]:

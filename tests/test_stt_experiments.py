@@ -53,6 +53,21 @@ class Engine:
         self.closed = True
 
 
+class Sampler:
+    """psutil belongs to the optional stt-experiments extra; tests must not need it."""
+
+    def start(self):
+        pass
+
+    def finish(self):
+        return {"process_tree_peak_rss_mb": 1.0, "process_tree_rss_increase_mb": 0.0}
+
+
+@pytest.fixture(autouse=True)
+def fake_memory_sampler(monkeypatch):
+    monkeypatch.setattr("app.services.stt_experiments.MemorySampler", Sampler)
+
+
 def manager(tmp_path, monkeypatch):
     settings = Settings(_env_file=None, stt_experiment_model_dir=str(tmp_path))
     result = ExperimentManager(settings, Speech())
@@ -101,7 +116,7 @@ async def test_same_audio_tail_and_real_repetitions_are_preserved(tmp_path, monk
     engine = Engine()
     monkeypatch.setattr("app.services.stt_experiments.create_engine", lambda *_: engine)
     pcm = read_wav(wav())
-    job = service.start(pcm, ["service_qwen", "whisper_base_int8"], "반복 반복", 2, True, False)
+    job = service.start(pcm, ["service_qwen", "whisper_base_int8"], "반복 반복", 2, False)
     await service.task
     assert job["state"] == "completed"
     for result in job["results"]:
@@ -122,7 +137,7 @@ async def test_silence_skips_every_engine_and_warmup(tmp_path, monkeypatch):
     service = manager(tmp_path, monkeypatch)
     engine = Engine()
     monkeypatch.setattr("app.services.stt_experiments.create_engine", lambda *_: engine)
-    job = service.start(read_wav(wav(sample=0)), ["whisper_base_int8"], "", 2, True, True)
+    job = service.start(read_wav(wav(sample=0)), ["whisper_base_int8"], "", 2, True)
     await service.task
     result = job["results"][0]
     assert not engine.samples
@@ -141,7 +156,7 @@ async def test_experiments_use_shared_fillers_without_legacy_stt_module(tmp_path
             return AIResult("speech_rate", 0, "info", "", {}, transcript="음, 음. 반복 반복")
 
     service.speech = FillerSpeech()
-    job = service.start(read_wav(wav(seconds=1)), ["service_qwen"], "", 2, True, False)
+    job = service.start(read_wav(wav(seconds=1)), ["service_qwen"], "", 2, False)
     await service.task
     result = job["results"][0]
     assert result["state"] == "completed"
@@ -155,7 +170,7 @@ async def test_warmup_not_counted_in_transcript_or_chunk_metrics(tmp_path, monke
     service = manager(tmp_path, monkeypatch)
     engine = Engine()
     monkeypatch.setattr("app.services.stt_experiments.create_engine", lambda *_: engine)
-    job = service.start(read_wav(wav(2)), ["whisper_base_int8"], "", 2, True, True)
+    job = service.start(read_wav(wav(2)), ["whisper_base_int8"], "", 2, True)
     await service.task
     assert len(engine.samples) == 2
     assert job["results"][0]["transcript"] == "반복"
@@ -173,7 +188,7 @@ async def test_unavailable_model_is_not_substituted_and_next_model_runs(tmp_path
             for model in MODEL_IDS
         ],
     )
-    job = service.start(read_wav(wav()), ["qwen_q8", "service_qwen"], "", 2, True, False)
+    job = service.start(read_wav(wav()), ["qwen_q8", "service_qwen"], "", 2, False)
     await service.task
     assert job["results"][0]["state"] == "failed"
     assert job["results"][0]["metrics"] is None
@@ -192,10 +207,10 @@ async def test_busy_and_cancel_wait_for_inflight_inference(tmp_path, monkeypatch
         return "실제 결과"
 
     monkeypatch.setattr(service, "transcribe", slow)
-    job = service.start(read_wav(wav(4)), ["service_qwen"], "", 2, True, False)
+    job = service.start(read_wav(wav(4)), ["service_qwen"], "", 2, False)
     await entered.wait()
     with pytest.raises(ValueError):
-        service.start(read_wav(wav()), ["service_qwen"], "", 2, True, False)
+        service.start(read_wav(wav()), ["service_qwen"], "", 2, False)
     job["cancel_requested"] = True
     assert service.busy
     release.set()
@@ -251,12 +266,12 @@ def test_oversized_upload_and_production_disabled(client):
 
 
 def test_experiments_refuse_active_sessions(client):
-    client.app.state.experiment_session_count = 1
-    response = client.post(
-        "/api/v1/stt-experiments/jobs",
-        data={"models": '["qwen_q8"]'},
-        files={"audio": ("test.wav", wav())},
-    )
+    with client.app.state.experiment_exclusion.practice_connection():
+        response = client.post(
+            "/api/v1/stt-experiments/jobs",
+            data={"models": '["qwen_q8"]'},
+            files={"audio": ("test.wav", wav())},
+        )
     assert response.status_code == 409
 
 
@@ -288,11 +303,11 @@ def test_webrtc_offer_refuses_running_experiment_and_releases_reservation(client
         client.portal.call(
             webrtc_offer, uuid4(), WebRTCOffer(sdp="test", type="offer"), request, None, None
         )
-    assert client.app.state.experiment_session_count == 0
     client.app.state.stt_experiments.busy = False
+    assert not client.app.state.experiment_exclusion.experiment_blocked
 
     async def fail_after_reservation(*_):
-        assert client.app.state.experiment_session_count == 1
+        assert client.app.state.experiment_exclusion.experiment_blocked
         raise ValueError("test negotiation failure")
 
     from unittest.mock import patch
@@ -304,7 +319,7 @@ def test_webrtc_offer_refuses_running_experiment_and_releases_reservation(client
             client.portal.call(
                 webrtc_offer, uuid4(), WebRTCOffer(sdp="test", type="offer"), request, None, None
             )
-    assert client.app.state.experiment_session_count == 0
+    assert not client.app.state.experiment_exclusion.experiment_blocked
 
 
 def test_unknown_job_and_cancel(client):
@@ -328,3 +343,19 @@ def test_default_catalog_requires_cpu_baseline(tmp_path):
     result = catalog(tmp_path, SimpleNamespace(device="mps"))
     assert not result[0]["available"]
     assert all(not model["available"] for model in result)
+
+
+def test_cross_site_browser_cannot_start_or_cancel_experiments(client):
+    # A browser always sends Origin on cross-site POSTs; a multipart form needs no preflight.
+    evil = {"origin": "https://evil.example"}
+    response = client.post(
+        "/api/v1/stt-experiments/jobs",
+        data={"models": '["qwen_q8"]'},
+        files={"audio": ("test.wav", wav())},
+        headers=evil,
+    )
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "LOCAL_ONLY"
+    assert client.post("/api/v1/stt-experiments/jobs/x/cancel", headers=evil).status_code == 403
+    allowed = client.get("/api/v1/stt-experiments/models", headers={"origin": "http://testserver"})
+    assert allowed.status_code == 200

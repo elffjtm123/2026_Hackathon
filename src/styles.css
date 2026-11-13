@@ -578,6 +578,11 @@ button:disabled {
   font-size: 1.25rem;
 }
 
+.feedback-detail .transcript-partial {
+  color: #9aa7ab;
+  font-style: italic;
+}
+
 .feedback-detail p,
 .muted-text,
 .error-text {

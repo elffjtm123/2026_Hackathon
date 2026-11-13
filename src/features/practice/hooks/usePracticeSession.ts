@@ -75,6 +75,7 @@ export function usePracticeSession(initialMode: PracticeMode = 'presentation') {
   const endSession = useCallback(() => {
     setPhase('failed');
     setEndedAt(performance.now());
+    setFeedbackState(current => ({...current, partialTranscript: null}));
   }, []);
 
   const applyPhase = useCallback((next: SessionPhase, serverId: string, elapsedMs = 0) => {
@@ -100,6 +101,7 @@ export function usePracticeSession(initialMode: PracticeMode = 'presentation') {
 
   const completeSession = useCallback((report: SessionCompletionReport) => {
     setCompletionReport(report);
+    setFeedbackState(current => ({...current, partialTranscript: null}));
     setPhase('completed');
     setEndedAt(current => current ?? performance.now());
   }, []);

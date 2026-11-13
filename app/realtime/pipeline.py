@@ -24,11 +24,14 @@ from app.modules.speech.analysis import (
 from app.modules.speech.segments import CutReason, FinalUtterance, SpeechSegmenter
 from app.realtime.aggregator import FeedbackAggregator
 from app.realtime.events import RealtimeEvent
+from app.realtime.experiment_recorder import ExperimentRecorder
 from app.realtime.queues import DropOldestQueue
 from app.realtime.state import SessionStateStore
 
 Subscriber = Callable[[RealtimeEvent], Awaitable[None]]
 logger = logging.getLogger(__name__)
+# Audio time between display-only previews of the utterance still being spoken.
+PARTIAL_INTERVAL_MS = 1500
 
 
 def _delivery_counts(text: str) -> tuple[int, int]:
@@ -69,6 +72,10 @@ class SessionPipeline:
         self.last_audio_activity_ms = 0
         self.latest_audio_end_ms = 0
         self.speech_waiting = False
+        # One STT inference at a time; finals wait for an in-flight preview, previews never wait.
+        self.stt_lock = asyncio.Lock()
+        self.partial_task: asyncio.Task[None] | None = None
+        self.partial_last_end_ms: int | None = None
         self.aggregator = FeedbackAggregator()
         self.gaze_stabilizer = GazeStabilizer(calibration_frames=8)
         self.subscribers: dict[str, Subscriber] = {}
@@ -80,10 +87,8 @@ class SessionPipeline:
         self._sequence_lock = asyncio.Lock()
         self._stop_lock = asyncio.Lock()
         self.completed_report: dict[str, Any] | None = None
-        self.comparison: dict[str, Any] | None = None
-        self.performance: dict[str, dict[str, float]] = {}
-        self.error_counts: dict[str, int] = {}
-        self.audio_queue_peak = 0
+        # Set only for a live STT model-comparison session.
+        self.experiment: ExperimentRecorder | None = None
         self.phase = "preparing"
         self.protocol = 1
         self.running_started_ms: int | None = None
@@ -240,7 +245,8 @@ class SessionPipeline:
             if len(self.audio_receipts) > 32:
                 del self.audio_receipts[min(self.audio_receipts)]
         self.media_sequences[kind] = media.sequence
-        self.audio_queue_peak = max(self.audio_queue_peak, self.audio_queue.qsize())
+        if self.experiment is not None:
+            self.experiment.record_audio_queue(self.audio_queue.qsize())
         self.media_timestamps[kind] = media.timestamp_ms
         if kind == "pcm16":
             await self.emit(
@@ -307,6 +313,9 @@ class SessionPipeline:
                         "pipeline_grace_timeout",
                         extra={"session_id": self.session_id},
                     )
+                if self.partial_task is not None:
+                    self.tasks.append(self.partial_task)
+                    self.partial_task = None
                 for task in self.tasks:
                     task.cancel()
                 await asyncio.gather(*self.tasks, return_exceptions=True)
@@ -326,14 +335,8 @@ class SessionPipeline:
                 "delivery_metrics": delivery_metrics,
             }
             self.segmenter = None
-            if self.comparison is not None:
-                report["comparison"] = {
-                    **self.comparison,
-                    "performance": self.performance,
-                    "errors": dict(self.error_counts),
-                    "audio_queue_peak": self.audio_queue_peak,
-                    "dropped_video_frames": self.video_queue.stats.dropped,
-                }
+            if self.experiment is not None:
+                report["comparison"] = self.experiment.summary(self.video_queue.stats.dropped)
             self.audio_receipts.clear()
             for queue in [self.audio_queue, self.speech_queue, self.video_queue.queue]:
                 while not queue.empty():
@@ -369,9 +372,8 @@ class SessionPipeline:
         module: str = "system",
         level: str = "info",
     ) -> RealtimeEvent:
-        if event_name == "error" and self.comparison is not None:
-            code = str(data.get("code", "UNKNOWN"))
-            self.error_counts[code] = self.error_counts.get(code, 0) + 1
+        if event_name == "error" and self.experiment is not None:
+            self.experiment.record_error(str(data.get("code", "UNKNOWN")))
         async with self._sequence_lock:
             self.sequence += 1
             event = RealtimeEvent(
@@ -474,6 +476,7 @@ class SessionPipeline:
                     self.latest_audio_end_ms = media.timestamp_ms + len(media.payload) // 32
                 if segments:
                     self.speech_waiting = False
+                    self.partial_last_end_ms = None
                 for segment in segments:
                     self.last_audio_activity_ms = segment.end_ms
                     await self._enqueue_speech(
@@ -491,6 +494,7 @@ class SessionPipeline:
                         )
                     )
                 if media.format == "pcm16":
+                    self._maybe_start_partial()
                     end_ms = media.timestamp_ms + len(media.payload) // 32
                     if self.segmenter.speaking:
                         self.last_audio_activity_ms = end_ms
@@ -532,6 +536,76 @@ class SessionPipeline:
                 if self.phase == "draining" and self.protocol == 2:
                     await self.emit("session.draining", self.elapsed_ms(), self.metrics())
 
+    def _maybe_start_partial(self) -> None:
+        """Preview the running utterance unless that could delay a final; skips are not queued."""
+        if (
+            self.phase != "running"
+            or self.experiment is not None
+            or not self._feedback_speech_enabled()
+            or self.segmenter is None
+            or (self.partial_task is not None and not self.partial_task.done())
+            or self.stt_lock.locked()
+            or not self.speech_queue.empty()
+            or getattr(getattr(self.speech, "gate", None), "busy", False)
+        ):
+            return
+        preview = self.segmenter.snapshot()
+        if preview is None:
+            return
+        last = self.partial_last_end_ms
+        if preview.end_ms - (preview.start_ms if last is None else last) < PARTIAL_INTERVAL_MS:
+            return
+        self.partial_last_end_ms = preview.end_ms
+        self.partial_task = asyncio.create_task(
+            self._emit_partial(
+                MediaPayload(
+                    self.session_id,
+                    preview.start_ms,
+                    preview.pcm,
+                    start_sample=preview.start_sample,
+                    sample_count=len(preview.pcm) // 2,
+                    format="pcm16",
+                    utterance_id=preview.utterance_id,
+                    end_ms=preview.end_ms,
+                    voiced_ms=preview.voiced_ms,
+                )
+            ),
+            name=f"speech-partial-{self.session_id}",
+        )
+
+    async def _emit_partial(self, media: MediaPayload) -> None:
+        """Display-only: never reaches the aggregator, script sync, delivery or experiments."""
+        try:
+            async with self.stt_lock:
+                result = await self.speech.infer(media)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.info("speech_partial_failed", extra={"session_id": self.session_id})
+            return
+        text = (result.transcript or "").strip()
+        segmenter = self.segmenter
+        # A preview that lands after its utterance was cut must not overwrite the final.
+        if (
+            not text
+            or self.phase != "running"
+            or segmenter is None
+            or (current := segmenter.snapshot()) is None
+            or current.utterance_id != media.utterance_id
+        ):
+            return
+        await self.emit(
+            "transcript.partial",
+            media.end_ms or media.timestamp_ms,
+            {
+                "text": text,
+                "utterance_id": media.utterance_id,
+                "start_ms": media.timestamp_ms,
+                "end_ms": media.end_ms,
+            },
+            module="speech_rate",
+        )
+
     async def _enqueue_speech(self, media: MediaPayload) -> None:
         try:
             await asyncio.wait_for(
@@ -554,7 +628,8 @@ class SessionPipeline:
                         and media.format == "pcm16"
                     ):
                         try:
-                            transcript = (await self.speech.infer(media)).transcript or ""
+                            async with self.stt_lock:
+                                transcript = (await self.speech.infer(media)).transcript or ""
                         except Exception:
                             logger.exception(
                                 "delivery_transcription_failed",
@@ -565,7 +640,8 @@ class SessionPipeline:
                             media, *_delivery_counts(transcript.strip())
                         )
                     continue
-                result = await self.speech.infer(media)
+                async with self.stt_lock:
+                    result = await self.speech.infer(media)
                 if not result.transcript:
                     if result.metrics.get("recognition_status") == "rejected":
                         self.incomplete = True
@@ -696,28 +772,8 @@ class SessionPipeline:
     async def _handle_result(self, result: AIResult) -> None:
         if self.phase not in {"running", "draining"}:
             return
-        if self.comparison is not None:
-            stats = self.performance.setdefault(
-                result.source,
-                {
-                    "observations": 0,
-                    "measured_latency_count": 0,
-                    "average_inference_ms": None,
-                    "max_result_age_ms": 0,
-                },
-            )
-            stats["observations"] += 1
-            if result.latency_ms is not None:
-                count = stats["measured_latency_count"]
-                stats["average_inference_ms"] = round(
-                    ((stats["average_inference_ms"] or 0) * count + result.latency_ms)
-                    / (count + 1),
-                    2,
-                )
-                stats["measured_latency_count"] += 1
-            stats["max_result_age_ms"] = max(
-                stats["max_result_age_ms"], self.elapsed_ms() - result.timestamp_ms
-            )
+        if self.experiment is not None:
+            self.experiment.record_result(result, self.elapsed_ms())
         if not self.aggregator.add(result):
             return
         if result.source == "speech_rate":

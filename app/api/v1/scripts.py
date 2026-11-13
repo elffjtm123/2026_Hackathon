@@ -1,5 +1,4 @@
 import asyncio
-import ipaddress
 import json
 from collections.abc import AsyncIterator
 from typing import Any
@@ -10,6 +9,7 @@ from starlette.responses import StreamingResponse
 
 from app.api.deps import CurrentUser
 from app.api.disconnect import disconnected_request
+from app.api.local_only import local_request_verdict
 from app.core.errors import AppError
 from app.modules.script_sync.service import analyze_script, normalize_script
 from app.schemas.script import ScriptAnalyzeRequest, ScriptAnalyzeResponse, ScriptSummaryRequest
@@ -24,15 +24,7 @@ async def script_summarize(payload: ScriptSummaryRequest, request: Request) -> A
         raise AppError(
             "LOCAL_MODE_REQUIRED", "메모리 분리 요약은 로컬 AI 모드에서만 지원합니다.", 409
         )
-    try:
-        local = request.client is not None and ipaddress.ip_address(request.client.host).is_loopback
-    except ValueError:
-        local = False
-    if (
-        settings.app_env != "development"
-        or not local
-        or request.headers.get("origin") not in settings.cors_origins
-    ):
+    if local_request_verdict(request, origin="required") != "allowed":
         raise AppError("DEVELOPMENT_ONLY", "로컬 개발 화면에서만 요약할 수 있습니다.", 403)
     if request.app.state.live_sessions or any(
         p.running for p in request.app.state.pipelines.pipelines.values()

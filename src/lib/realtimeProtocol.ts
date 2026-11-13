@@ -10,20 +10,26 @@ export type GazeStatus =
   | "unknown";
 
 export type SessionPhase = 'preparing' | 'calibrating' | 'running' | 'draining' | 'completed' | 'failed';
+// Phases in which the user is presenting: audio is captured and session signals are recorded.
+export const isRecordingPhase = (phase: SessionPhase) => phase === 'running' || phase === 'draining';
 export type ModuleStatus = { provider: string; model: string | null; device: string | null;
   status: 'idle' | 'loading' | 'ready' | 'unavailable'; reason: string | null };
 export function modelStatusLabel(module: ModuleStatus): string {
   return {idle:'미로드',loading:'준비 중',ready:'준비 완료',unavailable:'사용 불가'}[module.status];
 }
 export type SessionReadyData = { sessionId: string; timestampMs: number; modules: Record<string, ModuleStatus> };
+// Per result source, exactly as app/realtime/pipeline.py accumulates it.
+export type ComparisonPerformance = { observations: number; measured_latency_count: number;
+  average_inference_ms: number | null; max_result_age_ms: number };
+// `comparison` of an experiment-theme completion report: app/services/live_stt.py info, plus the
+// mode/gaze from the WebSocket and the pipeline's counters at completion.
 export type LiveComparison = {
   model_id: string; label: string; mode: PracticeMode; device: string | null; load_ms: number;
   already_loaded: boolean; threads: number | null; metadata: Record<string, unknown>;
-  gaze: ModuleStatus; notes: string[]; audio_queue_peak?: number; dropped_video_frames?: number;
-  errors?: Record<string, number>;
-  performance?: Record<string, { observations: number; measured_latency_count: number;
-    average_inference_ms: number | null; max_inference_ms: number | null;
-    average_result_age_ms: number; max_result_age_ms: number }>;
+  context: string; silence_rms_threshold: number; segmentation: string; transport: string;
+  gaze: ModuleStatus; notes: string[];
+  performance: Record<string, ComparisonPerformance>; errors: Record<string, number>;
+  audio_queue_peak: number; dropped_video_frames: number;
 };
 export type RealtimeEvent = { event: string; version: number; session_id: string; sequence: number;
   timestamp_ms: number; module: string; level: string; data: Record<string, unknown> };
@@ -44,6 +50,14 @@ type BackendFeedbackData = {
 
 // Adapt canonical model data for existing presentation widgets, not a second wire protocol.
 export function feedbackForUi(event: RealtimeEvent): RealtimeFeedback {
+  if (event.event === 'transcript.partial') {
+    // Display-only preview of the utterance still being spoken; never a final or a metric.
+    const data = event.data as {text?: string; utterance_id?: string; start_ms?: number; end_ms?: number};
+    return {type:'feedback', sessionId:event.session_id, timestamp:event.timestamp_ms,
+      source:'transcript_partial', severity:'info',
+      partialTranscript:{utteranceId:String(data.utterance_id ?? ''), text:String(data.text ?? ''),
+        startMs:Number(data.start_ms ?? event.timestamp_ms), endMs:Number(data.end_ms ?? event.timestamp_ms)}};
+  }
   if (event.event === 'script.progress') return {type:'feedback', sessionId:event.session_id,
     timestamp:event.timestamp_ms, source:'script_sync', severity:'info',
     scriptProgress:event.data as ScriptProgress};
@@ -128,8 +142,11 @@ export type PresentationFeatureSettings = {
   deliveryEnabled: boolean;
 };
 
+export type PartialTranscript = {utteranceId: string; text: string; startMs: number; endMs: number};
+
 export type RealtimeFeedback = {
   scriptProgress?: ScriptProgress;
+  partialTranscript?: PartialTranscript;
   type: "feedback";
   sessionId: string;
   source?: string;

@@ -25,6 +25,11 @@ class ModelExecution:
         self._starting: asyncio.Task[None] | None = None
         self._stopping: asyncio.Task[None] | None = None
 
+    @property
+    def busy(self) -> bool:
+        """True while a summary or a practice session owns the models."""
+        return self.owner is not None
+
     def reserve_summary(self) -> None:
         if self.owner is not None:
             raise ValueError("SUMMARY_BUSY" if self.owner == "summary" else "PRACTICE_ACTIVE")

@@ -1,3 +1,4 @@
+import {feedbackWsUrl, httpBaseFromWs} from '../../lib/apiBase';
 import {scriptSentences, summaryHints, type ScriptSummaryResult, type SummaryProgress} from './scriptTools';
 
 export async function readSummaryStream(response: Response, script: string,
@@ -53,11 +54,8 @@ export async function readSummaryStream(response: Response, script: string,
 
 export async function requestScriptSummary(script: string, signal: AbortSignal,
   onProgress: (progress: SummaryProgress) => void = () => {}): Promise<ScriptSummaryResult> {
-  const url = new URL((import.meta.env?.VITE_FEEDBACK_WS_URL as string | undefined)
-    ?? 'ws://127.0.0.1:8000/api/v1/ws/practice-demo');
-  url.protocol = url.protocol === 'wss:' ? 'https:' : 'http:';
-  url.pathname = url.pathname.replace(/\/ws\/.*$/, '/scripts/summarize');
-  url.search = ''; url.hash = '';
+  // Summaries always go to the feedback WebSocket's backend, as before the shared API base.
+  const url = `${httpBaseFromWs(feedbackWsUrl)}/scripts/summarize`;
   const controller = new AbortController();
   const abort = () => controller.abort();
   signal.addEventListener('abort', abort, {once:true});

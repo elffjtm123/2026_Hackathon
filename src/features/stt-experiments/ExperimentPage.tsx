@@ -4,9 +4,9 @@ import { jobCsv, pcmWav } from './tools';
 import type { ExperimentJob, ModelOption, ModelResult } from './types';
 import { useExperimentRecorder } from './useExperimentRecorder';
 import './experiments.css';
+import { apiBase } from '../../lib/apiBase';
 
-const api = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? 'http://127.0.0.1:8000/api/v1';
-const base = `${api.replace(/\/$/, '')}/stt-experiments`;
+const base = `${apiBase}/stt-experiments`;
 const stateLabels: Record<string, string> = {
   loading: '모델 로딩 중', warming: '워밍업 중', running: '받아쓰기 중',
   completed: '완료', cancelled: '취소됨', failed: '실패',
@@ -171,7 +171,7 @@ export function ExperimentPage({ onActivityChange }: {onActivityChange?: (busy: 
   return <main className="practice-shell experiment-shell">
     <header className="practice-header"><div><p className="eyebrow">CPU STT LAB</p>
       <h1>받아쓰기 비교 실험</h1></div>
-      <a className="secondary-button experiment-link" href="#" aria-disabled={locked}
+      <a className="secondary-button experiment-link" href="#themes" aria-disabled={locked}
         onClick={event => { if (locked) event.preventDefault(); }}>모델 테마 선택</a></header>
     <p className="experiment-intro">한 번 녹음하고, 같은 음성을 다섯 가지 설정으로 비교하세요.
       기존 서비스는 그대로 유지하고 실제 모델의 받아쓰기와 처리 성능만 따로 확인합니다.</p>
