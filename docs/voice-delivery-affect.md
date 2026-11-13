@@ -8,6 +8,8 @@ Fetched origin/main `e9f87b5`. Initially applied the voice-delivery commits `e0f
 
 Includes `app/modules/delivery/`, frame VAD observations and cut reasons, Praat F0, FFT spectral balance, sentence/window aggregation, report persistence/schema/migration, microphone AGC reporting, AI Hub 71663 preparation/experiment/feature-extraction scripts and upstream tests/design notes. Actual AI Hub data were not downloaded and no emotion/grade model was trained.
 
+File-based STT comparisons use the same `app.modules.speech.analysis.filler_counts` as the live service. The deleted legacy `stt.py` is no longer a dependency; actual repeated words remain in transcripts and are not added to filler counts.
+
 Installed `praat-parselmouth` 0.4.7 in the existing venv. SciPy/numpy already existed. Existing SQLite data were backed up and migrated from 0003 to 0004, adding `delivery_metrics` with an empty default for old rows. The original local work and database backup are under ignored `.logs/voice-sync-20261113-115154/`.
 
 ## Voice behavior

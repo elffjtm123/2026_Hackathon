@@ -19,6 +19,7 @@ from uuid import uuid4
 from app.ai.base import MediaPayload
 from app.ai.experimental_stt import LABELS, catalog, create_engine
 from app.ai.local_stt import has_speech
+from app.modules.speech.analysis import filler_counts
 
 MAX_AUDIO_BYTES = 16000 * 2 * 60 + 4096
 
@@ -302,8 +303,6 @@ class ExperimentManager:
                     }
                 )
                 result["transcript"] = " ".join(c["text"] for c in result["chunks"] if c["text"])
-            from stt import FillerWordAnalyzer
-
             result["metrics"] = {
                 "cer": await asyncio.to_thread(
                     character_error_rate, job["reference"], result["transcript"]
@@ -312,9 +311,7 @@ class ExperimentManager:
                 "rtf": round(sum(elapsed_ms) / (job["audio_seconds"] * 1000), 4),
                 "p95_chunk_ms": round(float(np.percentile(elapsed_ms, 95)), 2),
                 "skipped_chunks": sum(not voiced for voiced, _ in gates),
-                "filler_counts": FillerWordAnalyzer()
-                .analyze(result["transcript"])
-                .get("counts", {}),
+                "filler_counts": filler_counts(result["transcript"])[0],
                 "gate_timing": "RMS/VAD preprocessing excluded; service internal gate included",
             }
             result["state"] = "completed"

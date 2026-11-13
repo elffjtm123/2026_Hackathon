@@ -133,6 +133,24 @@ async def test_silence_skips_every_engine_and_warmup(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_experiments_use_shared_fillers_without_legacy_stt_module(tmp_path, monkeypatch):
+    service = manager(tmp_path, monkeypatch)
+
+    class FillerSpeech(Speech):
+        async def infer(self, media):
+            return AIResult("speech_rate", 0, "info", "", {}, transcript="음, 음. 반복 반복")
+
+    service.speech = FillerSpeech()
+    job = service.start(read_wav(wav(seconds=1)), ["service_qwen"], "", 2, True, False)
+    await service.task
+    result = job["results"][0]
+    assert result["state"] == "completed"
+    assert result["metrics"]["filler_counts"] == {"음": 2}
+    assert result["transcript"].endswith("반복 반복")
+    assert result["metrics"]["cer"] is None
+
+
+@pytest.mark.asyncio
 async def test_warmup_not_counted_in_transcript_or_chunk_metrics(tmp_path, monkeypatch):
     service = manager(tmp_path, monkeypatch)
     engine = Engine()
