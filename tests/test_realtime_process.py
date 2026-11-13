@@ -36,6 +36,7 @@ def media(payload: bytes = b"\x00\xff\x03\x80") -> MediaPayload:
         utterance_id="발화-7",
         end_ms=1444,
         voiced_ms=123,
+        cut_reason="flush",
     )
 
 
@@ -94,6 +95,7 @@ async def test_native_round_trip_preserves_every_field_and_reaps() -> None:
                 "utterance_id": "발화-7",
                 "end_ms": 1444,
                 "voiced_ms": 123,
+                "cut_reason": "flush",
             },
             "nested": [None, True, 1.25],
         }

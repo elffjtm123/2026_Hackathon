@@ -1,3 +1,4 @@
+import math
 from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
@@ -68,6 +69,47 @@ _ENUM_METRICS = {
     "gaze_direction": {"unknown", "center", "left", "right", "up", "down"},
     "head_direction": {"unknown", "center", "left", "right", "up", "down"},
 }
+
+
+MAX_DELIVERY_WINDOWS = 720  # two hours of 10 s windows
+_DELIVERY_STATUSES = {"observed", "unavailable", "disabled", "failed"}
+_MAX_JSON_DEPTH = 8
+
+
+def _json_safe(value: Any, depth: int = 0) -> Any:
+    if isinstance(value, bool) or value is None or isinstance(value, (int, str)):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if depth >= _MAX_JSON_DEPTH:
+        return None
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item, depth + 1) for item in value]
+    if isinstance(value, dict):
+        return {
+            key: _json_safe(item, depth + 1) for key, item in value.items() if isinstance(key, str)
+        }
+    return None
+
+
+def safe_delivery_metrics(raw: Any) -> dict[str, Any]:
+    """Persist only JSON-safe numbers, strings, bools and None, with bounded windows."""
+    if not isinstance(raw, dict):
+        return {}
+    status = raw.get("status")
+    status = status if status in _DELIVERY_STATUSES else "unavailable"
+    if status == "disabled":
+        return {"status": "disabled"}
+    windows = raw.get("windows")
+    if isinstance(windows, dict) and isinstance(windows.get("windows"), list):
+        windows = {**windows, "windows": windows["windows"][:MAX_DELIVERY_WINDOWS]}
+    agc_on = raw.get("agc_on")
+    return {
+        "status": status,
+        "agc_on": agc_on if isinstance(agc_on, bool) else None,
+        "report": _json_safe(raw.get("report")),
+        "windows": _json_safe(windows),
+    }
 
 
 def _safe_fillers(value: Any) -> dict[str, int] | None:
@@ -207,6 +249,9 @@ async def complete_session(
         "script_sync_metrics",
     ):
         persisted_report[key] = _safe_metrics(report_data.get(key, {}))
+    persisted_report["delivery_metrics"] = safe_delivery_metrics(
+        report_data.get("delivery_metrics")
+    )
     report = SessionReport(session_id=session.id, **persisted_report)
     db.add(report)
     session.status = SessionStatus.completed

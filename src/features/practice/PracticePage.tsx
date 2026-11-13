@@ -12,7 +12,7 @@ import { useBackendStreaming } from "./hooks/useBackendStreaming";
 import { useFeedbackSocket } from "./hooks/useFeedbackSocket";
 import { usePracticeSession } from "./hooks/usePracticeSession";
 import { useUserMedia } from "./hooks/useUserMedia";
-import { completePracticeSession } from "./sessionLifecycle";
+import { audioSettingsOf, completePracticeSession } from "./sessionLifecycle";
 import type { PracticeMode } from "./types";
 import {selectVisibleFeedback} from './feedbackState';
 import {manualSummaryGroups, groupHints, replacementSummaryGroups, type ScriptSummaryGroup, type SummaryProgress} from './scriptTools';
@@ -103,12 +103,14 @@ export function PracticePage() {
     try {
       const nextSessionId = session.startSession();
       const mediaReady = media.startMedia();
+      const audioSettings = mediaReady.then(audioSettingsOf, () => undefined);
       const ready = socket.connect(
         nextSessionId,
         session.mode,
         session.featureSettings,
         presentationScript,
-        timeLimitSeconds
+        timeLimitSeconds,
+        audioSettings
       );
       await Promise.all([mediaReady, ready]);
       if (generation !== generationRef.current) return;

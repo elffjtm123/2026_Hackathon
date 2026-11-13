@@ -73,6 +73,13 @@ export function FeatureToggles({
           disabled={disabled}
           onChange={(enabled) => onChange("keywordHintEnabled", enabled)}
         />
+        <FeatureToggle
+          title="목소리 전달력"
+          description="발표 중 음량·억양·쉼 같은 목소리 특징을 기록해 종료 후 리포트에 사용합니다. 실시간 피드백은 없습니다."
+          checked={settings.deliveryEnabled}
+          disabled={disabled}
+          onChange={(enabled) => onChange("deliveryEnabled", enabled)}
+        />
       </div>
     </section>
   );

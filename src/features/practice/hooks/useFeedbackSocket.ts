@@ -4,7 +4,7 @@ import type { BackendClientEvent, ClientRealtimeMessage, ConnectionStatus, Pract
 import type { ModuleStatus, RealtimeEvent, SessionPhase, SessionReadyData } from '../../../lib/realtimeProtocol.ts';
 import { completionForUi, feedbackForUi } from '../../../lib/realtimeProtocol.ts';
 import { encodeMediaV2, type MediaPacket } from '../../../lib/mediaProtocol.ts';
-import { acceptServerEvent, checkMediaBacklog } from '../sessionLifecycle.ts';
+import { acceptServerEvent, checkMediaBacklog, sessionStartData, deliverAudioSettings, type AudioSettings } from '../sessionLifecycle.ts';
 
 const feedbackWsUrl = (import.meta.env?.VITE_FEEDBACK_WS_URL as string | undefined)
   ?? 'ws://127.0.0.1:8000/api/v1/ws/practice-demo';
@@ -74,7 +74,8 @@ export function useFeedbackSocket(onFeedback: (feedback: RealtimeFeedback) => vo
   }, [sessionTime]);
 
   const connect = useCallback((_clientId: string, mode: PracticeMode, settings: PresentationFeatureSettings,
-      script?: string, timeLimitSeconds?: number): Promise<SessionReadyData> => {
+      script?: string, timeLimitSeconds?: number,
+      audioSettings?: Promise<AudioSettings | undefined>): Promise<SessionReadyData> => {
     disconnect();
     setStatus('connecting'); setError(null); setModules({});
     idRef.current = ''; lastSequenceRef.current = 0; acknowledgedRef.current = 0; videoSequenceRef.current = 0;
@@ -86,9 +87,14 @@ export function useFeedbackSocket(onFeedback: (feedback: RealtimeFeedback) => vo
     socket.onopen = () => {
       if (socketRef.current !== socket) return;
       socket.send(JSON.stringify({event: 'session.start', version: 2, session_id: null,
-        sequence: ++clientSequenceRef.current, module: 'system', level: 'info', timestamp_ms: 0, data: {
-        mode, settings: {karaoke_guide_enabled: settings.karaokeGuideEnabled},
-        ...(mode === 'presentation' && script ? {script, time_limit_seconds: timeLimitSeconds} : {})}}));
+        sequence: ++clientSequenceRef.current, module: 'system', level: 'info', timestamp_ms: 0,
+        data: sessionStartData(mode, settings, script, timeLimitSeconds)}));
+      // Model preparation starts now; the microphone's AGC follows once the prompt is answered.
+      void deliverAudioSettings(audioSettings, applied => {
+        socket.send(JSON.stringify({event: 'session.audio_settings', version: 2, session_id: idRef.current || null,
+          sequence: ++clientSequenceRef.current, module: 'system', level: 'info', timestamp_ms: 0,
+          data: {audio_settings: applied}}));
+      }, () => socketRef.current === socket && socket.readyState === WebSocket.OPEN);
     };
     socket.onmessage = event => {
       if (socketRef.current !== socket) return;
