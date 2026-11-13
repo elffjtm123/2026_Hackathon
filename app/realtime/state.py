@@ -11,6 +11,7 @@ class SessionStateStore:
         self.redis = Redis.from_url(redis_url, decode_responses=True) if redis_url else None
         self.memory: dict[UUID, dict[str, Any]] = {}
         self.rate_counters: dict[tuple[UUID, int], int] = {}
+        self.attempt_counters: dict[tuple[str, int], int] = {}
 
     async def set(self, session_id: UUID, value: dict[str, Any]) -> None:
         self.memory[session_id] = value
@@ -48,6 +49,22 @@ class SessionStateStore:
                 key: value for key, value in self.rate_counters.items() if key[1] >= second - 1
             }
         return self.rate_counters[counter_key] <= limit
+
+    async def allow_attempt(self, bucket: str, limit: int, window_seconds: int = 60) -> bool:
+        """Fixed-window limiter for HTTP endpoints that must not be brute forced."""
+        window = int(time.time()) // window_seconds
+        if self.redis:
+            key = f"rate:{bucket}:{window}"
+            async with self.redis.pipeline(transaction=True) as pipe:
+                count, _ = await pipe.incr(key).expire(key, window_seconds + 1).execute()
+            return int(count) <= limit
+        counter_key = (bucket, window)
+        self.attempt_counters[counter_key] = self.attempt_counters.get(counter_key, 0) + 1
+        if len(self.attempt_counters) > 1_000:
+            self.attempt_counters = {
+                key: value for key, value in self.attempt_counters.items() if key[1] >= window - 1
+            }
+        return self.attempt_counters[counter_key] <= limit
 
     async def close(self) -> None:
         if self.redis:

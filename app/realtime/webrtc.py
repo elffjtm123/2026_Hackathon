@@ -16,6 +16,7 @@ from av import AudioResampler
 
 from app.ai.base import MediaPayload
 from app.core.config import Settings
+from app.core.errors import AppError
 from app.realtime.pipeline import SessionPipeline
 
 logger = logging.getLogger(__name__)
@@ -43,8 +44,12 @@ class WebRTCManager:
     async def create_answer(
         self, session_id: UUID, sdp: str, offer_type: str, pipeline: SessionPipeline
     ) -> RTCSessionDescription:
+        peers = self.connections.setdefault(session_id, set())
+        # One client must not be able to allocate unlimited peer connections.
+        if len(peers) >= self.settings.max_connections_per_session:
+            raise AppError("TOO_MANY_CONNECTIONS", "동시 연결 수가 한도를 초과했습니다.", 429)
         pc = RTCPeerConnection(self._configuration())
-        self.connections.setdefault(session_id, set()).add(pc)
+        peers.add(pc)
         subscriber_id = f"webrtc-{uuid4()}"
         connect_timeout: asyncio.Task[None] | None = None
 

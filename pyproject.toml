@@ -19,7 +19,8 @@ dependencies = [
   "PyJWT>=2.9,<3",
   "python-multipart>=0.0.12,<1",
   "redis>=5,<7",
-  "SQLAlchemy[asyncio]>=2.0,<3",
+  # SQLAlchemy 2.1 removed sqlalchemy.ext.mypy.plugin, which the mypy config below uses.
+  "SQLAlchemy[asyncio]>=2.0,<2.1",
   "uvicorn[standard]>=0.30,<1",
 ]
 
@@ -63,7 +64,6 @@ testpaths = ["tests"]
 [tool.ruff]
 target-version = "py310"
 line-length = 100
-exclude = ["video.py"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "ASYNC"]

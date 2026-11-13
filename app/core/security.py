@@ -12,6 +12,14 @@ from app.core.config import Settings
 
 password_hash = PasswordHash.recommended()
 
+# Every token this service issues carries these claims. Requiring them prevents a
+# stripped-down token (no "exp") from being accepted indefinitely.
+REQUIRED_CLAIMS = ("sub", "type", "jti", "iat", "exp", "iss")
+
+# Verified against when the account does not exist, so login takes the same time
+# for unknown and known emails (user enumeration through timing).
+_DUMMY_PASSWORD_HASH = password_hash.hash("not-a-real-user-password")
+
 
 @dataclass(frozen=True)
 class TokenClaims:
@@ -26,6 +34,14 @@ def hash_password(password: str) -> str:
 
 
 def verify_password(password: str, encoded: str) -> bool:
+    return password_hash.verify(password, encoded)
+
+
+def verify_password_or_dummy(password: str, encoded: str | None) -> bool:
+    """Constant-ish time credential check that also runs for unknown accounts."""
+    if encoded is None:
+        password_hash.verify(password, _DUMMY_PASSWORD_HASH)
+        return False
     return password_hash.verify(password, encoded)
 
 
@@ -53,20 +69,25 @@ def create_refresh_token(user_id: UUID, settings: Settings) -> str:
 
 
 def decode_token(token: str, expected_type: str, settings: Settings) -> TokenClaims:
-    payload = jwt.decode(
-        token,
-        settings.jwt_secret,
-        algorithms=[settings.jwt_algorithm],
-        issuer=settings.app_name,
-    )
-    if payload.get("type") != expected_type:
-        raise jwt.InvalidTokenError("unexpected token type")
-    return TokenClaims(
-        subject=UUID(payload["sub"]),
-        token_type=payload["type"],
-        jti=UUID(payload["jti"]),
-        expires_at=datetime.fromtimestamp(payload["exp"], timezone.utc),
-    )
+    try:
+        payload = jwt.decode(
+            token,
+            settings.jwt_secret,
+            algorithms=[settings.jwt_algorithm],
+            issuer=settings.app_name,
+            options={"require": list(REQUIRED_CLAIMS)},
+        )
+        if payload.get("type") != expected_type:
+            raise jwt.InvalidTokenError("unexpected token type")
+        return TokenClaims(
+            subject=UUID(payload["sub"]),
+            token_type=payload["type"],
+            jti=UUID(payload["jti"]),
+            expires_at=datetime.fromtimestamp(payload["exp"], timezone.utc),
+        )
+    except (KeyError, TypeError, ValueError, OverflowError, OSError) as exc:
+        # Any claim that cannot be parsed is an invalid token, never a 500.
+        raise jwt.InvalidTokenError("malformed token claims") from exc
 
 
 def token_fingerprint(token: str) -> str:

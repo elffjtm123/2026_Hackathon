@@ -4,7 +4,7 @@ Updated 2026-11-13. The user requested the GitHub voice extraction changes, then
 
 ## Upstream source integrated
 
-Fetched origin/main `e9f87b5`. Applied the voice-delivery commits `e0fdc1c`, `3c83077`, and `66d34d9` (40 changed paths), retaining the local model themes, Windows worker transport, native Qwen Q8, facial features and rPPG integration. This is a voice-feature integration, not a full mirror of unrelated upstream cleanup/authentication commits. No changes were pushed.
+Fetched origin/main `e9f87b5`. Initially applied the voice-delivery commits `e0fdc1c`, `3c83077`, and `66d34d9` (40 changed paths), retaining the local model themes, Windows worker transport, native Qwen Q8, facial features and rPPG integration. For the requested branch publication, also merged the complete latest main, including its authentication hardening and legacy cleanup, into `codex/multimodal-session-feedback`. The branch is separate from main.
 
 Includes `app/modules/delivery/`, frame VAD observations and cut reasons, Praat F0, FFT spectral balance, sentence/window aggregation, report persistence/schema/migration, microphone AGC reporting, AI Hub 71663 preparation/experiment/feature-extraction scripts and upstream tests/design notes. Actual AI Hub data were not downloaded and no emotion/grade model was trained.
 
