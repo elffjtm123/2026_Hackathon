@@ -1,0 +1,51 @@
+.experiment-shell { max-width: 1180px; }
+.experiment-shell .experiment-intro { color: #4b5b61; margin: 20px 0; line-height: 1.8; max-width: 780px; }
+.experiment-shell .experiment-link { display: inline-flex; align-items: center; text-decoration: none; white-space: nowrap; }
+.experiment-shell [aria-disabled="true"], .experiment-shell button:disabled { opacity: .45; cursor: not-allowed; }
+.experiment-notice { background: #e6f1ee; color: #234f44; border-radius: 10px; padding: 15px 20px; margin-bottom: 20px; line-height: 1.6; }
+.experiment-section { padding: 24px; border: 1px solid #dde4e6; border-radius: 12px; background: white; margin-bottom: 20px; }
+.experiment-section-heading, .experiment-result-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 18px; }
+.experiment-section-heading > span { color: #637579; }
+.experiment-section p { line-height: 1.7; }
+.experiment-actions, .experiment-audio { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; margin: 16px 0; }
+.experiment-actions label { display: flex; gap: 8px; align-items: center; }
+.experiment-upload { display: inline-flex; align-items: center; position: relative; overflow: hidden; }
+.experiment-upload input { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; }
+.experiment-upload.disabled { opacity: .45; }
+.experiment-shell meter { width: min(100%, 420px); height: 18px; }
+.experiment-shell audio { max-width: 100%; }
+.experiment-models { display: grid; gap: 10px; }
+.experiment-model { display: flex; gap: 14px; padding: 15px; border: 1px solid #e1e7e8; border-radius: 8px; align-items: start; }
+.experiment-model input { width: 18px; height: 18px; margin-top: 4px; accent-color: #2f6f73; }
+.experiment-model strong, .experiment-model small { display: block; }
+.experiment-model small { font-size: .82rem; margin-top: 6px; overflow-wrap: anywhere; }
+.experiment-model .ready { color: #33735e; }
+.experiment-model .unavailable { color: #936126; }
+.experiment-reference { display: grid; gap: 10px; margin: 20px 0; font-weight: 600; }
+.experiment-reference textarea { width: 100%; padding: 14px; border-radius: 8px; border: 1px solid #cad6d9; font: inherit; font-weight: 400; line-height: 1.7; resize: vertical; }
+.experiment-shell select { font: inherit; padding: 8px; border: 1px solid #cad6d9; border-radius: 6px; background: white; }
+.experiment-muted { color: #607278; font-size: .88rem; overflow-wrap: anywhere; }
+.experiment-sample { padding: 16px; background: #f5f7f8; margin-top: 12px; border-radius: 8px; }
+.experiment-results { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-bottom: 20px; }
+.experiment-result { border: 1px solid #dbe4e6; border-radius: 10px; padding: 20px; min-width: 0; }
+.experiment-result h3 { margin: 0; font-size: 1rem; }
+.experiment-badge { border-radius: 20px; font-size: .75rem; padding: 5px 10px; white-space: nowrap; background: #edf2f3; }
+.experiment-badge.completed { background: #e4f3e9; color: #245e38; }
+.experiment-badge.failed { background: #fce9e5; color: #9d3e2c; }
+.experiment-transcript { min-height: 90px; white-space: pre-wrap; overflow-wrap: anywhere; background: #f7f9fa; padding: 14px; border-radius: 8px; }
+.experiment-metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.experiment-metrics dt { color: #65777d; font-size: .75rem; margin-bottom: 5px; }
+.experiment-metrics dd { margin: 0; font-size: 1.2rem; font-weight: 650; }
+.experiment-chunks { padding-left: 22px; }
+.experiment-chunks li { padding: 10px 0; border-bottom: 1px solid #e6ecee; }
+.experiment-chunks span { font-size: .78rem; color: #64767c; }
+.experiment-chunks p { margin: 6px 0; overflow-wrap: anywhere; }
+.experiment-shell details { margin-top: 16px; }
+.experiment-shell summary { cursor: pointer; color: #315d63; }
+.experiment-shell pre, .experiment-shell code { overflow-wrap: anywhere; white-space: pre-wrap; font-size: .8rem; }
+.experiment-shell li { line-height: 1.7; }
+@media (max-width: 760px) {
+  .experiment-results { grid-template-columns: 1fr; }
+  .experiment-section { padding: 16px; }
+  .experiment-shell .practice-header { align-items: start; flex-direction: column; }
+}

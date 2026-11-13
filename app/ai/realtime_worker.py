@@ -108,7 +108,11 @@ async def serve(
                         status = {
                             "status": "ready",
                             "reason": None,
-                            "device": device if device in {"cpu", "mps", "cuda"} else None,
+                            "device": device
+                            if device in {"cpu", "mps", "cuda"}
+                            or isinstance(device, str)
+                            and device.startswith("Vulkan")
+                            else None,
                         }
                 except Exception:
                     pass
@@ -170,7 +174,17 @@ async def run(
     gaze_factory: Factory = _gaze,
     speech_factory: Factory = _speech,
 ) -> None:
-    reader, writer = await asyncio.open_unix_connection(socket_path, limit=MAX_JSON_BYTES)
+    if os.name == "nt" and socket_path.startswith("tcp:"):
+        token = os.environ.pop("FEEDBACK_WORKER_TOKEN", "")
+        if len(token) != 64:
+            raise RuntimeError("WORKER_AUTH_MISSING")
+        reader, writer = await asyncio.open_connection(
+            "127.0.0.1", int(socket_path[4:]), limit=MAX_JSON_BYTES
+        )
+        writer.write(token.encode("ascii"))
+        await writer.drain()
+    else:
+        reader, writer = await asyncio.open_unix_connection(socket_path, limit=MAX_JSON_BYTES)
     await serve(reader, writer, gaze_factory=gaze_factory, speech_factory=speech_factory)
 
 

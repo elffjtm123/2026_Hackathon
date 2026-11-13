@@ -1,4 +1,5 @@
 import type { PracticeSummary } from "../types";
+import {DeliveryReport} from '../../delivery/DeliveryReport';
 
 type SessionSummaryProps = {
   summary: PracticeSummary | null;
@@ -69,6 +70,7 @@ export function SessionSummary({ summary }: SessionSummaryProps) {
         <h3>받아쓰기 결과</h3>
         <p>{summary.transcript ?? "인식된 음성이 없습니다."}</p>
       </div>
+      <DeliveryReport metrics={summary.deliveryMetrics} sessionId={summary.sessionId} />
     </section>
   );
 }

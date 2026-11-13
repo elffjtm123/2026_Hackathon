@@ -87,7 +87,8 @@ def native_assets(tmp_path: Path) -> tuple[Path, Path, Path]:
         "   self.wfile.write(('data: '+json.dumps(event)+'\\n\\n').encode()); self.wfile.flush()\n"
         "  final=json.dumps({'choices':[{'delta':{},'finish_reason':reason}]})\n"
         "  self.wfile.write(('data: '+final+'\\n\\ndata: [DONE]\\n\\n').encode())\n"
-        "HTTPServer(('127.0.0.1',int(sys.argv[sys.argv.index('--port')+1])),Handler).serve_forever()\n"
+        "HTTPServer(('127.0.0.1',int(sys.argv[sys.argv.index('--port')+1])),Handler).serve_forever()\n",
+        encoding="utf-8",
     )
     executable.chmod(0o700)
     model = tmp_path / "model.gguf"
@@ -110,8 +111,18 @@ def summarizer(assets: tuple[Path, Path, Path], timeout: float = 10):
 
 
 def assert_process_gone(pid_file: Path) -> None:
-    with pytest.raises(ProcessLookupError):
-        os.kill(int(pid_file.read_text()), 0)
+    if os.name == "nt":
+        import psutil
+
+        assert not psutil.pid_exists(int(pid_file.read_text()))
+        return
+    if os.name == "nt":
+        import psutil
+
+        assert not psutil.pid_exists(int(pid_file.read_text()))
+    else:
+        with pytest.raises(ProcessLookupError):
+            os.kill(int(pid_file.read_text()), 0)
 
 
 @pytest.mark.asyncio
@@ -230,8 +241,13 @@ async def test_cancellation_during_spawn_still_reaps_child(native_assets, monkey
     with pytest.raises(asyncio.CancelledError):
         await task
     try:
-        with pytest.raises(ProcessLookupError):
-            os.kill(children[0].pid, 0)
+        if os.name == "nt":
+            import psutil
+
+            assert not psutil.pid_exists(children[0].pid)
+        else:
+            with pytest.raises(ProcessLookupError):
+                os.kill(children[0].pid, 0)
     finally:
         if children[0].returncode is None:
             children[0].terminate()

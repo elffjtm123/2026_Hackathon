@@ -1,5 +1,8 @@
+import asyncio
 import os
+import sys
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -7,6 +10,29 @@ from fastapi.testclient import TestClient
 from app.core.config import Settings
 from app.main import create_app
 from tests.fake_ai import FakeGazeAdapter, FakeRealtimeModelProcess, FakeSpeechAdapter
+
+
+@pytest.fixture(autouse=True)
+def windows_test_executables(monkeypatch):
+    """Run POSIX-shebang test fixtures through Python on Windows, not in production."""
+    if os.name != "nt":
+        return
+    spawn = asyncio.create_subprocess_exec
+
+    async def launch(program, *args, **kwargs):
+        path = Path(program)
+        if path.is_file() and path.suffix != ".exe":
+            with path.open("rb") as stream:
+                is_script = stream.read(2) == b"#!"
+            if is_script:
+                environment = dict(kwargs.pop("env", os.environ))
+                environment["__PYVENV_LAUNCHER__"] = sys.executable
+                return await spawn(
+                    sys._base_executable, str(path), *args, env=environment, **kwargs
+                )
+        return await spawn(program, *args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", launch)
 
 
 @pytest.fixture

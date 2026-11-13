@@ -1,0 +1,41 @@
+<!doctype html><html lang="ko"><meta charset="utf-8"><title>Pulse worker smoke check</title>
+<h1>로컬 맥박 워커 검증</h1><p>카메라·마이크를 사용하지 않고 실제 MediaPipe 모델을 로드한 뒤, 얼굴 없는 단색 영상을 거부하는지 검사합니다.</p>
+<button id="run">실제 모델 로드와 얼굴 없음 검사</button><pre id="result">실행 전</pre>
+<button id="hook">합성 영상으로 실제 화면 연결 검사</button><p>아래 분석 토글을 켜면 합성 영상만 처리합니다. 사람의 카메라·마이크는 요청하지 않습니다.</p><div id="panel"></div>
+<script type="module">
+import {createElement} from 'react';
+import {createRoot} from 'react-dom/client';
+import {PulsePanel} from '/src/features/pulse/PulsePanel.tsx';
+const button = document.querySelector('#run'), output = document.querySelector('#result');
+button.onclick = () => {
+  button.disabled = true; output.textContent = '모델 준비 중…';
+  const worker = new Worker('/pulse-worker.js');
+  const timeout = setTimeout(() => finish('FAIL: timeout'), 30000);
+  const finish = text => { clearTimeout(timeout); worker.terminate(); output.textContent = text; button.disabled = false; };
+  worker.onerror = e => finish(`FAIL: ${e.message}`);
+  worker.onmessage = async ({data}) => {
+    if (data.type === 'error') finish(`FAIL: ${data.message}`);
+    if (data.type === 'ready') {
+      output.textContent = '실제 모델 로드 완료 · 빈 영상 검사 중…';
+      const canvas = new OffscreenCanvas(320, 240); canvas.getContext('2d').fillRect(0,0,320,240);
+      const bitmap = canvas.transferToImageBitmap(); worker.postMessage({type: 'frame', bitmap, time: 1000}, [bitmap]);
+    }
+    if (data.type === 'result') finish(data.result.bpm === null && data.result.reason.includes('얼굴을 찾지')
+      ? 'PASS: 실제 MediaPipe WASM·얼굴 모델 로드 성공. 얼굴 없는 영상은 BPM 미측정으로 거부됨. 카메라·마이크 접근 없음.'
+      : `FAIL: ${JSON.stringify(data.result)}`);
+  };
+  worker.postMessage({type: 'init'});
+};
+let stopSynthetic = () => {};
+document.querySelector('#hook').onclick = () => {
+  stopSynthetic();
+  const canvas = document.createElement('canvas'); canvas.width = 320; canvas.height = 240;
+  const context = canvas.getContext('2d'); let frame = 0;
+  const timer = setInterval(() => { context.fillStyle = `rgb(${40 + frame++ % 5},80,70)`; context.fillRect(0,0,320,240); }, 33);
+  const stream = canvas.captureStream(30);
+  const root = createRoot(document.querySelector('#panel'));
+  root.render(createElement(PulsePanel, {stream}));
+  stopSynthetic = () => { clearInterval(timer); root.unmount(); stream.getTracks().forEach(t => t.stop()); };
+};
+window.addEventListener('pagehide', () => stopSynthetic());
+</script></html>

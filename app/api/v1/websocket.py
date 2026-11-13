@@ -3,6 +3,7 @@ import contextlib
 import ipaddress
 import json
 import time
+from functools import wraps
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -13,14 +14,33 @@ from pydantic import ValidationError
 from sqlalchemy import select
 from starlette.types import Message
 
+from app.ai.experimental_stt import LABELS
 from app.ai.model_execution import finish
 from app.core.security import decode_token
 from app.db.models.session import PracticeSession, SessionStatus
 from app.realtime.events import ClientEvent, RealtimeEvent, SessionStartData, V2ClientEvent
 from app.realtime.media import decode_media_v2
 from app.realtime.pipeline import SessionPipeline
+from app.services.session_service import safe_delivery_metrics
 
 router = APIRouter(tags=["realtime"])
+
+
+def exclude_stt_experiment(handler: Any) -> Any:
+    """Reserve experiment exclusion across demo/authenticated WebSocket lifetimes."""
+
+    @wraps(handler)
+    async def guarded(websocket: WebSocket, *args: Any, **kwargs: Any) -> None:
+        if websocket.app.state.stt_experiments.busy or websocket.app.state.live_speech.busy:
+            await websocket.close(code=1013, reason="STT comparison experiment is running")
+            return
+        websocket.app.state.experiment_session_count += 1
+        try:
+            await handler(websocket, *args, **kwargs)
+        finally:
+            websocket.app.state.experiment_session_count -= 1
+
+    return guarded
 
 
 async def _v2_session(
@@ -44,18 +64,32 @@ async def _v2_session(
     send_lock = asyncio.Lock()
 
     async def send(event: RealtimeEvent) -> None:
+        # The local demo has no authenticated REST report. Return aggregates only after stop;
+        # keep the upstream authenticated persistence and live-event contracts unchanged.
+        if event.event == "session.completed" and user_id is None and pipeline.completed_report:
+            event = event.model_copy(update={"data": {
+                **event.data,
+                "report": {**event.data.get("report", {}), "delivery_metrics": safe_delivery_metrics(
+                    pipeline.completed_report.get("delivery_metrics")
+                )},
+            }})
         async with send_lock:
             await websocket.send_text(event.model_dump_json())
 
     pipeline.subscribe(subscriber, send)
     started = False
+    session_modules = dict(websocket.app.state.module_status)
     client_sequence = 0
     calibration_timer: asyncio.Task[None] | None = None
     live_registered = False
     pending_message: Message | None = None
+    # Latest audio settings that arrive while the model is still preparing (the pipeline may be
+    # swapped). Only the last value matters, so a flooding client cannot grow memory.
+    early_audio_settings: Any = None
+    has_early_audio_settings = False
 
     async def prepare_or_cancel(operation: asyncio.Task[None]) -> bool:
-        nonlocal client_sequence, pending_message
+        nonlocal client_sequence, pending_message, early_audio_settings, has_early_audio_settings
         receiving = asyncio.create_task(websocket.receive())
         try:
             while True:
@@ -77,6 +111,18 @@ async def _v2_session(
                         client_sequence = event.sequence
                         pipeline.incomplete = True
                         return False
+                    if event.event == "session.audio_settings" and event.session_id in {
+                        None,
+                        session_id,
+                    }:
+                        if event.sequence <= client_sequence:
+                            raise ValueError("INVALID_CONTROL_SESSION_OR_SEQUENCE")
+                        client_sequence = event.sequence
+                        early_audio_settings = event.data.get("audio_settings")
+                        has_early_audio_settings = True
+                        # Always re-arm: the consumed message must never be re-captured.
+                        receiving = asyncio.create_task(websocket.receive())
+                        continue
                     if operation in done:
                         pending_message = message
                         await operation
@@ -136,7 +182,11 @@ async def _v2_session(
                 if raw is None or len(raw.encode()) > settings.max_json_message_bytes:
                     raise ValueError("INVALID_MESSAGE_SIZE")
                 event = V2ClientEvent.model_validate(json.loads(raw))
-                early_end = event.event == "session.end" and event.session_id is None
+                # The client may not know the session id yet (model still preparing).
+                early_end = (
+                    event.event in {"session.end", "session.audio_settings"}
+                    and event.session_id is None
+                )
                 if event.sequence <= client_sequence or (
                     started and event.session_id != session_id and not early_end
                 ):
@@ -150,14 +200,48 @@ async def _v2_session(
                     if websocket.app.state.script_summarizer.busy:
                         raise ValueError("SUMMARY_BUSY")
                     data = SessionStartData.model_validate(event.data)
+                    raw_audio_settings = event.data.get("audio_settings")
                     analysis = {
                         **data.settings.model_dump(),
                         "script": data.script,
                         "time_limit_seconds": data.time_limit_seconds,
                     }
 
-                    async def prepare(analysis_settings: dict[str, Any] = analysis) -> None:
+                    async def prepare(
+                        analysis_settings: dict[str, Any] = analysis,
+                        start_data: SessionStartData = data,
+                        raw_audio_settings: Any = raw_audio_settings,
+                    ) -> None:
                         nonlocal pipeline, live_registered
+                        if start_data.stt_model_id is not None and stored_settings is not None:
+                            raise ValueError("STT_SELECTION_LOCAL_DEMO_ONLY")
+                        if start_data.stt_model_id not in {None, "service_qwen"}:
+                            if not settings.stt_experiments_enabled:
+                                raise ValueError("STT_SELECTION_DISABLED")
+                            try:
+                                (
+                                    adapter,
+                                    status,
+                                    comparison,
+                                ) = await websocket.app.state.live_speech.acquire(
+                                    session_id, start_data.stt_model_id
+                                )
+                            except Exception as exc:
+                                session_modules["speech"] = session_modules["speech"].model_copy(
+                                    update={
+                                        "status": "unavailable",
+                                        "model": LABELS[start_data.stt_model_id],
+                                        "reason": str(exc)[:300],
+                                    }
+                                )
+                                raise ValueError("STT_MODEL_LOAD_FAILED") from exc
+                            pipeline.speech = adapter
+                            pipeline.comparison = {
+                                **comparison,
+                                "mode": start_data.mode,
+                                "gaze": session_modules["gaze"].model_dump(),
+                            }
+                            session_modules["speech"] = status
                         if stored_settings is not None:
                             prepared = await websocket.app.state.pipelines.get_or_create(
                                 session_id, stored_settings, protocol=2
@@ -168,14 +252,27 @@ async def _v2_session(
                         pipeline.update_analysis_settings(
                             stored_settings if stored_settings is not None else analysis_settings
                         )
+                        pipeline.set_audio_settings(raw_audio_settings)
                         websocket.app.state.live_sessions.add(session_id)
                         live_registered = True
                         await pipeline.prepare()
+                        for name, module in websocket.app.state.module_status.items():
+                            if name != "speech" or start_data.stt_model_id in {
+                                None,
+                                "service_qwen",
+                            }:
+                                session_modules[name] = module
+                        if pipeline.comparison is not None:
+                            pipeline.comparison["gaze"] = session_modules["gaze"].model_dump()
 
+                    # A failed earlier attempt must not leak its early settings into this one.
+                    early_audio_settings, has_early_audio_settings = None, False
                     if not await prepare_or_cancel(asyncio.create_task(prepare())):
                         await pipeline.stop()
                         break
                     started = True
+                    if has_early_audio_settings:
+                        pipeline.set_audio_settings(early_audio_settings)
                     await pipeline.emit(
                         "session.ready",
                         pipeline.elapsed_ms(),
@@ -183,10 +280,16 @@ async def _v2_session(
                             "transport": "websocket",
                             "modules": {
                                 name: module.model_dump()
-                                for name, module in websocket.app.state.module_status.items()
+                                for name, module in session_modules.items()
                             },
+                            "comparison": pipeline.comparison,
                         },
                     )
+                elif event.event == "session.audio_settings":
+                    # Sent by the client once the microphone is acquired; may trail session.start.
+                    # A late message after a failed prepare must not mask the real error.
+                    if started:
+                        pipeline.set_audio_settings(event.data.get("audio_settings"))
                 elif event.event == "calibration.start":
                     if not started:
                         raise ValueError("SESSION_NOT_READY")
@@ -209,22 +312,18 @@ async def _v2_session(
             except (ValueError, ValidationError) as exc:
                 pipeline.incomplete = True
                 code = "INVALID_SETTINGS" if isinstance(exc, ValidationError) else str(exc)
-                modules = {
-                    name: module.model_dump()
-                    for name, module in websocket.app.state.module_status.items()
-                }
-                reasons = [
-                    module.reason
-                    for module in websocket.app.state.module_status.values()
-                    if module.reason
-                ]
+                modules = {name: module.model_dump() for name, module in session_modules.items()}
+                reasons = [module.reason for module in session_modules.values() if module.reason]
                 await pipeline.emit(
                     "error",
                     pipeline.elapsed_ms(),
                     {
                         "code": code,
                         "message": "; ".join(reasons)
-                        if code == "MODEL_UNAVAILABLE_OR_BUSY" and reasons
+                        if code in {"MODEL_UNAVAILABLE_OR_BUSY", "STT_MODEL_LOAD_FAILED"}
+                        and reasons
+                        else "다른 연습 세션을 종료한 뒤 시작해 주세요."
+                        if code == "OTHER_SESSION_ACTIVE"
                         else "실시간 입력 또는 모델 상태를 확인해 주세요.",
                         "modules": modules,
                     },
@@ -244,6 +343,7 @@ async def _v2_session(
             finally:
                 if live_registered:
                     websocket.app.state.live_sessions.discard(session_id)
+                await websocket.app.state.live_speech.release(session_id)
 
 
 def _frontend_feedback(event: RealtimeEvent) -> dict[str, Any] | None:
@@ -371,6 +471,7 @@ def _frontend_feedback(event: RealtimeEvent) -> dict[str, Any] | None:
 
 
 @router.websocket("/ws/practice-demo")
+@exclude_stt_experiment
 async def practice_demo_websocket(websocket: WebSocket) -> None:
     try:
         loopback = (
@@ -477,6 +578,7 @@ async def practice_demo_websocket(websocket: WebSocket) -> None:
                         "karaokeGuideEnabled"
                     ]
                 analysis_updates["pronunciation_enabled"] = True
+                pipeline.set_audio_settings(client_event.data.get("audio_settings"))
                 pipeline.update_analysis_settings(
                     {
                         **analysis_updates,
@@ -511,6 +613,7 @@ async def practice_demo_websocket(websocket: WebSocket) -> None:
 
 
 @router.websocket("/ws/sessions/{session_id}")
+@exclude_stt_experiment
 async def session_websocket(websocket: WebSocket, session_id: UUID, token: str) -> None:
     settings = websocket.app.state.settings
     try:

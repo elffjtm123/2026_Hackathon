@@ -3,6 +3,7 @@
 import asyncio
 import contextlib
 import os
+import secrets
 import sys
 import tempfile
 from typing import Any, TypeVar
@@ -54,6 +55,10 @@ class _Proxy:
     def __init__(self, owner: "RealtimeModelProcess", modality: str) -> None:
         self.owner, self.modality = owner, modality
         self.gate = _Gate()
+
+    @property
+    def device(self) -> str | None:
+        return self.owner.modules[self.modality].device
 
     @property
     def reason(self) -> str:
@@ -208,14 +213,43 @@ class RealtimeModelProcess:
                 self._writer = writer
 
         # /tmp keeps the Unix socket path below macOS's 104-byte sockaddr limit.
-        self._directory = tempfile.TemporaryDirectory(prefix="rt-ai-", dir="/tmp")
-        path = self._directory.name + "/ipc.sock"
-        self._server = await asyncio.start_unix_server(accept, path=path, limit=MAX_JSON_BYTES)
-        os.chmod(path, 0o600)
+        child_environment = os.environ.copy()
+        if os.name == "nt":
+            token = secrets.token_hex(32)
+            child_environment["FEEDBACK_WORKER_TOKEN"] = token
+
+            async def authenticate(
+                reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+            ) -> None:
+                try:
+                    supplied = await asyncio.wait_for(reader.readexactly(64), 5)
+                    if not secrets.compare_digest(supplied, token.encode("ascii")):
+                        writer.close()
+                        return
+                    accept(reader, writer)
+                except (asyncio.TimeoutError, asyncio.IncompleteReadError, ConnectionError):
+                    writer.close()
+
+            self._server = await asyncio.start_server(
+                authenticate, "127.0.0.1", 0, limit=MAX_JSON_BYTES
+            )
+            path = "tcp:" + str(self._server.sockets[0].getsockname()[1])
+        else:
+            self._directory = tempfile.TemporaryDirectory(prefix="rt-ai-", dir="/tmp")
+            path = self._directory.name + "/ipc.sock"
+            self._server = await asyncio.start_unix_server(accept, path=path, limit=MAX_JSON_BYTES)
+            os.chmod(path, 0o600)
+        command = list(self.command)
+        if os.name == "nt" and command[0] == sys.executable:
+            # Bypass Windows' venv redirector so the owned PID is the model process.
+            child_environment["__PYVENV_LAUNCHER__"] = sys.executable
+            command[0] = sys._base_executable
         self._spawn_task = asyncio.create_task(
             asyncio.create_subprocess_exec(
-                *self.command,
+                *command,
                 path,
+                env=child_environment,
+                creationflags=0x08000000 if os.name == "nt" else 0,
                 stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.DEVNULL,
@@ -248,7 +282,11 @@ class RealtimeModelProcess:
             if (status["status"], status["reason"]) not in {
                 ("ready", None),
                 ("unavailable", "MODEL_LOAD_FAILED"),
-            } or status["device"] not in {None, "cpu", "mps", "cuda"}:
+            } or not (
+                status["device"] in {None, "cpu", "mps", "cuda"}
+                or isinstance(status["device"], str)
+                and status["device"].startswith("Vulkan")
+            ):
                 raise ProtocolError()
             self.modules[name] = self.modules[name].model_copy(update=status)
         if any(m.status != "ready" for m in self.modules.values()):

@@ -1,0 +1,47 @@
+.theme-link { display: inline-flex; align-items: center; text-decoration: none; }
+.theme-hero { padding: 34px; border-radius: 18px; background: #173d3a; color: white; margin: 28px 0 20px; }
+.theme-hero h2 { font-size: clamp(1.5rem, 3vw, 2.1rem); margin: 20px 0 16px; }
+.theme-hero p { color: #d3e6e0; max-width: 760px; line-height: 1.8; }
+.theme-pill { display: inline-block; padding: 6px 11px; border-radius: 20px; font-size: .75rem; font-weight: 700; background: var(--theme-tint, #e8f4ed); color: var(--theme-accent, #24665d); }
+.theme-feature-list { display: flex; flex-wrap: wrap; gap: 9px; }
+.theme-feature-list span { border: 1px solid #4b7168; border-radius: 6px; padding: 9px 12px; font-size: .8rem; }
+.theme-status-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 22px 0; }
+.theme-status-row p { color: #607276; margin: 0; font-size: .85rem; line-height: 1.6; }
+.theme-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
+.theme-card { padding: 24px; border: 1px solid #dae4e1; border-top: 4px solid var(--theme-accent); border-radius: 13px; background: white; display: flex; flex-direction: column; }
+.theme-card-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 30px; }
+.theme-index { color: var(--theme-accent); font-size: .82rem; font-weight: 700; }
+.theme-card h2 { font-size: 1.5rem; margin-bottom: 8px; }
+.theme-card p { line-height: 1.7; color: #53656a; }
+.theme-model-label { font-size: .85rem; font-weight: 650; }
+.theme-card .theme-common { font-size: .75rem; background: var(--theme-tint); color: var(--theme-accent); padding: 10px; border-radius: 6px; }
+.theme-availability { font-size: .75rem; overflow-wrap: anywhere; margin-top: auto; }
+.theme-card .theme-availability.ready { color: #286849; }
+.theme-enter { display: flex; justify-content: space-between; gap: 12px; padding: 14px; border-radius: 8px; color: white; background: var(--theme-accent); text-decoration: none; font-weight: 700; font-size: .86rem; }
+.theme-enter:hover { filter: brightness(1.1); }
+.theme-enter:focus-visible { outline: 3px solid #182729; outline-offset: 3px; }
+.theme-notice { border: 1px solid #dbe4e1; border-radius: 12px; background: white; padding: 20px; margin: 20px 0; color: #566b6c; line-height: 1.8; font-size: .88rem; }
+.theme-notice p:last-child { margin-bottom: 0; }
+.themed-practice .primary-button, .themed-practice .mode-tabs button.active { background: var(--theme-accent); }
+.themed-practice .eyebrow { color: var(--theme-accent); }
+.live-theme-banner { border-left: 4px solid var(--theme-accent); background: var(--theme-tint); padding: 18px 20px; border-radius: 8px; margin-bottom: 18px; line-height: 1.7; }
+.live-theme-banner h2 { color: var(--theme-accent); margin-bottom: 7px; font-size: 1.2rem; }
+.live-theme-banner p { margin-bottom: 6px; color: #526267; font-size: .85rem; }
+.live-theme-banner button { margin-top: 8px; }
+.theme-nav { display: flex; gap: 8px; flex-wrap: wrap; }
+.theme-nav a[aria-disabled="true"] { opacity: .5; cursor: not-allowed; }
+.live-comparison-panel { background: white; padding: 24px; border: 1px solid #d9e3e0; border-radius: 12px; margin-top: 20px; }
+.live-comparison-panel p { line-height: 1.8; color: #58706c; }
+.live-comparison-panel h2 { margin-bottom: 14px; }
+.live-comparison-panel textarea { width: 100%; padding: 12px; font: inherit; font-size: .8rem; border: 1px solid #cad6d2; border-radius: 8px; }
+.live-comparison-panel .summary-grid { margin: 18px 0; }
+.live-comparison-panel pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.live-comparison-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.live-comparison-note { display: grid; gap: 8px; margin: 16px 0; font-size: .85rem; }
+@media (max-width: 900px) { .theme-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 640px) {
+  .theme-grid { grid-template-columns: 1fr; }
+  .theme-hero { padding: 24px; }
+  .model-hub .practice-header, .themed-practice .practice-header { flex-direction: column; align-items: flex-start; }
+  .theme-status-row { align-items: flex-start; flex-direction: column; }
+}

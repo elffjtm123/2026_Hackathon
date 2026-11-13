@@ -1,21 +1,25 @@
 {
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "dev:backend": "MPLCONFIGDIR=.matplotlib-cache .venv310/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000",
+    "prepare:pulse-assets": "node scripts/prepare-pulse-assets.mjs",
+    "predev": "npm run prepare:pulse-assets",
+    "prebuild": "npm run prepare:pulse-assets",
+    "dev": "vite --configLoader runner",
+    "dev:backend": "node scripts/run-backend.mjs",
     "lint": "eslint .",
     "typecheck": "tsc -b",
-    "build": "tsc -b && vite build"
+    "build": "tsc -b && vite build --configLoader runner"
   },
   "dependencies": {
+    "@mediapipe/tasks-vision": "1.2.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
   "devDependencies": {
+    "@eslint/js": "^9.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^5.0.0",
-    "@eslint/js": "^9.0.0",
     "eslint": "^9.0.0",
     "eslint-plugin-react-hooks": "^5.0.0",
     "eslint-plugin-react-refresh": "^0.4.0",

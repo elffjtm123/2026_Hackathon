@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, type RefObject } from 'react';
 import workletUrl from '../pcm-capture.worklet.ts?worker&url';
 import { captureSize } from '../sessionLifecycle';
 import type { MediaPacket } from '../../../lib/mediaProtocol';
 
 type Options = {
   isActive: boolean; captureAudio: boolean; stream: MediaStream | null; audioContext: AudioContext | null;
+  videoRef?: RefObject<HTMLVideoElement | null>;
   sessionTime: () => number;
   sendVideoFrame: (payload: Blob, timestampMs: number) => Promise<boolean>;
   sendAudioPacket: (packet: Omit<MediaPacket, 'type' | 'timestampMs'>) => void;
@@ -12,15 +13,16 @@ type Options = {
   onError: (error: Error) => void;
 };
 
-export function useBackendStreaming({isActive, captureAudio, stream, audioContext, sessionTime,
+export function useBackendStreaming({isActive, captureAudio, stream, audioContext, sessionTime, videoRef,
   sendVideoFrame, sendAudioPacket, awaitAudioAck, onError}: Options) {
   const stopVideoRef = useRef<() => void>(() => undefined);
   const stopAudioRef = useRef<(flush: boolean) => Promise<void>>(async () => undefined);
   useEffect(() => {
     if (!isActive || !stream) return;
     let stopped = false, encoding = false;
-    const video = document.createElement('video');
-    video.muted = true; video.playsInline = true; video.srcObject = stream;
+    const sharedVideo = videoRef?.current;
+    const video = sharedVideo ?? document.createElement('video');
+    if (!sharedVideo) { video.muted = true; video.playsInline = true; video.srcObject = stream; }
     void video.play().catch(error => {if (!stopped) onError(error);});
     const canvas = document.createElement('canvas');
     const interval = setInterval(() => {
@@ -37,10 +39,10 @@ export function useBackendStreaming({isActive, captureAudio, stream, audioContex
         else encoding = false;
       }, 'image/jpeg', .8);
     }, 125);
-    const stop = () => {stopped = true; clearInterval(interval); video.pause(); video.srcObject = null;};
+    const stop = () => {stopped = true; clearInterval(interval); if (!sharedVideo) {video.pause(); video.srcObject = null;}};
     stopVideoRef.current = stop;
     return stop;
-  }, [isActive, stream, sessionTime, sendVideoFrame, onError]);
+  }, [isActive, stream, sessionTime, sendVideoFrame, onError, videoRef]);
 
   useEffect(() => {
     if (!captureAudio || !stream || !audioContext) return;

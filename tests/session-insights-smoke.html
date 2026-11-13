@@ -1,0 +1,37 @@
+<!doctype html><html lang="ko"><meta charset="utf-8"><title>종합 감정·피드백 UI 검사</title>
+<style>body{margin:0}.test-note{padding:14px;background:#fff0c8;color:#624e28;font:14px sans-serif;position:sticky;top:0;z-index:5}.test-actions{display:flex;flex-wrap:wrap;gap:12px;margin:16px 0}</style>
+<div class="test-note">개발 검사 · 표정·맥박·음성 수치는 합성 입력입니다. 실제 사용자 감정이나 모델 정확도 평가가 아닙니다. 카메라·마이크를 요청하지 않습니다.</div>
+<div id="root"></div><script type="module">
+import {createElement as h,useState} from 'react';import {createRoot} from 'react-dom/client';
+import {SessionInsights} from '/src/features/affect/SessionInsights.tsx';
+import {DeliveryReport} from '/src/features/delivery/DeliveryReport.tsx';
+import {completionForUi,summaryForUi} from '/src/lib/realtimeProtocol.ts';
+import '/src/styles.css';
+import '/src/features/delivery/delivery.css';
+function fixture(mode){
+ const signals={faces:[],pulses:[]},windows=[];
+ const high=!mode.includes('calm'),positive=mode.includes('positive');
+ for(let i=0;i<5;i++){
+  for(let t=i*10000;t<(i+1)*10000;t+=200)signals.faces.push({time:t,smile:positive?.6:.02,frown:positive?.02:.6,brow:.1,eyeWide:.1});
+  if(mode!=='missing')signals.pulses.push({time:i*10000+5000,bpm:i<3?80:high?100:60});
+  windows.push({start_ms:i*10000,end_ms:(i+1)*10000,observed_ms:10000,voiced_ms:5000,coverage:.5,pause_count:2,
+   f0_median_hz:i<3?200:high?260:150,articulation_rate:i<3?240:high?320:180,speech_rate:160,
+   loudness_dbfs:i<3?-25:high?-19:-31,alpha_ratio_db:8,hammarberg_db:10,pvq:.08,disfluency_density:3});
+ }
+ const metrics={status:'unavailable',agc_on:false,report:{total_voiced_ms:25000,sentences:[],baseline:{},bursts:[]},windows:{window_ms:10000,baseline:{},windows}};
+ const summary={sessionId:'synthetic-'+mode,durationSeconds:50,gazeStatus:'observed',gazeCoverageRatio:.85,gazeAwayRatio:.28,
+  pronunciationAccuracy:null,speechPaceWarningCount:1,averageSyllablesPerMinute:390,speechStatus:'observed',
+  fillerWordCounts:{음:3,어:1},fillerStatus:'observed',transcript:null,incomplete:false,deliveryMetrics:metrics};
+ return {signals,metrics,summary};
+}
+function Demo(){const [mode,setMode]=useState('negative-high'),[real,setReal]=useState(null);
+ const built=fixture(mode);const signals=real?{faces:[],pulses:[]}:built.signals;
+ const summary=real?summaryForUi('public-audio',completionForUi(real),4,null):built.summary;
+ const metrics=summary.deliveryMetrics;
+ return h('main',{className:'practice-shell'},h('h1',null,'종합 상태·종료 피드백 검사'),
+  real&&h('p',null,'공개 한국어 음성의 실제 Qwen 전사·Praat 특징 결과입니다. 얼굴·맥박 자료가 없어 감정 분류는 보류합니다.'),
+  h('div',{className:'test-actions'},[['negative-high','긴장 경향 예제'],['positive-high','활기 경향 예제'],['positive-calm','차분 경향 예제'],['negative-calm','저활성 경향 예제'],['missing','맥박 누락 예제']].map(([value,label])=>h('button',{key:value,onClick:()=>{setReal(null);setMode(value);},className:'secondary-button'},label)),
+   h('button',{className:'secondary-button',onClick:async()=>{setReal(await(await fetch('/tests/fixtures/voice-delivery-public.json')).json());}},'실제 공개 음성 결과')),
+  h(SessionInsights,{key:real?'public-audio':mode,summary,signals}),h(DeliveryReport,{metrics,sessionId:summary.sessionId}));}
+createRoot(document.querySelector('#root')).render(h(Demo));
+</script></html>

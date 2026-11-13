@@ -71,6 +71,21 @@ export function FeedbackPanel({
       ) : (
         <p className="muted-text">세션을 시작하면 피드백이 표시됩니다.</p>
       )}
+      <div className="feedback-detail">
+        <div>
+          <span className="label">필러워드 · 최근 음성 청크</span>
+          <strong>{feedback.speech?.filler ? `${feedback.speech.filler.totalCount}회` : '미측정'}</strong>
+          {feedback.speech?.filler && <p>{Object.entries(feedback.speech.filler.counts ?? {})
+            .map(([word, count]) => `${word} ${count}회`).join(' · ') || '이 청크에서 탐지된 필러워드 없음'}</p>}
+        </div>
+        <div>
+          <span className="label">발음 명료도 · 대본 일치도 추정</span>
+          <strong>{feedback.pronunciation?.pronunciation?.accuracy == null ? '미측정'
+            : `${Math.round(feedback.pronunciation.pronunciation.accuracy)} / 100`}</strong>
+          <p>{feedback.pronunciation?.pronunciation?.message
+            ?? '대본과 실제 STT 결과가 있어야 추정합니다. 음향학적 발음 정확도는 아닙니다.'}</p>
+        </div>
+      </div>
     </section>
   );
 }

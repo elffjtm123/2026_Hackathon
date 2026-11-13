@@ -1,17 +1,19 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type RefObject } from "react";
 
 type VideoPreviewProps = {
   stream: MediaStream | null;
+  videoRef?: RefObject<HTMLVideoElement | null>;
 };
 
-export function VideoPreview({ stream }: VideoPreviewProps) {
-  const videoRef = useRef<HTMLVideoElement | null>(null);
+export function VideoPreview({ stream, videoRef: suppliedRef }: VideoPreviewProps) {
+  const localRef = useRef<HTMLVideoElement | null>(null);
+  const videoRef = suppliedRef ?? localRef;
 
   useEffect(() => {
     if (videoRef.current) {
       videoRef.current.srcObject = stream;
     }
-  }, [stream]);
+  }, [stream, videoRef]);
 
   return (
     <video

@@ -1,0 +1,69 @@
+<!doctype html><html lang="ko"><meta charset="utf-8"><title>Pulse face ROI regression</title>
+<h1>공개 얼굴 예제 · ROI/맥파 처리 회귀 검사</h1>
+<p>Google MediaPipe 공개 portrait.jpg에 알려진 72 BPM 색 변화를 합성합니다. 실제 사람의 심박 측정이나 정확도 검증이 아닙니다. 카메라·마이크를 사용하지 않습니다.</p>
+<button id="run">실제 얼굴 모델 + 합성 맥파 검사</button><pre id="result">실행 전</pre>
+<canvas id="preview" width="320" height="400"></canvas>
+<hr><button id="live">공개 예제 + 합성 72 BPM을 실제 UI로 검사</button><button id="stop">합성 영상 종료</button>
+<p>아래 패널 또한 공개 예제의 합성 신호입니다. 실제 사용자 측정값이 아닙니다.</p><div id="panel"></div>
+<script type="module">
+import {createElement} from 'react';
+import {createRoot} from 'react-dom/client';
+import {PulsePanel} from '/src/features/pulse/PulsePanel.tsx';
+const output = document.querySelector('#result'), button = document.querySelector('#run');
+const canvas = document.querySelector('#preview'), ctx = canvas.getContext('2d', {willReadFrequently: true});
+button.onclick = async () => {
+  button.disabled = true; output.textContent = '실제 모델 준비 중…';
+  const image = new Image(); image.src = '/tests/fixtures/pulse-portrait.jpg'; await image.decode();
+  canvas.height = 360;
+  ctx.drawImage(image, image.width*0.28,image.height*0.035,image.width*0.44,image.height*0.39,0,0,canvas.width,canvas.height);
+  const original = ctx.getImageData(0,0,canvas.width,canvas.height);
+  const worker = new Worker('/pulse-worker.js');
+  let frame = 0, rejected = 0, latest;
+  const timeout = setTimeout(() => finish('FAIL: timeout'),90000);
+  const finish = text => { clearTimeout(timeout); worker.terminate(); button.disabled = false; output.textContent = text; };
+  const send = async () => {
+    const pixels = new ImageData(new Uint8ClampedArray(original.data), original.width, original.height);
+    const pulse = Math.sin(2 * Math.PI * 72 / 60 * frame / 30);
+    for (let i=0; i<pixels.data.length;i+=4) { pixels.data[i] += 0.5 * pulse; pixels.data[i+1] += 2 * pulse; pixels.data[i+2] += 0.2 * pulse; }
+    ctx.putImageData(pixels,0,0);
+    const bitmap = await createImageBitmap(canvas); worker.postMessage({type:'frame',bitmap,time:frame++*1000/30},[bitmap]);
+  };
+  worker.onerror = e => finish(`FAIL: ${e.message}`);
+  worker.onmessage = ({data}) => {
+    if (data.type === 'error') finish(`FAIL: ${data.message}`);
+    if (data.type === 'ready') void send();
+    if (data.type === 'result') {
+      latest = data.result;
+      output.textContent = JSON.stringify({frame, ...latest},null,2);
+      if (latest.seconds === 0 && latest.status === 'unreliable') rejected++;
+      if (latest.status === 'observed') finish(Math.abs(latest.bpm-72)<=3
+        ? `PASS: 실제 얼굴 ROI와 RGB 수집 → POS → ${latest.bpm} BPM (합성 정답 72). ${latest.seconds.toFixed(1)}초 수집.\n${JSON.stringify(latest.diagnostics ?? {},null,2)}`
+        : `FAIL: synthetic BPM mismatch ${latest.bpm}`);
+    }
+    if (data.type === 'ack' && button.disabled) {
+      if (rejected>=20 || frame>=520) finish(`FAIL: ${JSON.stringify({frame,rejected,latest},null,2)}`);
+      else void send();
+    }
+  };
+  worker.postMessage({type:'init'});
+};
+let stopLive = () => {};
+document.querySelector('#live').onclick = async () => {
+  stopLive(); const image = new Image(); image.src='/tests/fixtures/pulse-portrait.jpg'; await image.decode();
+  const source = document.createElement('canvas'); source.width=640; source.height=720;
+  const context=source.getContext('2d',{willReadFrequently:true});
+  context.drawImage(image,image.width*.28,image.height*.035,image.width*.44,image.height*.39,0,0,640,720);
+  const original=context.getImageData(0,0,640,720), started=performance.now();
+  const timer=setInterval(() => {
+    const pixels=new ImageData(new Uint8ClampedArray(original.data),640,720);
+    const pulse=Math.sin(2*Math.PI*72/60*(performance.now()-started)/1000);
+    for(let i=0;i<pixels.data.length;i+=4){pixels.data[i]+=.5*pulse; pixels.data[i+1]+=2*pulse;pixels.data[i+2]+=.2*pulse;}
+    context.putImageData(pixels,0,0);
+  },33);
+  const stream=source.captureStream(30), root=createRoot(document.querySelector('#panel'));
+  root.render(createElement(PulsePanel,{stream,showPreview:true}));
+  stopLive=()=>{clearInterval(timer);root.unmount();stream.getTracks().forEach(t=>t.stop());};
+};
+document.querySelector('#stop').onclick=()=>stopLive();
+window.addEventListener('pagehide',()=>stopLive());
+</script></html>

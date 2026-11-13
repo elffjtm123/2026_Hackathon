@@ -70,6 +70,8 @@ class QwenGGUF:
                 self.device = "mps"
             elif selected.upper() == "CPU":
                 self.device = "cpu"
+            elif selected.upper().startswith("VULKAN"):
+                self.device = selected
             else:
                 raise RuntimeError("STT_UNSUPPORTED_DEVICE")
         except BaseException:

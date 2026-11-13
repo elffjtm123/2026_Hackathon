@@ -90,6 +90,23 @@ async def webrtc_offer(
     user: CurrentUser,
     db: DBSession,
 ) -> WebRTCAnswer:
+    state = request.app.state
+    if state.stt_experiments.busy or state.live_speech.busy:
+        raise AppError("EXPERIMENT_BUSY", "비교 실험을 종료한 뒤 시작해 주세요.", 409)
+    state.experiment_session_count += 1
+    try:
+        return await _create_webrtc_answer(session_id, payload, request, user, db)
+    finally:
+        state.experiment_session_count -= 1
+
+
+async def _create_webrtc_answer(
+    session_id: UUID,
+    payload: WebRTCOffer,
+    request: Request,
+    user: CurrentUser,
+    db: DBSession,
+) -> WebRTCAnswer:
     async with disconnected_request(
         request, "WEBRTC_CANCELLED", "연결이 종료되어 모델 준비를 중단했습니다."
     ):

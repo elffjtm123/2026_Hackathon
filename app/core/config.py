@@ -37,11 +37,16 @@ class Settings(BaseSettings):
     ai_max_retries: int = 2
     vision_provider: Literal["legacy", "uniface"] = "uniface"
     face_landmarker_path: str = ".models/face_landmarker.task"
+    pulse_enabled: bool = True
+    pulse_model_dir: str = ".models/pulse"
     stt_provider: Literal["qwen3_asr"] = "qwen3_asr"
     stt_model: str = ".models/Qwen3-ASR-0.6B-Q8_0.gguf"
     stt_library_path: str = ".models/speech/libspeech.dylib"
     stt_device: str = "auto"
     stt_silence_rms_threshold: float = 0.003
+    stt_experiments_enabled: bool = True
+    stt_experiment_model_dir: str = ".models/stt"
+    stt_experiment_threads: int = Field(default=4, ge=1, le=32)
     pronunciation_provider: str = "alignment"
 
     video_queue_size: int = 1

@@ -1,3 +1,5 @@
+import {deliveryForUi, type DeliveryMetrics} from '../features/delivery/metrics.ts';
+
 export type GazeStatus =
   | "center"
   | "left"
@@ -14,6 +16,15 @@ export function modelStatusLabel(module: ModuleStatus): string {
   return {idle:'미로드',loading:'준비 중',ready:'준비 완료',unavailable:'사용 불가'}[module.status];
 }
 export type SessionReadyData = { sessionId: string; timestampMs: number; modules: Record<string, ModuleStatus> };
+export type LiveComparison = {
+  model_id: string; label: string; mode: PracticeMode; device: string | null; load_ms: number;
+  already_loaded: boolean; threads: number | null; metadata: Record<string, unknown>;
+  gaze: ModuleStatus; notes: string[]; audio_queue_peak?: number; dropped_video_frames?: number;
+  errors?: Record<string, number>;
+  performance?: Record<string, { observations: number; measured_latency_count: number;
+    average_inference_ms: number | null; max_inference_ms: number | null;
+    average_result_age_ms: number; max_result_age_ms: number }>;
+};
 export type RealtimeEvent = { event: string; version: number; session_id: string; sequence: number;
   timestamp_ms: number; module: string; level: string; data: Record<string, unknown> };
 
@@ -86,7 +97,9 @@ export function completionForUi(data: Record<string, unknown>): SessionCompletio
     scriptCompletionRatio:report.script_completion_ratio ?? null,
     gaze:{awayCount:report.gaze_away_count ?? 0,awayDurationMs:report.gaze_away_duration_ms ?? 0,
       awayRatio:report.gaze_metrics?.away_ratio ?? null,coverageRatio:report.gaze_metrics?.coverage_ratio ?? null,
-      status:report.gaze_metrics?.status}};
+    status:report.gaze_metrics?.status},
+    comparison: data.comparison as LiveComparison | undefined, backendReport: data,
+    deliveryMetrics: deliveryForUi(data.delivery_metrics)};
 }
 
 export function summaryForUi(sessionId: string, report: SessionCompletionReport | null,
@@ -99,7 +112,8 @@ export function summaryForUi(sessionId: string, report: SessionCompletionReport 
     speechPaceWarningCount:report?.speech.warningEpisodeCount ?? null,
     averageSyllablesPerMinute:report?.speech.averageSyllablesPerMinute ?? null,
     fillerWordCounts:report?.filler.counts ?? null,
-    transcript:report?.transcript ?? ephemeralTranscript,incomplete:report?.incomplete ?? true};
+    transcript:report?.transcript ?? ephemeralTranscript,incomplete:report?.incomplete ?? true,
+    comparison:report?.comparison,backendReport:report?.backendReport,deliveryMetrics:report?.deliveryMetrics};
 }
 
 export type SpeechPaceStatus = "slow" | "normal" | "fast" | "unknown";
@@ -111,6 +125,7 @@ export type PracticeMode = "interview" | "presentation";
 export type PresentationFeatureSettings = {
   karaokeGuideEnabled: boolean;
   keywordHintEnabled: boolean;
+  deliveryEnabled: boolean;
 };
 
 export type RealtimeFeedback = {
@@ -184,6 +199,7 @@ export type ScriptProgress = {
 };
 
 export type PracticeSummary = {
+  deliveryMetrics?: DeliveryMetrics;
   sessionId: string;
   durationSeconds: number;
   gazeAwayRatio: number | null;
@@ -198,9 +214,12 @@ export type PracticeSummary = {
   fillerWordCounts: Record<string, number> | null;
   transcript: string | null;
   incomplete: boolean;
+  comparison?: LiveComparison;
+  backendReport?: Record<string, unknown>;
 };
 
 export type SessionCompletionReport = {
+  deliveryMetrics?: DeliveryMetrics;
   durationMs?:number;
   pronunciationAccuracy?:number | null;
   scriptCompletionRatio?:number | null;
@@ -222,6 +241,8 @@ export type SessionCompletionReport = {
     status?:string;
   };
   incomplete: boolean;
+  comparison?: LiveComparison;
+  backendReport?: Record<string, unknown>;
 };
 
 export type SessionCompletionMessage = {

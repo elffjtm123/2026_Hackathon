@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type RefObject } from "react";
 import type { FeedbackState } from "../feedbackState";
 import type { ConnectionStatus, PracticeSummary } from "../types";
 import { FeedbackOverlay } from "./FeedbackOverlay";
@@ -15,6 +15,7 @@ type InterviewContentProps = {
   isStopping: boolean;
   onEnd: () => void;
   summary: PracticeSummary | null;
+  videoRef?: RefObject<HTMLVideoElement | null>;
 };
 
 export function InterviewContent({
@@ -26,6 +27,7 @@ export function InterviewContent({
   isStopping,
   onEnd,
   summary,
+  videoRef,
 }: InterviewContentProps) {
   const resultHeadingRef = useRef<HTMLHeadingElement>(null);
   const resultSessionId = summary?.sessionId;
@@ -65,7 +67,7 @@ export function InterviewContent({
           <p>질문 생성 기능은 아직 연결되지 않았습니다.</p>
         </section>
         <section className="video-stage" aria-label="카메라 프리뷰">
-          <VideoPreview stream={stream} />
+          <VideoPreview stream={stream} videoRef={videoRef} />
           {!stream ? <div className="video-placeholder">카메라 프리뷰</div> : null}
           <FeedbackOverlay feedback={feedback} />
         </section>

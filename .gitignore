@@ -13,3 +13,5 @@ node_modules/
 dist/
 .worktrees/
 .models/
+.logs/
+public/pulse-assets/

@@ -1,0 +1,34 @@
+Camera pulse experiment (local research prototype)
+
+Bundled runtime: @mediapipe/tasks-vision 1.2.0, Google MediaPipe Authors.
+Code repository: https://github.com/google-ai-edge/mediapipe
+Code license: Apache License 2.0 (copy: /pulse-licenses/mediapipe-Apache-2.0.txt).
+Generated runtime copies retain upstream headers. Face Landmarker model is
+prepared from the existing local official MediaPipe task asset; consult its
+model documentation and terms before redistribution or production use.
+
+POS signal projection: independently implemented from Wang et al.,
+Algorithmic Principles of Remote PPG, IEEE TBME 2017,
+DOI 10.1109/TBME.2016.2609282. POS remains a separate comparison experiment.
+
+Presentation mode: EfficientPhys, TS-CAN and PhysFormer pretrained on UBFC-rPPG,
+and the Motion Matters MA-UBFC TS-CAN weights (current default),
+plus the original PURE EfficientPhys comparison weights, from rPPG-Toolbox,
+revision b7500b848f84ad7f86e277b4612563b69f4f88f9.
+https://github.com/ubicomplab/rPPG-Toolbox
+Motion-augmentation research and attribution: https://motion-matters.github.io/
+The official weights/structure are converted to an equivalent ONNX graph;
+no retraining is performed. Local backend assets are in .models/pulse.
+UBFC artifacts are prepared with scripts/prepare_ubfc_pulse.py. Source and
+weight SHA-256 checks and original-PyTorch/ONNX equivalence checks are required.
+Responsible AI Source Code License 1.1 and its use restrictions apply:
+/pulse-licenses/EfficientPhys-RAIL1.1.txt
+Do not use this feature for surveillance, medical diagnosis, employment
+selection, or decision-making about other people. No pyVHR/yarPPG code is bundled.
+
+No dataset is bundled. Dataset availability is not unrestricted permission
+for training, commercial use, or redistribution. See /#pulse-experiment
+and docs/pulse-experiment.md for the respective sources and access terms.
+
+Research/demo use: not a medical device, validated stress classifier, or
+basis for employment/interview scoring.

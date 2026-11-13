@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -17,8 +18,10 @@ from app.ai.script_summary import LocalScriptSummarizer
 from app.ai.uniface_gaze import UnavailableGazeAdapter
 from app.api.health import router as health_router
 from app.api.v1.auth import router as auth_router
+from app.api.v1.pulse import router as pulse_router
 from app.api.v1.scripts import router as scripts_router
 from app.api.v1.sessions import router as sessions_router
+from app.api.v1.stt_experiments import router as stt_experiments_router
 from app.api.v1.websocket import router as websocket_router
 from app.core.config import Settings, get_settings
 from app.core.errors import AppError
@@ -29,6 +32,9 @@ from app.realtime.events import ModuleStatus
 from app.realtime.registry import PipelineRegistry
 from app.realtime.state import SessionStateStore
 from app.realtime.webrtc import WebRTCManager
+from app.services.live_stt import LiveSpeechManager
+from app.services.pretrained_pulse import PretrainedPulse
+from app.services.stt_experiments import ExperimentManager
 
 logger = logging.getLogger(__name__)
 
@@ -123,11 +129,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         app.state.webrtc = WebRTCManager(settings)
         app.state.websocket_counts = {}
+        app.state.experiment_session_count = 0
+        app.state.stt_experiments = ExperimentManager(settings, speech, execution)
+        app.state.live_speech = LiveSpeechManager(settings, speech)
+        app.state.pretrained_pulse = PretrainedPulse(settings.pulse_model_dir)
+        pulse_cleanup = asyncio.create_task(app.state.pretrained_pulse.idle_cleanup())
         if settings.auto_create_tables:
             await database.create_tables()
         try:
             yield
         finally:
+            pulse_cleanup.cancel()
+            await asyncio.gather(pulse_cleanup, return_exceptions=True)
+            await app.state.pretrained_pulse.close()
+            await app.state.stt_experiments.close()
+            await app.state.live_speech.close()
             await app.state.script_summarizer.close()
             await app.state.webrtc.close()
             try:
@@ -187,6 +203,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(sessions_router, prefix=settings.api_prefix)
     app.include_router(scripts_router, prefix=settings.api_prefix)
     app.include_router(websocket_router, prefix=settings.api_prefix)
+    app.include_router(stt_experiments_router, prefix=settings.api_prefix)
+    app.include_router(pulse_router, prefix=settings.api_prefix)
     return app
 
 

@@ -79,8 +79,13 @@ def test_native_worker_is_reaped_by_every_session_path(mode, monkeypatch, tmp_pa
         assert runtime.process is None
         assert child.returncode is not None
         assert app.state.model_execution.owner is None
-        with pytest.raises(ProcessLookupError):
-            os.kill(child.pid, 0)
+        if os.name == "nt":
+            import psutil
+
+            assert not psutil.pid_exists(child.pid)
+        else:
+            with pytest.raises(ProcessLookupError):
+                os.kill(child.pid, 0)
 
 
 def test_authenticated_legacy_disconnect_does_not_leave_models_resident(client, auth):

@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import os
 import socket
 import time
 from collections.abc import Callable
@@ -291,6 +292,7 @@ class LocalScriptSummarizer:
                 '{"enable_thinking":false}',
                 "--no-webui",
                 "--log-disable",
+                creationflags=0x08000000 if os.name == "nt" else 0,
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.DEVNULL,
             )
@@ -367,7 +369,7 @@ class LocalScriptSummarizer:
 
     def _asset_paths(self) -> tuple[str, str]:
         paths = [Path(self.settings.summary_server_path), Path(self.settings.summary_model_path)]
-        if not all(path.is_file() for path in paths):
+        if not all(path.is_file() and path.stat().st_size > 0 for path in paths):
             raise AppError("SUMMARY_UNAVAILABLE", "요약 모델과 실행 파일을 준비해 주세요.", 503)
         return str(paths[0].resolve()), str(paths[1].resolve())
 

@@ -1,0 +1,37 @@
+.pulse-panel { margin: 24px 0; padding: 24px; border: 1px solid #c6ded8; border-radius: 18px; background: #f7fbfa; color: #183f3b; }
+.pulse-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; flex-wrap: wrap; }
+.pulse-heading h2 { margin: 6px 0; font-size: 1.4rem; }
+.pulse-model-picker { display:flex; flex-wrap:wrap; align-items:center; gap:12px; margin:16px 0; }
+.pulse-model-picker label { display:flex; flex-wrap:wrap; align-items:center; gap:10px; font-weight:600; }
+.pulse-model-picker select { max-width:100%; padding:10px; border:1px solid #a9c9be; border-radius:8px; color:#183f3b; background:white; }
+.pulse-provisional > div:first-child { border-color:#e5c58d; background:#fffaf0; }
+.pulse-toggle { display: inline-flex; align-items: center; gap: 8px; font-weight: 700; }
+.pulse-panel p, .pulse-resources { font-size: .9rem; line-height: 1.8; }
+.pulse-panel a { color: #1b655c; text-underline-offset: 3px; }
+.pulse-readout { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 22px 0; }
+.pulse-readout > div { padding: 20px; background: white; border-radius: 12px; border: 1px solid #dfebe6; }
+.pulse-readout span { display: block; color: #5d7571; font-size: .83rem; margin-bottom: 9px; }
+.pulse-readout strong { display: block; font-size: 2.8rem; font-variant-numeric: tabular-nums; }
+.pulse-readout small { font-size: .8rem; color: #5d7571; }
+.pulse-readout b { font-size: 1.25rem; }
+.pulse-panel progress { width: 100%; accent-color: #286d61; }
+.pulse-panel .pulse-meta { font-size: .78rem; color: #5d716c; }
+.pulse-caution { padding: 14px; border-radius: 10px; background: #fff4dc; color: #735423; }
+.pulse-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 18px 0; font-size: .85rem; }
+.pulse-panel details { border-top: 1px solid #cfdfd9; padding: 16px 0; }
+.pulse-panel summary { cursor: pointer; font-weight: 700; }
+.pulse-resources ul { padding-left: 20px; }
+.pulse-resources li { margin: 10px 0; }
+.pulse-wave { display: block; max-width: 420px; width: 100%; color: #19766a; background: white; border-radius: 8px; }
+.pulse-camera { aspect-ratio: 4 / 3; max-width: 640px; background: #e6efeb; position: relative; border-radius: 18px; overflow: hidden; margin: 22px auto; }
+.pulse-camera video { width: 100%; height: 100%; object-fit: contain; }
+.pulse-camera .video-preview { position: absolute; inset: 0; min-height: 0; }
+.pulse-roi-overlay { position: absolute; inset: 0; width: 100%; height: 100%; transform: scaleX(-1); pointer-events: none; }
+.pulse-camera-badge { position: absolute; bottom: 12px; left: 12px; right: 12px; padding: 7px 12px; background: #102e2bda; color: white; border-radius: 7px; font-size: .8rem; }
+.pulse-stages { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 14px; }
+.pulse-stages span { padding: 8px 12px; border: 1px solid #cadfd6; border-radius: 7px; background: white; font-size: .8rem; font-variant-numeric: tabular-nums; }
+.presentation-pulse-overlay { position: absolute; right: 14px; top: 14px; z-index: 4; width: min(230px, 45%); padding: 12px 15px; background: #12352ee8; border: 1px solid #74b4a7; border-radius: 12px; color: white; pointer-events: none; }
+.presentation-pulse-overlay span, .presentation-pulse-overlay small { display: block; font-size: .7rem; line-height: 1.5; color: #d2e9df; }
+.presentation-pulse-overlay strong { display: block; font-size: 1.6rem; margin: 5px 0; font-variant-numeric: tabular-nums; }
+.pulse-camera p { position: absolute; inset: 35% 10%; text-align: center; color: #51685e; }
+@media (max-width: 600px) { .pulse-panel { padding: 18px; } .pulse-readout { gap: 10px; } .pulse-readout > div { padding: 14px; } }

@@ -2,6 +2,7 @@ import json
 import os
 import sqlite3
 import subprocess
+import sys
 from pathlib import Path
 from uuid import uuid4
 
@@ -134,7 +135,7 @@ def test_old_report_survives_nullable_migration(tmp_path):
     root = Path(__file__).resolve().parents[1]
     database = tmp_path / "migration.db"
     env = {**os.environ, "DATABASE_URL": f"sqlite+aiosqlite:///{database}"}
-    command = [str(root / ".venv310/bin/python"), "-m", "alembic", "upgrade"]
+    command = [sys.executable, "-m", "alembic", "upgrade"]
     subprocess.run(
         [*command, "0002_scripts_and_modular_reports"],
         cwd=root,
@@ -185,7 +186,7 @@ def test_legacy_auto_created_style_table_is_not_destroyed_on_upgrade(tmp_path):
     root = Path(__file__).resolve().parents[1]
     database = tmp_path / "legacy.db"
     env = {**os.environ, "DATABASE_URL": f"sqlite+aiosqlite:///{database}"}
-    command = [str(root / ".venv310/bin/python"), "-m", "alembic", "upgrade"]
+    command = [sys.executable, "-m", "alembic", "upgrade"]
     subprocess.run([*command, "0001_initial"], cwd=root, env=env, check=True, capture_output=True)
     with sqlite3.connect(database) as db:
         db.execute("CREATE TABLE style_transfer_jobs (id TEXT PRIMARY KEY, source_script TEXT)")

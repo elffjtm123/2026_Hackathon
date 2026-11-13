@@ -36,6 +36,7 @@ def media(payload: bytes = b"\x00\xff\x03\x80") -> MediaPayload:
         utterance_id="발화-7",
         end_ms=1444,
         voiced_ms=123,
+        cut_reason="flush",
     )
 
 
@@ -48,6 +49,11 @@ async def busy(proxy: Any) -> None:
 
 
 def gone(pid: int) -> None:
+    if os.name == "nt":
+        import psutil
+
+        assert not psutil.pid_exists(pid)
+        return
     with pytest.raises(ProcessLookupError):
         os.kill(pid, 0)
 
@@ -94,6 +100,7 @@ async def test_native_round_trip_preserves_every_field_and_reaps() -> None:
                 "utterance_id": "발화-7",
                 "end_ms": 1444,
                 "voiced_ms": 123,
+                "cut_reason": "flush",
             },
             "nested": [None, True, 1.25],
         }
@@ -310,6 +317,9 @@ async def test_oversized_or_invalid_media_does_not_reserve_slot() -> None:
         await worker.stop()
 
 
+@pytest.mark.skipif(
+    os.name == "nt", reason="Direct Unix-socket protocol fixture; Windows uses authenticated TCP"
+)
 async def test_worker_rejects_unknown_modality_without_echoing_content() -> None:
     from app.ai.worker_transport import MODEL_SETTINGS, read_frame, write_frame
 
@@ -353,6 +363,9 @@ async def test_worker_rejects_unknown_modality_without_echoing_content() -> None
         directory.cleanup()
 
 
+@pytest.mark.skipif(
+    os.name == "nt", reason="POSIX socket permissions; authenticated TCP is tested separately"
+)
 async def test_socket_is_private_and_only_model_settings_cross_ipc(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -414,6 +427,7 @@ async def test_child_exit_before_handshake_is_load_failure_not_cancellation() ->
     await worker.stop()
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX SIGTERM/SIGKILL semantics")
 async def test_repeated_stop_cancellation_still_kills_and_reaps_stubborn_child() -> None:
     worker = runtime("--ignore-eof")
     await worker.start()

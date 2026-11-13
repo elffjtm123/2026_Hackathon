@@ -13,6 +13,7 @@ from sqlalchemy import (
     Text,
     false,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -45,6 +46,9 @@ class SessionReport(Base):
     speech_rate_metrics: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     pronunciation_metrics: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     script_sync_metrics: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    delivery_metrics: Mapped[dict[str, Any]] = mapped_column(
+        JSON, default=dict, server_default=text("'{}'")
+    )
     scoring_version: Mapped[str] = mapped_column(String(20), default="v1")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

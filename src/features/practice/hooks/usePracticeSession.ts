@@ -22,13 +22,14 @@ function createSessionId() {
   return `session-${Date.now()}`;
 }
 
-export function usePracticeSession() {
+export function usePracticeSession(initialMode: PracticeMode = 'presentation') {
   const [phase, setPhase] = useState<SessionPhase>('completed');
-  const [mode, setMode] = useState<PracticeMode>("presentation");
+  const [mode, setMode] = useState<PracticeMode>(initialMode);
   const [featureSettings, setFeatureSettings] =
     useState<PresentationFeatureSettings>({
       karaokeGuideEnabled: true,
       keywordHintEnabled: false,
+      deliveryEnabled: true,
     });
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [startedAt, setStartedAt] = useState<number | null>(null);

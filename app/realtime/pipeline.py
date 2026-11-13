@@ -1,21 +1,27 @@
 import asyncio
 import hashlib
 import logging
+import re
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 
 from app.ai.base import AIResult, GazeAdapter, MediaPayload, SpeechAdapter
 from app.ai.model_execution import ModelExecution
 from app.core.config import Settings
+from app.modules.delivery.analyzer import DeliveryAnalyzer
 from app.modules.gaze.service import GazeStabilizer
 from app.modules.pronunciation.service import estimate_stt_pronunciation_accuracy
 from app.modules.script_sync.service import ScriptSyncService, analyze_script
-from app.modules.speech.analysis import SpeechRateWindow, analyze_utterance, pace_message
-from app.modules.speech.changes import SpeechChangeDetector
-from app.modules.speech.segments import FinalUtterance, SpeechSegmenter
+from app.modules.speech.analysis import (
+    SpeechRateWindow,
+    analyze_utterance,
+    filler_counts,
+    pace_message,
+)
+from app.modules.speech.segments import CutReason, FinalUtterance, SpeechSegmenter
 from app.realtime.aggregator import FeedbackAggregator
 from app.realtime.events import RealtimeEvent
 from app.realtime.queues import DropOldestQueue
@@ -23,6 +29,12 @@ from app.realtime.state import SessionStateStore
 
 Subscriber = Callable[[RealtimeEvent], Awaitable[None]]
 logger = logging.getLogger(__name__)
+
+
+def _delivery_counts(text: str) -> tuple[int, int]:
+    """Syllables and disfluencies of a final transcript, independent of the feedback toggles."""
+    fillers, repeats = filler_counts(text)
+    return len(re.findall(r"[가-힣]", text)), sum(fillers.values()) + repeats
 
 
 class SessionPipeline:
@@ -49,7 +61,10 @@ class SessionPipeline:
         self.speech_queue: asyncio.Queue[MediaPayload] = asyncio.Queue(2)
         self.segmenter: SpeechSegmenter | None = None
         self.speech_window = SpeechRateWindow()
-        self.speech_changes = SpeechChangeDetector()
+        self.delivery: DeliveryAnalyzer | None = None
+        self.delivery_failed = False
+        self.delivery_sentence_index = 0
+        self.agc_on: bool | None = None
         self.legacy_utterance_sequence = 0
         self.last_audio_activity_ms = 0
         self.latest_audio_end_ms = 0
@@ -65,6 +80,10 @@ class SessionPipeline:
         self._sequence_lock = asyncio.Lock()
         self._stop_lock = asyncio.Lock()
         self.completed_report: dict[str, Any] | None = None
+        self.comparison: dict[str, Any] | None = None
+        self.performance: dict[str, dict[str, float]] = {}
+        self.error_counts: dict[str, int] = {}
+        self.audio_queue_peak = 0
         self.phase = "preparing"
         self.protocol = 1
         self.running_started_ms: int | None = None
@@ -82,10 +101,29 @@ class SessionPipeline:
 
     def update_analysis_settings(self, settings: dict[str, Any]) -> None:
         self.analysis_settings.update(settings)
+        if not self.analysis_settings.get("delivery_enabled", True):
+            self.delivery = None
         script = self.analysis_settings.get("script")
         time_limit = self.analysis_settings.get("time_limit_seconds")
         if isinstance(script, str) and script and isinstance(time_limit, int) and time_limit > 0:
             self.script_sync = ScriptSyncService(analyze_script(script, time_limit))
+
+    def set_audio_settings(self, raw: Any) -> None:
+        """Remember the browser's applied auto gain control; non-bool values are ignored."""
+        value = raw.get("autoGainControl") if isinstance(raw, dict) else None
+        self.agc_on = value if isinstance(value, bool) else None
+
+    def _feedback_speech_enabled(self) -> bool:
+        return bool(
+            self.analysis_settings.get("speech_rate_enabled", True)
+            or self.analysis_settings.get("filler_words_enabled", True)
+        )
+
+    def _speech_needed(self) -> bool:
+        """Speech runs for its own feedback or, via the transcript counts, for delivery."""
+        return self._feedback_speech_enabled() or bool(
+            self.analysis_settings.get("delivery_enabled", True)
+        )
 
     async def start(self) -> None:
         await self.prepare()
@@ -99,11 +137,7 @@ class SessionPipeline:
             self._execution_acquired = True
         for enabled, adapter in [
             (self.analysis_settings.get("gaze_enabled", True), self.gaze),
-            (
-                self.analysis_settings.get("speech_rate_enabled", True)
-                or self.analysis_settings.get("filler_words_enabled", True),
-                self.speech,
-            ),
+            (self._speech_needed(), self.speech),
         ]:
             if enabled and (
                 hasattr(adapter, "reason") or getattr(getattr(adapter, "gate", None), "busy", False)
@@ -143,6 +177,14 @@ class SessionPipeline:
         self.phase = "running"
         self.accepting = True
         self.running_started_ms = self.audio_origin_ms = self.elapsed_ms()
+        # Segmenter frame times are on the session clock, so windows start at the audio origin.
+        self.delivery = (
+            DeliveryAnalyzer(origin_ms=self.audio_origin_ms)
+            if self.analysis_settings.get("delivery_enabled", True)
+            else None
+        )
+        self.delivery_failed = False
+        self.delivery_sentence_index = 0
         await self.emit(
             "session.running" if self.protocol == 2 else "session.started",
             self.elapsed_ms(),
@@ -198,6 +240,7 @@ class SessionPipeline:
             if len(self.audio_receipts) > 32:
                 del self.audio_receipts[min(self.audio_receipts)]
         self.media_sequences[kind] = media.sequence
+        self.audio_queue_peak = max(self.audio_queue_peak, self.audio_queue.qsize())
         self.media_timestamps[kind] = media.timestamp_ms
         if kind == "pcm16":
             await self.emit(
@@ -270,6 +313,7 @@ class SessionPipeline:
                 self.tasks.clear()
                 self.running = False
 
+            delivery_metrics = self._delivery_metrics()
             report = {
                 **self.aggregator.report(
                     self.running_started_ms
@@ -279,8 +323,17 @@ class SessionPipeline:
                     settings=self.analysis_settings,
                 ),
                 "incomplete": incomplete or self.incomplete,
+                "delivery_metrics": delivery_metrics,
             }
             self.segmenter = None
+            if self.comparison is not None:
+                report["comparison"] = {
+                    **self.comparison,
+                    "performance": self.performance,
+                    "errors": dict(self.error_counts),
+                    "audio_queue_peak": self.audio_queue_peak,
+                    "dropped_video_frames": self.video_queue.stats.dropped,
+                }
             self.audio_receipts.clear()
             for queue in [self.audio_queue, self.speech_queue, self.video_queue.queue]:
                 while not queue.empty():
@@ -295,7 +348,10 @@ class SessionPipeline:
                 self.session_id,
                 {"status": "completed", **self.metrics()},
             )
-            data: dict[str, Any] = {"report": report}
+            # Delivery features are never shown live; they are persisted from completed_report.
+            data: dict[str, Any] = {
+                "report": {k: v for k, v in report.items() if k != "delivery_metrics"}
+            }
             if self.execution is not None:
                 data["modules"] = {
                     name: module.model_dump()
@@ -313,6 +369,9 @@ class SessionPipeline:
         module: str = "system",
         level: str = "info",
     ) -> RealtimeEvent:
+        if event_name == "error" and self.comparison is not None:
+            code = str(data.get("code", "UNKNOWN"))
+            self.error_counts[code] = self.error_counts.get(code, 0) + 1
         async with self._sequence_lock:
             self.sequence += 1
             event = RealtimeEvent(
@@ -396,10 +455,7 @@ class SessionPipeline:
         while True:
             media = await self.audio_queue.get()
             try:
-                if not (
-                    self.analysis_settings.get("speech_rate_enabled", True)
-                    or self.analysis_settings.get("filler_words_enabled", True)
-                ):
+                if not self._speech_needed():
                     continue
                 if media.format not in {"pcm16", "flush"}:
                     await self._enqueue_speech(media)
@@ -407,7 +463,7 @@ class SessionPipeline:
                 if self.segmenter is None:
                     self.segmenter = SpeechSegmenter(
                         silence_rms_threshold=self.settings.stt_silence_rms_threshold,
-                        observe_frame=self.speech_changes.observe_audio,
+                        observe_frame=self._observe_delivery_frame,
                     )
                 segments = (
                     self.segmenter.flush()
@@ -431,6 +487,7 @@ class SessionPipeline:
                             utterance_id=segment.utterance_id,
                             end_ms=segment.end_ms,
                             voiced_ms=segment.voiced_ms,
+                            cut_reason=segment.cut_reason,
                         )
                     )
                 if media.format == "pcm16":
@@ -440,20 +497,21 @@ class SessionPipeline:
                         self.speech_waiting = False
                     elif end_ms - self.last_audio_activity_ms >= 1500 and not self.speech_waiting:
                         self.speech_waiting = True
-                        await self._handle_result(
-                            AIResult(
-                                "speech_rate",
-                                end_ms,
-                                "info",
-                                "음성 대기 중입니다.",
-                                {
-                                    "pace": "unknown",
-                                    "syllables_per_minute": None,
-                                    "filler_counts": {},
-                                    "filler_words": [],
-                                },
+                        if self._feedback_speech_enabled():
+                            await self._handle_result(
+                                AIResult(
+                                    "speech_rate",
+                                    end_ms,
+                                    "info",
+                                    "음성 대기 중입니다.",
+                                    {
+                                        "pace": "unknown",
+                                        "syllables_per_minute": None,
+                                        "filler_counts": {},
+                                        "filler_words": [],
+                                    },
+                                )
                             )
-                        )
             except asyncio.CancelledError:
                 raise
             except ValueError as exc:
@@ -486,17 +544,34 @@ class SessionPipeline:
     async def _speech_worker(self) -> None:
         while True:
             media = await self.speech_queue.get()
+            observed = False
             try:
-                if not (
-                    self.analysis_settings.get("speech_rate_enabled", True)
-                    or self.analysis_settings.get("filler_words_enabled", True)
-                ):
+                if not self._feedback_speech_enabled():
+                    # Delivery still needs the transcript for its counts, but no feedback is shown.
+                    if (
+                        self.delivery is not None
+                        and not self.delivery_failed
+                        and media.format == "pcm16"
+                    ):
+                        try:
+                            transcript = (await self.speech.infer(media)).transcript or ""
+                        except Exception:
+                            logger.exception(
+                                "delivery_transcription_failed",
+                                extra={"session_id": self.session_id},
+                            )
+                            transcript = ""
+                        await self._observe_delivery_utterance(
+                            media, *_delivery_counts(transcript.strip())
+                        )
                     continue
                 result = await self.speech.infer(media)
                 if not result.transcript:
                     if result.metrics.get("recognition_status") == "rejected":
                         self.incomplete = True
                     await self._handle_result(replace(result, is_final=False))
+                    observed = True
+                    await self._observe_delivery_utterance(media, 0, 0)
                     continue
                 self.legacy_utterance_sequence += 1
                 final = FinalUtterance(
@@ -546,28 +621,106 @@ class SessionPipeline:
                     else pace_message(live_pace, live_rate),
                 )
                 await self._handle_result(result)
+                observed = True
+                await self._observe_delivery_utterance(media, *_delivery_counts(final.text))
             except asyncio.CancelledError:
                 raise
             except Exception:
                 self.incomplete = True
                 logger.exception("speech_inference_failed", extra={"session_id": self.session_id})
                 await self.emit_error("SPEECH_AI_UNAVAILABLE", "음성 분석에 실패했습니다.")
+                if not observed:
+                    await self._observe_delivery_utterance(media, 0, 0)
             finally:
                 self.speech_queue.task_done()
+
+    def _observe_delivery_frame(self, start_ms: int, end_ms: int, rms: float, voiced: bool) -> None:
+        if self.delivery is None or self.delivery_failed:
+            return
+        try:
+            self.delivery.observe_frame(start_ms, end_ms, rms, voiced)
+        except Exception:
+            self._fail_delivery()
+
+    async def _observe_delivery_utterance(
+        self, media: MediaPayload, syllables: int, disfluencies: int
+    ) -> None:
+        """Hand one VAD segment to the analyzer; it must never take the speech worker down."""
+        analyzer = self.delivery
+        if analyzer is None or self.delivery_failed or media.format != "pcm16":
+            return
+        try:
+            await asyncio.to_thread(
+                analyzer.observe_utterance,
+                media.timestamp_ms,
+                media.end_ms if media.end_ms is not None else media.timestamp_ms,
+                media.payload,
+                cast(CutReason, media.cut_reason or "endpoint"),
+                self.delivery_sentence_index,
+                syllables,
+                disfluencies,
+            )
+        except asyncio.CancelledError:
+            # The thread keeps running after cancellation; its state may be half updated.
+            self.delivery_failed = True
+            raise
+        except Exception:
+            self._fail_delivery()
+
+    def _fail_delivery(self) -> None:
+        self.delivery_failed = True
+        logger.exception("delivery_analysis_failed", extra={"session_id": self.session_id})
+
+    def _delivery_metrics(self) -> dict[str, Any]:
+        if not self.analysis_settings.get("delivery_enabled", True):
+            return {"status": "disabled"}
+        analyzer = self.delivery
+        if analyzer is not None and not self.delivery_failed:
+            try:
+                report = analyzer.report()
+                return {
+                    "status": report["status"],
+                    "agc_on": self.agc_on,
+                    "report": report,
+                    "windows": analyzer.windows(),
+                }
+            except Exception:
+                self._fail_delivery()
+        return {
+            "status": "failed" if analyzer is not None else "unavailable",
+            "agc_on": self.agc_on,
+            "report": None,
+            "windows": None,
+        }
 
     async def _handle_result(self, result: AIResult) -> None:
         if self.phase not in {"running", "draining"}:
             return
+        if self.comparison is not None:
+            stats = self.performance.setdefault(
+                result.source,
+                {
+                    "observations": 0,
+                    "measured_latency_count": 0,
+                    "average_inference_ms": None,
+                    "max_result_age_ms": 0,
+                },
+            )
+            stats["observations"] += 1
+            if result.latency_ms is not None:
+                count = stats["measured_latency_count"]
+                stats["average_inference_ms"] = round(
+                    ((stats["average_inference_ms"] or 0) * count + result.latency_ms)
+                    / (count + 1),
+                    2,
+                )
+                stats["measured_latency_count"] += 1
+            stats["max_result_age_ms"] = max(
+                stats["max_result_age_ms"], self.elapsed_ms() - result.timestamp_ms
+            )
         if not self.aggregator.add(result):
             return
         if result.source == "speech_rate":
-            if result.is_final and result.transcript:
-                self.speech_changes.observe_pace(
-                    result.metrics.get("start_ms", result.timestamp_ms),
-                    result.metrics.get("end_ms", result.timestamp_ms),
-                    result.metrics.get("syllable_count", 0),
-                    result.metrics.get("voiced_ms", 0),
-                )
             result = replace(
                 result,
                 metrics={
@@ -632,6 +785,10 @@ class SessionPipeline:
                 is_final=bool(result.is_final),
             )
             self.aggregator.add_script_progress(progress, result.timestamp_ms)
+            index = progress.get("current_sentence_index")
+            if isinstance(index, int):
+                # The analyzer rejects a decreasing sentence_index, so progress is clamped.
+                self.delivery_sentence_index = max(self.delivery_sentence_index, index)
             await self.emit(
                 "script.progress",
                 result.timestamp_ms,

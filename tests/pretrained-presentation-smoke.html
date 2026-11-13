@@ -1,0 +1,61 @@
+<!doctype html><html lang="ko"><meta charset="utf-8"><title>EfficientPhys presentation integration check</title>
+<style>body{margin:0} .smoke-note{position:sticky;top:0;z-index:20;background:#fff1cb;padding:12px 20px;color:#63420e;font:14px sans-serif}</style>
+<div class="smoke-note">개발 검사 · 공개 얼굴 예제에 합성한 색 변화입니다. 실제 사용자 맥박이나 정확도 평가가 아닙니다. 카메라·마이크를 요청하지 않습니다.</div>
+<div id="root"></div><script type="module">
+import {createElement as h,useEffect,useRef,useState} from 'react';
+import {createRoot} from 'react-dom/client';
+import {VideoPreview} from '/src/features/practice/components/VideoPreview.tsx';
+import {PulsePanel} from '/src/features/pulse/PulsePanel.tsx';
+import {PulseOverlay} from '/src/features/pulse/PulseOverlay.tsx';
+import {emptyPulse} from '/src/features/pulse/signal.ts';
+import {FaceFeaturePanel} from '/src/features/face-features/FaceFeaturePanel.tsx';
+import {emptyFaceFeatures} from '/src/features/face-features/features.ts';
+import {featureSnapshot} from '/src/features/face-features/snapshot.ts';
+import '/src/styles.css';
+function Demo(){
+ const [stream,setStream]=useState(null),[result,setResult]=useState(emptyPulse),[small,setSmall]=useState(true),[motion,setMotion]=useState(false),[blank,setBlank]=useState(false);
+ const video=useRef(null),stop=useRef(()=>{}),blankRef=useRef(false);
+ const [features,setFeatures]=useState(emptyFaceFeatures),[featuresEnabled,setFeaturesEnabled]=useState(true);
+ const sessionOrigin=useRef(performance.now());
+ const sessionTime=()=>performance.now()-sessionOrigin.current;
+ useEffect(()=>()=>stop.current(),[]);
+ const start=async()=>{
+  stop.current();sessionOrigin.current=performance.now();const image=new Image();image.src='/tests/fixtures/pulse-portrait.jpg';await image.decode();
+  const canvas=document.createElement('canvas');canvas.width=640;canvas.height=480;
+  const ctx=canvas.getContext('2d',{willReadFrequently:true});
+  ctx.drawImage(image,image.width*.28,image.height*.035,image.width*.44,image.height*.39,0,0,640,480);
+  const original=ctx.getImageData(0,0,640,480),t0=performance.now();
+  const faceCanvas=document.createElement('canvas');faceCanvas.width=640;faceCanvas.height=480;
+  const faceContext=faceCanvas.getContext('2d'); blankRef.current=false;setBlank(false);
+  const timer=setInterval(()=>{
+   const pixels=new ImageData(new Uint8ClampedArray(original.data),640,480);
+   const pulse=Math.sin(2*Math.PI*72/60*(performance.now()-t0)/1000);
+   for(let i=0;i<pixels.data.length;i+=4){pixels.data[i]+=.5*pulse;pixels.data[i+1]+=2*pulse;pixels.data[i+2]+=.2*pulse;}
+   faceContext.putImageData(pixels,0,0);ctx.fillStyle='#909090';ctx.fillRect(0,0,640,480);
+   const scale=small ? 0.35 : 1, elapsed=(performance.now()-t0)/1000;
+   if(!blankRef.current)ctx.drawImage(faceCanvas,(640-640*scale)/2+(motion?6*Math.sin(elapsed*.7):0),(480-480*scale)/2,640*scale,480*scale);
+  },33);
+  const next=canvas.captureStream(30);setStream(next);
+  stop.current=()=>{clearInterval(timer);next.getTracks().forEach(t=>t.stop());setStream(null);};
+ };
+ return h('main',{className:'practice-shell'},
+  h('h1',null,'발표 카메라 · EfficientPhys 사전학습 모델 연결 검사'),
+  h('p',null,'실제 발표 화면과 동일한 VideoPreview·PulseOverlay·PulsePanel을 사용하며 영상 요소를 공유합니다.'),
+  h('label',null,h('input',{type:'checkbox',checked:small,disabled:!!stream,onChange:e=>setSmall(e.target.checked)}),'작은 얼굴 입력 · 이전 차단 조건 재현'),
+  h('label',null,h('input',{type:'checkbox',checked:motion,disabled:!!stream,onChange:e=>setMotion(e.target.checked)}),'작은 움직임 추가'),
+  h('button',{className:'primary-button',onClick:start,disabled:!!stream},'공개 예제로 발표 영상 시작'),
+  h('button',{className:'secondary-button',onClick:()=>stop.current()},'검사 종료'),
+  h('button',{className:'secondary-button',disabled:!stream,onClick:()=>{blankRef.current=!blankRef.current;setBlank(blankRef.current);}},blank?'얼굴 영상 복구':'얼굴 없는 입력으로 전환'),
+  h('section',{className:'video-stage','aria-label':'공유 발표 카메라'},
+   h(VideoPreview,{stream,videoRef:video}),h(PulseOverlay,{result,active:!!stream})),
+  h(FaceFeaturePanel,{result:features,enabled:featuresEnabled,active:!!stream,onEnabledChange:setFeaturesEnabled,
+   snapshot:()=>featureSnapshot(features,result,{gaze:null,speech:null,pronunciation:null},sessionTime(),'public-fixture',stream?'running':'completed')}),
+  h('pre',{'aria-label':'실제 표정 모델 결과','data-testid':'face-feature-evidence'},JSON.stringify({status:features.status,
+   coefficientCount:Object.keys(features.coefficients??{}).length,timestampMs:features.timestampMs,blinkCount:features.totalBlinks,
+   samples:features.window.sampleCount,fps:features.window.observedFps,coverage:features.window.coverage},null,2)),
+  h(PulsePanel,{stream,mode:'efficientphys',embedded:true,videoRef:video,onResult:setResult,
+   faceFeatures:{enabled:featuresEnabled,onResult:setFeatures,sessionTime}}),
+  h('pre',{'aria-label':'실제 모델 결과 요약'},JSON.stringify({model:result.model,runtime:result.runtime,windows:result.modelWindows,inferenceMs:result.inferenceMs,status:result.status,bpm:result.bpm,held:result.held,ageSeconds:result.ageSeconds,seconds:result.seconds},null,2)));
+}
+createRoot(document.querySelector('#root')).render(h(Demo));
+</script></html>
