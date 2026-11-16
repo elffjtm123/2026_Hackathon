@@ -99,3 +99,35 @@ def test_demo_accepts_explicitly_trusted_origin(client):
     ) as ws:
         send_v2(ws, "session.start", 1)
         assert ws.receive_json()["event"] == "session.ready"
+
+
+BUNDLED_PULSE = ["LICENSE", "NOTICE.md", "ma_ubfc_tscan.json", "ma_ubfc_tscan.onnx"]
+
+
+def test_bundled_pulse_model_is_tracked_and_in_docker_context():
+    from fnmatch import fnmatch
+
+    root = Path(__file__).resolve().parents[1]
+    paths = [f"app/assets/pulse/{name}" for name in BUNDLED_PULSE]
+    if shutil.which("git") and (root / ".git").exists():
+        ignored = subprocess.run(
+            ["git", "check-ignore", "--no-index", *paths], cwd=root, capture_output=True, text=True
+        )
+        assert ignored.stdout == "", ignored.stdout
+    patterns = [
+        line.strip()
+        for line in (root / ".dockerignore").read_text().splitlines()
+        if line.strip() and not line.startswith("#")
+    ]
+    for path in paths:
+        parts = path.split("/")
+        prefixes = ["/".join(parts[: i + 1]) for i in range(len(parts))]
+        hits = [p for p in patterns for x in prefixes + parts if fnmatch(x, p)]
+        assert not hits, (path, hits)
+
+
+def test_bundled_pulse_model_is_packaged_in_wheel():
+    wheel = pytest.importorskip("hatchling.builders.wheel")
+    root = Path(__file__).resolve().parents[1]
+    files = {f.distribution_path for f in wheel.WheelBuilder(str(root)).recurse_included_files()}
+    assert {f"app/assets/pulse/{name}" for name in BUNDLED_PULSE} <= files

@@ -156,14 +156,22 @@ shasum -a 256 .models/Qwen3-ASR-0.6B-Q8_0.gguf
 **④ 실험 기능용 모델** (선택)
 
 - STT 비교·모델 테마 후보: `python -m scripts.prepare_stt_experiments [--models …] [--llama]` → `.models/stt/`
-- 맥박 추정(rPPG): `python scripts/prepare_pretrained_pulse.py --download`(PURE EfficientPhys),
-  `python scripts/prepare_ubfc_pulse.py --download`(UBFC 모델) → `.models/pulse/`
+- 맥박 추정(rPPG): 기본 모델 MA-UBFC TS-CAN(`ma_ubfc_tscan`)은 `app/assets/pulse/`에 포함되어
+  있어 `.[pulse]` 의존성만 설치하면 바로 동작합니다(로드 전 manifest SHA-256 확인).
+  `.models/pulse/ubfc/ma_ubfc_tscan.*`가 있으면 그 파일을 먼저 씁니다. 나머지 4개 모델은
+  `python scripts/prepare_pretrained_pulse.py --download`(PURE EfficientPhys),
+  `python scripts/prepare_ubfc_pulse.py --download`(UBFC 모델) → `.models/pulse/`로 준비합니다
+  (변환에 `torch`, `onnx==1.17.0` 필요).
 
 절차와 해석 주의점은 [STT 비교 실험](docs/stt-experiments.md), [모델 테마](docs/model-themes.md),
 [UBFC 맥박 모델](docs/ubfc-pulse-update.md) 문서를 보세요. 파일이 없으면 해당 모델만
 "준비 안 됨"으로 표시되고 다른 모델로 대체하지 않습니다.
 
-모델·가중치·네이티브 바이너리는 저장소에 포함하지 않습니다.
+모델·가중치·네이티브 바이너리는 저장소에 포함하지 않습니다. 예외는 기본 맥박 모델
+`app/assets/pulse/ma_ubfc_tscan.onnx`(8,945,030 bytes)입니다. 이 모델은 rPPG-Toolbox의
+Responsible AI License 1.1을 따르며 `LICENSE`와 `NOTICE.md`를 함께 둡니다. Section 3.2의
+사용 제한(건강·의료 상태를 탐지·추론하는 용도 제한 포함)은 사용자에게도 적용되므로, 실제
+배포 시에는 이 제한을 이용약관에 포함해야 합니다.
 
 ### 5-2. 백엔드
 
@@ -417,7 +425,7 @@ node --test tests/
 |---|---|
 | `scripts/prepare_stt_experiments.py` | 후보 STT 가중치를 고정 revision으로 받아 `.models/stt/`와 `manifest.json` 생성. `--llama`는 Windows CPU llama.cpp도 설치 |
 | `scripts/prepare_pretrained_pulse.py` | 공식 PURE EfficientPhys 코드·가중치를 받아(`--download`) SHA-256 확인 후 ONNX로 변환. `torch`·`onnxruntime` 필요 |
-| `scripts/prepare_ubfc_pulse.py` | UBFC 학습 rPPG 모델들을 받아(`--download`, `--model`) 검증 후 ONNX로 변환 |
+| `scripts/prepare_ubfc_pulse.py` | UBFC 학습 rPPG 모델들을 받아(`--download`, `--model`) 검증 후 ONNX로 변환. 기본 `ma_ubfc_tscan`은 `app/assets/pulse/`에 이미 포함되어 있어 재변환할 때만 필요 |
 | `scripts/download_model_ranges.py` | 큰 공개 파일을 HTTP range로 나눠 받고 크기·SHA-256 확인(`URL OUTPUT --size N [--sha256 …]`) |
 | `scripts/smoke_updated_service.py` | 실행 중인 로컬 서버에 공개 음성 샘플을 보내 연습 흐름 전체를 확인(카메라·마이크 미사용) |
 | `scripts/smoke_live_model_themes.py` | 실행 중인 로컬 서버에서 모델 테마별로 공개 얼굴·음성 샘플을 실제 추론(정확도 검증 아님) |

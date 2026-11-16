@@ -24,14 +24,23 @@ theta=.7, gra_sharp=2.0을 사용한다. 출력은 모두 DiffNormalized 맥파�
 첨부된 Downloads의 EfficientPhys 파일과 공식 파일의 SHA-256 일치도 확인했다.
 원본 파일은 수정하지 않았다. 학습 데이터셋 전체 다운로드나 재학습은 하지 않았다.
 
+기본 모델 `ma_ubfc_tscan`의 ONNX와 manifest는 `app/assets/pulse/`에 포함되어 있어
+백엔드 추론은 별도 준비 없이 동작한다. 브라우저 쪽 얼굴 추적 자산은 모든 모델에 공통으로
+`npm run prepare:pulse-assets`(개발 서버·빌드 시 자동 실행)와 `.models/face_landmarker.task`가 필요하다. 백엔드는 `.models/pulse/ubfc/`의 사용자 사본(ONNX와 manifest가
+모두 있을 때)을 먼저 쓰고, 없으면 패키지 사본을 쓴다. 어느 쪽이든 같은 위치의 manifest
+SHA-256을 확인한 뒤 로드한다. 나머지 4개 모델은 아래처럼 준비해야 한다
+(`torch`, `onnx==1.17.0` 필요).
+
 ```powershell
 # 기존 pulse 의존성이 설치된 환경
 .venv/Scripts/python.exe scripts/prepare_ubfc_pulse.py --download
-npm run prepare:pulse-assets
 ```
 
-RAIL 1.1 조건 사본: `public/pulse-licenses/EfficientPhys-RAIL1.1.txt`.
-배포 시 가중치·학습 데이터의 이용 조건도 확인해야 한다.
+RAIL 1.1 조건 사본: `public/pulse-licenses/EfficientPhys-RAIL1.1.txt`,
+`app/assets/pulse/LICENSE`(출처는 `app/assets/pulse/NOTICE.md`).
+Section 3.2의 사용 제한(건강·의료 상태를 탐지·추론하는 용도 제한 포함)은 사용자에게도
+적용된다. 실제 배포 시 이 제한을 이용약관에 포함하고, 가중치·학습 데이터의 이용 조건도
+확인해야 한다.
 
 ## 갱신 구조
 

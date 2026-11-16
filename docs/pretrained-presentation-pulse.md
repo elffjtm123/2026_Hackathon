@@ -3,6 +3,8 @@
 > 이 문서는 최초 PURE 모델 연결 기록이다. 현재 기본값은 MA-UBFC TS-CAN이며,
 > 세 모델 선택·1초 갱신·잠정 BPM·종료 후 표시를 포함한 최신 구조는
 > [ubfc-pulse-update.md](ubfc-pulse-update.md)를 따른다.
+> 기본 TS-CAN 모델은 `app/assets/pulse/`에 포함되어 바로 동작한다(RAIL 1.1, Section 3.2
+> 사용 제한 적용). 아래 PURE EfficientPhys는 여전히 `--download`로 준비해야 한다.
 
 ## 실제 연결 상태
 

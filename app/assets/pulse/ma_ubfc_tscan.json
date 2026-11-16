@@ -1,0 +1,24 @@
+{
+  "model_id": "ma_ubfc_tscan",
+  "training_dataset": "Motion-augmented UBFC-rPPG",
+  "source_revision": "b7500b848f84ad7f86e277b4612563b69f4f88f9",
+  "input": [
+    90,
+    6,
+    72,
+    72
+  ],
+  "source_hashes": {
+    "EfficientPhys.py": "384b01b5c99d6d280b5ddb9e2358631f89747e40e3181b6a174e26d6e74798c9",
+    "TS_CAN.py": "987b7e39be59016b136fc71c146b5a71ba1b22d28695fb1cfe6a7307f6dd5ce1",
+    "PhysFormer.py": "da33e0195d2148cadcd68c6f3ea3eb6a22b94b49f5ec8b086339b1c1b93bc314",
+    "UBFC-rPPG_EfficientPhys.pth": "219b970e04b3580ee4c063554b7d9fe2a7a3ceb4e9e585980f15ac8313054cd6",
+    "UBFC-rPPG_TSCAN.pth": "3c087279861a6312bbe770b348c7609f30cb5b5bb7ced7fa446caebf072196e3",
+    "MA-UBFC_tscan.pth": "f751d6fdd264dc75ee5d3e937a9a20fa651e4b83dfdd2dee875247a1f86c9adb",
+    "UBFC-rPPG_PhysFormer_DiffNormalized.pth": "4f2b0ed8a270f1687b275ace05b6ca0ced8d91f227bd3c3f0d584d16d0d4b02e",
+    "LICENSE": "a2d16c386a18fc6c88ce0ff9d4593082f74a041c96e92ca9e2d89731955f1e1c"
+  },
+  "sha256": "404705f1cb0f986f6b373342e32e24c0b4c6798b2787e01fa955af63da11fe4d",
+  "bytes": 8945030,
+  "max_export_error": 1.9788742065429688e-05
+}

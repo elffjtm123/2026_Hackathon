@@ -135,3 +135,91 @@ async def test_cancelled_inference_holds_slot_until_real_work_finishes(monkeypat
     with pytest.raises(asyncio.CancelledError):
         await task
     assert not runner.busy
+
+
+BUNDLED = Path(__file__).resolve().parents[1] / "app" / "assets" / "pulse"
+
+
+def test_default_model_ships_with_package_and_works_without_model_dir(tmp_path):
+    runner = PretrainedPulse(str(tmp_path))
+    assert runner.available("ma_ubfc_tscan")
+    onnx, manifest = runner.paths("ma_ubfc_tscan")
+    assert onnx == BUNDLED / "ma_ubfc_tscan.onnx"
+    assert manifest == BUNDLED / "ma_ubfc_tscan.json"
+    assert (BUNDLED / "LICENSE").is_file() and (BUNDLED / "NOTICE.md").is_file()
+
+
+def test_bundled_model_matches_its_manifest_checksum():
+    import hashlib
+    import json
+
+    manifest = json.loads((BUNDLED / "ma_ubfc_tscan.json").read_text(encoding="utf-8"))
+    digest = hashlib.sha256((BUNDLED / "ma_ubfc_tscan.onnx").read_bytes()).hexdigest()
+    assert digest == manifest["sha256"] == "404705f1cb0f986f6b373342e32e24c0b4c6798b2787e01fa955af63da11fe4d"
+
+
+def test_user_model_dir_copy_takes_precedence(tmp_path):
+    (tmp_path / "ubfc").mkdir()
+    (tmp_path / "ubfc" / "ma_ubfc_tscan.onnx").write_bytes(b"local")
+    (tmp_path / "ubfc" / "ma_ubfc_tscan.json").write_text("{}")
+    onnx, manifest = PretrainedPulse(str(tmp_path)).paths("ma_ubfc_tscan")
+    assert onnx == tmp_path / "ubfc" / "ma_ubfc_tscan.onnx"
+    assert manifest == tmp_path / "ubfc" / "ma_ubfc_tscan.json"
+
+
+def test_incomplete_user_copy_is_never_mixed_with_bundled_manifest(tmp_path):
+    (tmp_path / "ubfc").mkdir()
+    (tmp_path / "ubfc" / "ma_ubfc_tscan.onnx").write_bytes(b"local")
+    onnx, manifest = PretrainedPulse(str(tmp_path)).paths("ma_ubfc_tscan")
+    assert onnx.parent == manifest.parent
+
+
+@pytest.mark.parametrize(
+    "model_id", ["pure_efficientphys", "ubfc_efficientphys", "ubfc_tscan", "ubfc_physformer"]
+)
+def test_other_models_have_no_bundled_fallback(tmp_path, model_id):
+    assert not PretrainedPulse(str(tmp_path)).available(model_id)
+
+
+def test_api_reports_bundled_default_model_with_empty_model_dir(client, tmp_path):
+    client.app.state.pretrained_pulse.directory = tmp_path
+    body = client.get("/api/v1/pulse/model?model_id=ma_ubfc_tscan").json()
+    assert body["available"] is True
+    assert {m["id"]: m["available"] for m in body["models"]} == {
+        "ma_ubfc_tscan": True,
+        "pure_efficientphys": False,
+        "ubfc_efficientphys": False,
+        "ubfc_tscan": False,
+        "ubfc_physformer": False,
+    }
+
+
+async def test_bundled_default_model_runs_inference_with_empty_model_dir(tmp_path):
+    pytest.importorskip("onnxruntime")
+    count = 91
+    times = np.linspace(0, 3000, count, dtype="<f8")
+    frames = np.random.default_rng(42).integers(40, 200, (count, 72, 72, 3), dtype=np.uint8)
+    data = b"EP01" + struct.pack("<HH", count, 0) + times.tobytes() + frames.tobytes()
+    runner = PretrainedPulse(str(tmp_path))
+    result = await runner.infer(data, "ma_ubfc_tscan")
+    assert result["model_id"] == "ma_ubfc_tscan"
+    assert len(result["values"]) == 90
+    assert np.isfinite(result["values"]).all()
+    await runner.close()
+
+
+def test_bundled_model_checksum_is_enforced(tmp_path, monkeypatch):
+    import shutil
+
+    import app.services.pretrained_pulse as module
+
+    fake = tmp_path / "bundle"
+    fake.mkdir()
+    (fake / "ma_ubfc_tscan.onnx").write_bytes(b"tampered")
+    shutil.copy(BUNDLED / "ma_ubfc_tscan.json", fake / "ma_ubfc_tscan.json")
+    monkeypatch.setattr(module, "BUNDLED_PULSE_DIR", fake)
+    runner = PretrainedPulse(str(tmp_path / "empty"))
+    times = np.linspace(0, 3000, 91, dtype="<f8")
+    frames = np.zeros((91, 72, 72, 3), dtype=np.uint8)
+    with pytest.raises(ValueError, match="PULSE_MODEL_CHECKSUM_MISMATCH"):
+        runner._run(times, frames, "ma_ubfc_tscan")

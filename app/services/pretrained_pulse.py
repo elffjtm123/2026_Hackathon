@@ -24,6 +24,9 @@ PULSE_MODELS = {
     'ubfc_tscan': {'name':'TS-CAN', 'dataset':'UBFC-rPPG', 'size':72, 'duration_ms':3000, 'outputs':90},
     'ubfc_physformer': {'name':'PhysFormer', 'dataset':'UBFC-rPPG', 'size':128, 'duration_ms':160000/30, 'outputs':160},
 }
+# The default model ships inside the package (RAIL 1.1, see app/assets/pulse/NOTICE.md).
+BUNDLED_PULSE_DIR = Path(__file__).resolve().parents[1] / 'assets' / 'pulse'
+BUNDLED_PULSE_MODELS = {'ma_ubfc_tscan'}
 
 def pulse_contract(model_id: str) -> dict:
     if model_id not in PULSE_MODELS:
@@ -103,7 +106,14 @@ class PretrainedPulse:
         pulse_contract(model_id)
         if model_id == 'pure_efficientphys':
             return self.directory / 'EfficientPhys-PURE-91.onnx', self.directory / 'manifest.json'
-        return self.directory / 'ubfc' / (model_id + '.onnx'), self.directory / 'ubfc' / (model_id + '.json')
+        # The model and its manifest always come from the same directory: a complete user copy
+        # wins, otherwise the bundled copy is used, so checksums are never cross-checked.
+        user = self.directory / 'ubfc' / (model_id + '.onnx'), self.directory / 'ubfc' / (model_id + '.json')
+        if model_id in BUNDLED_PULSE_MODELS and not all(p.is_file() for p in user):
+            bundled = BUNDLED_PULSE_DIR / (model_id + '.onnx'), BUNDLED_PULSE_DIR / (model_id + '.json')
+            if all(p.is_file() for p in bundled):
+                return bundled
+        return user
 
     def available(self, model_id: str = 'pure_efficientphys') -> bool:
         path, manifest = self.paths(model_id)
