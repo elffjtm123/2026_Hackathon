@@ -11,7 +11,7 @@ type FeedbackPanelProps = {
 const statusLabels: Record<ConnectionStatus, string> = {
   idle: "대기",
   connecting: "연결 중",
-  connected: "백엔드",
+  connected: "연결됨",
   disconnected: "연결 끊김",
   error: "오류",
 };
@@ -43,11 +43,6 @@ export function FeedbackPanel({
             <span className="label">얼굴 방향</span>
             <strong>{directionLabels[feedback.gaze?.gaze?.headDirection ?? 'unknown']}</strong>
             <small>좌우는 사용자 몸 기준입니다. 프리뷰는 거울처럼 표시됩니다.</small>
-            {feedback.gaze?.gaze ? <details><summary>관찰 진단</summary>
-              <p>품질 플래그: {feedback.gaze.gaze.qualityFlags?.join(', ') || '없음'}</p>
-              <p>얼굴 각도: yaw {feedback.gaze.gaze.headPose.yaw?.toFixed(1) ?? '미측정'}° / pitch {feedback.gaze.gaze.headPose.pitch?.toFixed(1) ?? '미측정'}°</p>
-              <p>시선 각도: yaw {feedback.gaze.gaze.gazeAngles?.yaw?.toFixed(1) ?? '미측정'}° / pitch {feedback.gaze.gaze.gazeAngles?.pitch?.toFixed(1) ?? '미측정'}°</p>
-            </details> : null}
           </div>
           <div>
             <span className="label">발화 속도</span>
@@ -78,13 +73,7 @@ export function FeedbackPanel({
       )}
       <div className="feedback-detail">
         <div>
-          <span className="label">필러워드 · 최근 음성 청크</span>
-          <strong>{feedback.speech?.filler ? `${feedback.speech.filler.totalCount}회` : '미측정'}</strong>
-          {feedback.speech?.filler && <p>{Object.entries(feedback.speech.filler.counts ?? {})
-            .map(([word, count]) => `${word} ${count}회`).join(' · ') || '이 청크에서 탐지된 필러워드 없음'}</p>}
-        </div>
-        <div>
-          <span className="label">발음 명료도 · 대본 일치도 추정</span>
+          <span className="label">발음 명료도, 대본 일치도 추정</span>
           <strong>{feedback.pronunciation?.pronunciation?.accuracy == null ? '미측정'
             : `${Math.round(feedback.pronunciation.pronunciation.accuracy)} / 100`}</strong>
           <p>{feedback.pronunciation?.pronunciation?.message

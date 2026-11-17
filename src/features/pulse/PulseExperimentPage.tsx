@@ -26,8 +26,7 @@ export function PulseExperimentPage({onActivityChange}: {onActivityChange?: (bus
     } catch { if (attempt === generation.current) setError('카메라를 시작하지 못했습니다. 권한과 장치 사용 상태를 확인해 주세요.'); }
     finally { if (attempt === generation.current) setStarting(false); }
   };
-  return <main className="practice-shell pulse-experiment"><header className="practice-header"><div>
-    <p className="eyebrow">REALTIME COACH · RESEARCH LAB</p><h1>POS 비교 실험실</h1></div>
+  return <main className="practice-shell pulse-experiment"><header className="practice-header"><h1>POS 비교 실험실</h1>
     <a href="#practice/service_qwen" className="secondary-button theme-link">발표·면접으로</a></header>
     <p>학습 없는 POS 기준선의 비교용 화면입니다. 실제 발표 중 사전학습 EfficientPhys를 사용하려면 위 ‘발표·면접으로’를 누르세요.</p>
     <div className="pulse-actions"><button className="primary-button" disabled={starting || !!stream} onClick={() => void start()}>{starting ? '권한 대기 중…' : '카메라만 시작'}</button>
