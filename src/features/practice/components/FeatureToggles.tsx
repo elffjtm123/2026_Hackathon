@@ -54,10 +54,7 @@ export function FeatureToggles({
   return (
     <section className="feature-settings" aria-labelledby="feature-settings-title">
       <div className="feature-settings__header">
-        <div>
-          <p className="eyebrow">Presentation tools</p>
-          <h2 id="feature-settings-title">발표 보조 기능</h2>
-        </div>
+        <h2 id="feature-settings-title">발표 보조 기능</h2>
         {disabled ? <span className="settings-lock">진행 중 잠김</span> : null}
       </div>
       <div className="feature-settings__grid">

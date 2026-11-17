@@ -42,7 +42,6 @@ export function InterviewContent({
     return (
       <section className="interview-report" aria-label="면접 연습 결과">
         <header className="interview-report__intro">
-          <span className="label">연습 종료</span>
           <h2 ref={resultHeadingRef} tabIndex={-1}>면접 연습 결과</h2>
           <p>이번 연습에서 실제로 수집된 음성·시선 결과를 확인하세요.</p>
         </header>
@@ -62,8 +61,8 @@ export function InterviewContent({
     <div className="interview-live">
       <div className="interview-live__main">
         <section className="interview-question" aria-label="면접 질문">
-          <span className="label">면접 질문</span>
-          <h2>질문이 여기에 표시됩니다</h2>
+          <h2>면접 질문</h2>
+          <p className="interview-question__text">질문이 여기에 표시됩니다</p>
           <p>질문 생성 기능은 아직 연결되지 않았습니다.</p>
         </section>
         <section className="video-stage" aria-label="카메라 프리뷰">

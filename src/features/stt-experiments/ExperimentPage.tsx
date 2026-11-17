@@ -5,6 +5,7 @@ import type { ExperimentJob, ModelOption, ModelResult } from './types';
 import { useExperimentRecorder } from './useExperimentRecorder';
 import './experiments.css';
 import { apiBase } from '../../lib/apiBase';
+import { MetaLine } from '../../lib/MetaLine';
 
 const base = `${apiBase}/stt-experiments`;
 const stateLabels: Record<string, string> = {
@@ -37,19 +38,19 @@ function ResultCard({ result }: { result: ModelResult }) {
       <span className={`experiment-badge ${result.state}`}>{stateLabels[result.state] ?? result.state}</span></div>
     {result.error && <p className="error-banner" role="alert">{result.error}</p>}
     <p className="experiment-transcript">{result.transcript || (result.state === 'completed'
-      ? '인식된 문장 없음 — 무음 차단 여부와 청크별 결과를 확인하세요.' : '실제 모델 결과를 기다리고 있습니다.')}</p>
+      ? '인식된 문장 없음, 무음 차단 여부와 청크별 결과를 확인하세요.' : '실제 모델 결과를 기다리고 있습니다.')}</p>
     <dl className="experiment-metrics">
       <div><dt>문자 오류율 CER ↓</dt><dd>{metric(result.metrics?.cer == null ? null : result.metrics.cer * 100, '%')}</dd></div>
-      <div><dt>RTF ↓ · 추론/음성 길이</dt><dd>{metric(result.metrics?.rtf, '', 3)}</dd></div>
+      <div><dt>RTF ↓, 추론/음성 길이</dt><dd>{metric(result.metrics?.rtf, '', 3)}</dd></div>
       <div><dt>청크 처리 P95 ↓</dt><dd>{metric(result.metrics?.p95_chunk_ms, ' ms', 0)}</dd></div>
       <div><dt>백엔드+자식 최대 RSS</dt><dd>{metric(result.memory?.process_tree_peak_rss_mb, ' MiB', 0)}</dd></div>
     </dl>
-    <p className="experiment-muted">로딩 {metric(result.load_ms, ' ms', 0)} · 워밍업 {metric(result.warmup_ms, ' ms', 0)} ·
-      전사 기반 필러워드 {counts.length ? counts.map(([word, count]) => `${word} ${count}회`).join(' / ') : '없음 또는 미측정'}</p>
-    {result.chunks.length > 0 && <details><summary>청크별 받아쓰기 · {result.chunks.length}개</summary>
+    <MetaLine className="experiment-muted" items={[`로딩 ${metric(result.load_ms, ' ms', 0)}`, `워밍업 ${metric(result.warmup_ms, ' ms', 0)}`,
+      `전사 기반 필러워드 ${counts.length ? counts.map(([word, count]) => `${word} ${count}회`).join(' / ') : '없음 또는 미측정'}`]} />
+    {result.chunks.length > 0 && <details><summary>청크별 받아쓰기 {result.chunks.length}개</summary>
       <ol className="experiment-chunks">{result.chunks.map(chunk => <li key={chunk.index}>
-        <span>{chunk.start_seconds.toFixed(1)}–{(chunk.start_seconds + chunk.duration_seconds).toFixed(1)}초 · {chunk.latency_ms.toFixed(0)} ms
-          {chunk.skipped ? ' · RMS/VAD 차단' : ''}</span>
+        <MetaLine items={[`${chunk.start_seconds.toFixed(1)}~${(chunk.start_seconds + chunk.duration_seconds).toFixed(1)}초`, `${chunk.latency_ms.toFixed(0)} ms`,
+          chunk.skipped ? 'RMS/VAD 차단' : null]} />
         <p>{chunk.text || '(전사 없음)'}</p>
       </li>)}</ol>
     </details>}
@@ -78,7 +79,7 @@ export function ExperimentPage({ onActivityChange }: {onActivityChange?: (busy: 
   useEffect(() => { disposed.current = false; return () => { disposed.current = true; }; }, []);
 
   const acceptAudio = useCallback((blob: Blob) => {
-    setAudio(blob); setAudioName('마이크 녹음 · 16kHz mono PCM16'); setError(null);
+    setAudio(blob); setAudioName('마이크 녹음, 16kHz mono PCM16'); setError(null);
   }, []);
   const recorder = useExperimentRecorder(acceptAudio);
   const running = submitting || (jobId !== '' && (!job || job.state === 'running'));
@@ -138,7 +139,7 @@ export function ExperimentPage({ onActivityChange }: {onActivityChange?: (busy: 
       const mono = await offline.startRendering();
       if (!disposed.current) {
         setAudio(pcmWav([encodePcm16(mono.getChannelData(0))]));
-        setAudioName(`${file.name} · 16kHz mono PCM16으로 변환`);
+        setAudioName(`${file.name}, 16kHz mono PCM16으로 변환`);
       }
     } catch (cause) {
       if (!disposed.current) setError(cause instanceof Error ? cause.message : '이 음성 형식은 브라우저에서 열 수 없습니다.');
@@ -169,16 +170,15 @@ export function ExperimentPage({ onActivityChange }: {onActivityChange?: (busy: 
   }
 
   return <main className="practice-shell experiment-shell">
-    <header className="practice-header"><div><p className="eyebrow">CPU STT LAB</p>
-      <h1>받아쓰기 비교 실험</h1></div>
+    <header className="practice-header"><h1>받아쓰기 비교 실험</h1>
       <a className="secondary-button experiment-link" href="#themes" aria-disabled={locked}
         onClick={event => { if (locked) event.preventDefault(); }}>모델 테마 선택</a></header>
     <p className="experiment-intro">한 번 녹음하고, 같은 음성을 다섯 가지 설정으로 비교하세요.
       기존 서비스는 그대로 유지하고 실제 모델의 받아쓰기와 처리 성능만 따로 확인합니다.</p>
-    <div className="experiment-notice">CPU 순차 실행 · 기본 2초 비중첩 청크 · 한국어 · 공통 RMS/VAD · 정답 대본은 평가에만 사용</div>
+    <MetaLine className="experiment-notice" items={['CPU 순차 실행', '기본 2초 비중첩 청크', '한국어', '공통 RMS/VAD', '정답 대본은 평가에만 사용']} />
     {(error || recorder.error) && <p className="error-banner" role="alert">{error ?? recorder.error}</p>}
     <section className="experiment-section" aria-labelledby="capture-title">
-      <div className="experiment-section-heading"><h2 id="capture-title">01 · 비교할 음성 준비</h2><span>최대 60초</span></div>
+      <div className="experiment-section-heading"><h2 id="capture-title">01 비교할 음성 준비</h2><span>최대 60초</span></div>
       <p>20~40초 정도 읽고, 중간에 2~3초 쉬거나 ‘어’, ‘음’을 넣어 보세요. 모든 모델에 동일한 파일이 전달됩니다.</p>
       <div className="experiment-actions">
         <button className="primary-button" disabled={locked} onClick={() => { void recorder.start(); }}>
@@ -187,7 +187,7 @@ export function ExperimentPage({ onActivityChange }: {onActivityChange?: (busy: 
         <label className={`secondary-button experiment-upload ${locked ? 'disabled' : ''}`}>음성 파일 선택
           <input aria-label="비교할 음성 파일" type="file" accept="audio/*,.wav,.mp3,.m4a" disabled={locked}
             onChange={event => { void upload(event.target.files?.[0]); event.target.value = ''; }} /></label>
-        <span role="status">{recorder.recording ? `● 녹음 중 ${recorder.seconds.toFixed(1)}초` : converting ? '음성 변환 중…' : audioName || '아직 음성이 없습니다.'}</span>
+        <span role="status">{recorder.recording ? `녹음 중 ${recorder.seconds.toFixed(1)}초` : converting ? '음성 변환 중…' : audioName || '아직 음성이 없습니다.'}</span>
       </div>
       {recorder.recording && <meter aria-label="마이크 입력 레벨" min="0" max="1" value={recorder.level} />}
       {audioUrl && <div className="experiment-audio"><audio controls src={audioUrl} />
@@ -197,22 +197,22 @@ export function ExperimentPage({ onActivityChange }: {onActivityChange?: (busy: 
         <p className="experiment-muted">예시와 다르게 말했으면 정답도 실제 발화대로 수정해야 CER이 유효합니다.</p></details>
     </section>
     <section className="experiment-section" aria-labelledby="settings-title">
-      <div className="experiment-section-heading"><h2 id="settings-title">02 · 모델과 평가 조건</h2>
+      <div className="experiment-section-heading"><h2 id="settings-title">02 모델과 평가 조건</h2>
         <button className="secondary-button" disabled={locked} onClick={() => { void refresh(); }}>준비 상태 새로고침</button></div>
       <div className="experiment-models">{models.map(model => <label key={model.id} className="experiment-model">
         <input type="checkbox" checked={selected.includes(model.id)} disabled={locked}
           onChange={event => setSelected(previous => event.target.checked ? [...previous, model.id] : previous.filter(id => id !== model.id))} />
         <span><strong>{model.label}</strong><small className={model.available ? 'ready' : 'unavailable'}>
-          {model.available ? '준비됨' : '준비 필요'} · {model.reason}</small></span>
+          {model.available ? '준비됨' : '준비 필요'}, {model.reason}</small></span>
       </label>)}</div>
       <p className="experiment-muted">준비되지 않은 모델은 실패 사유를 표시하고 다음 모델로 넘어갑니다. 다른 모델로 대체하거나 가짜 전사를 만들지 않습니다.</p>
-      <label className="experiment-reference">정답 전사 · 선택 사항
+      <label className="experiment-reference">정답 전사, 선택 사항
         <textarea rows={4} value={reference} maxLength={10000} disabled={locked}
           placeholder="실제로 말한 내용 그대로 입력하세요. 어·음·반복 표현도 포함하면 좋습니다. 비워 두면 CER은 미측정입니다."
           onChange={event => setReference(event.target.value)} /></label>
       <div className="experiment-actions">
         <label>청크 길이 <select value={chunkSeconds} disabled={locked} onChange={event => setChunkSeconds(Number(event.target.value))}>
-          <option value={2}>2초 · 현재 서비스 기준</option><option value={4}>4초 · 경계 영향 비교</option></select></label>
+          <option value={2}>2초, 현재 서비스 기준</option><option value={4}>4초, 경계 영향 비교</option></select></label>
         <label><input type="checkbox" checked={warmup} disabled={locked} onChange={event => setWarmup(event.target.checked)} />
           첫 유효 청크로 워밍업 후 측정</label>
       </div>
@@ -228,9 +228,9 @@ export function ExperimentPage({ onActivityChange }: {onActivityChange?: (busy: 
       </div>
     </section>
     {(job || running) && <section className="experiment-section" aria-labelledby="results-title">
-      <div className="experiment-section-heading"><h2 id="results-title">03 · 비교 결과</h2><span role="status">
+      <div className="experiment-section-heading"><h2 id="results-title">03 비교 결과</h2><span role="status">
         {job ? stateLabels[job.state] ?? job.state : '실험 복원 중…'}
-        {job?.progress && ` · ${job.progress.chunk}/${job.progress.total} 청크`}</span></div>
+        {job?.progress && `, ${job.progress.chunk}/${job.progress.total} 청크`}</span></div>
       {pollFailed && <div className="experiment-actions">
         <button className="secondary-button" onClick={() => setPollFailed(false)}>결과 조회 재시도</button>
         <button className="secondary-button" onClick={() => {
@@ -238,8 +238,8 @@ export function ExperimentPage({ onActivityChange }: {onActivityChange?: (busy: 
         }}>조회 연결 해제</button><span>연결 해제는 서버 작업을 취소하지 않습니다.</span>
       </div>}
       {job && <>
-        <p className="experiment-muted">음성 {job.audio_seconds.toFixed(2)}초 · {job.chunk_seconds}초 청크 ·
-          워밍업 {job.warmup ? 'ON' : 'OFF'} · SHA-256 {job.audio_sha256.slice(0, 16)}…</p>
+        <MetaLine className="experiment-muted" items={[`음성 ${job.audio_seconds.toFixed(2)}초`, `${job.chunk_seconds}초 청크`,
+          `워밍업 ${job.warmup ? 'ON' : 'OFF'}`, `SHA-256 ${job.audio_sha256.slice(0, 16)}…`]} />
         {job.error && <p className="error-banner">{job.error}</p>}
         <div className="experiment-results">{job.results.map(result => <ResultCard key={result.model_id} result={result} />)}</div>
         {job.state !== 'running' && <div className="experiment-actions">

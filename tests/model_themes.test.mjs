@@ -58,19 +58,28 @@ test('theme hub includes all five full-service entry points and separate control
 
 test('every model reuses the complete practice screen rather than an STT-only page', async () => {
   const { PracticePage } = await server.ssrLoadModule('/src/features/practice/PracticePage.tsx');
+  const { LiveStage } = await server.ssrLoadModule('/src/features/practice/components/LiveStage.tsx');
+  const { emptyFeedbackState } = await server.ssrLoadModule('/src/features/practice/feedbackState.ts');
+  const { emptyPulse } = await server.ssrLoadModule('/src/features/pulse/signal.ts');
   for (const theme of modelThemes) {
     const html = renderToStaticMarkup(createElement(PracticePage, { theme }));
     assert.ok(html.includes(`data-model-theme="${theme.id}"`));
-    for (const feature of ['카메라 프리뷰', '발표 대본', '필러워드', '발음 명료도', '시선', '최신 피드백']) {
-      assert.ok(html.includes(feature), `${theme.id}: missing ${feature}`);
-    }
+    assert.ok(html.includes('발표 대본'), `${theme.id}: missing 발표 대본`);
   }
+  const stage = renderToStaticMarkup(createElement(LiveStage, { stream: null, videoRef: { current: null }, pulse: emptyPulse(),
+    feedback: emptyFeedbackState, script: '대본입니다.', timeLimitSeconds: 60, elapsedSeconds: 0,
+    featureSettings: { karaokeGuideEnabled: true, keywordHintEnabled: false, deliveryEnabled: true }, sentenceHints: {},
+    phase: 'running', connectionStatus: 'connected', socketError: null, onRecalibrate() {} }));
+  for (const feature of ['카메라 프리뷰', '발음 명료도', '피드백 대기 중', '최신 피드백', '다시 보정']) {
+    assert.ok(stage.includes(feature), `live stage: missing ${feature}`);
+  }
+  assert.equal((stage.match(/<video/g) ?? []).length, 1);
 });
 
-test('practice screen links to theme selection at #themes, never back to the bare hash', async () => {
+test('practice screen no longer links to the experiment routes, and the comparison panel keeps its theme link', async () => {
   const { PracticePage } = await server.ssrLoadModule('/src/features/practice/PracticePage.tsx');
   const html = renderToStaticMarkup(createElement(PracticePage));
-  assert.match(html, /<a href="#themes"[^>]*>테마 선택<\/a>/);
+  assert.doesNotMatch(html, /href="#themes"|href="#stt-experiments"|href="#pulse-pos-experiment"/);
   assert.doesNotMatch(html, /href="#"/);
   const { LiveComparisonPanel } = await server.ssrLoadModule('/src/features/model-themes/LiveComparisonPanel.tsx');
   const summary = { sessionId: 's', durationSeconds: 1, incomplete: false, transcript: null,
@@ -101,24 +110,27 @@ test('standalone pulse screen does not automatically request camera access or mi
   assert.match(html, /카메라 꺼짐/);
 });
 
-test('presentation uses pretrained pulse on the same video, not a separate camera experiment', async () => {
+test('presentation runs the pretrained pulse on the same video without a diagnostics panel', async () => {
   const {PracticePage} = await server.ssrLoadModule('/src/features/practice/PracticePage.tsx');
   const html = renderToStaticMarkup(createElement(PracticePage));
-  assert.match(html, /발표 영상 실시간 맥박/);
-  assert.match(html, /EfficientPhys/);
-  assert.match(html, /UBFC-rPPG 사전학습/);
-  assert.match(html, /발표 카메라의 같은 영상을 분석/);
-  assert.match(html, /로컬 백엔드에서만 추론/);
-  assert.equal((html.match(/<video/g) ?? []).length, 1);
+  assert.doesNotMatch(html, /EfficientPhys|UBFC-rPPG 사전학습/);
+  assert.match(html, /로컬 백엔드에서만 추론합니다/);
+  assert.match(html, /자동 저장·전송하지 않습니다/);
+  const {PulsePanel} = await server.ssrLoadModule('/src/features/pulse/PulsePanel.tsx');
+  const panel = renderToStaticMarkup(createElement(PulsePanel, {stream: null, mode: 'efficientphys', autoFallback: true, embedded: true}));
+  assert.match(panel, /발표 영상 맥박 추정/);
+  assert.match(panel, /UBFC-rPPG 사전학습/);
+  assert.match(panel, /발표 카메라의 같은 영상을 분석/);
+  assert.match(panel, /로컬 백엔드에서만 추론/);
 });
 
 test('provisional and ended pulse values are labeled instead of presented as verified readings', async()=>{
   const {PulseOverlay}=await server.ssrLoadModule('/src/features/pulse/PulseOverlay.tsx');
   const result={status:'provisional',bpm:72,seconds:9,fps:30,snr:2,waveform:[],reason:'test',model:'TS-CAN · UBFC-rPPG'};
   const live=renderToStaticMarkup(createElement(PulseOverlay,{result,active:true}));
-  assert.match(live,/72 BPM/); assert.match(live,/잠정 추정/); assert.match(live,/TS-CAN/);
+  assert.match(live,/72 BPM/); assert.match(live,/잠정 추정/); assert.doesNotMatch(live,/TS-CAN/);
   const ended=renderToStaticMarkup(createElement(PulseOverlay,{result:{...result,ended:true},active:false}));
-  assert.match(ended,/72 BPM/); assert.match(ended,/종료 · 마지막 잠정값/);
+  assert.match(ended,/72 BPM/); assert.match(ended,/종료, 마지막 잠정값/);
 });
 
 const withheldKeys = ['pvq', 'loudness_dbfs', 'alpha_ratio_db', 'hammarberg_db', 'loudness_rel_db'];
