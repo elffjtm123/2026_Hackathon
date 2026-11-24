@@ -173,6 +173,9 @@ def borrowing(self, session_id: UUID) -> AsyncContextManager[None]  # 일시 정
 
 - 파이프라인이 부르는 지점: 유성 프레임(`_observe_delivery_frame` 옆에 같은 관찰 지점 추가), 받아쓰기 최종 결과, 남은 최종 결과 수(음성 큐 크기).
 - 200ms 주기 작업으로 `tick`을 부르고, `Action`을 `interview.*` 이벤트로 내보낸다.
+- 진행기 시계는 오디오 시각을 따른다: `max(마지막으로 받은 프레임 끝, 서버 시각 − 1.5초)`이며 뒤로 가지 않는다. 음성 프레임은 오디오 시각으로 찍혀 늦게 도착하므로, 서버 시각을 그대로 쓰면 말하는 중에 제한 시간 넘김이 일어난다. 지연이 약 2초를 넘으면 경고 로그를 한 번 남긴다.
+- 첫 질문은 `session.running`(시선 보정 뒤)에 오디오 시작 시각으로 띄운다. 면접이 붙은 세션은 피드백 설정과 관계없이 받아쓰기를 켠다. 질문 면접은 데모 경로에서만 지원한다.
+- 계획은 한 세션에서만 쓴다(`INTERVIEW_ALREADY_STARTED`). 단, 첫 질문을 띄우기 전에 끝난 세션은 계획을 돌려놓아 다시 쓸 수 있다.
 - 1라운드가 끝나면(`RoundFinished(1)`) 라운드 휴식을 진행한다: `pipeline.suspend()` → `execution.borrowing()` 안에서 `InterviewLlm.follow_ups()` → `pipeline.resume()` → `conductor.add_questions()`. 각 단계에서 `interview.round_break {stage}`를 낸다. 추가 질문이 0개거나 생성이 실패하면 2라운드를 건너뛰고 `interview.finished`를 낸다.
 - 끝나면 항목 기록을 `InterviewStore`에 넘긴다.
 

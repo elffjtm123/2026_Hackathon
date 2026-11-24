@@ -15,9 +15,19 @@ from starlette.types import Message
 
 from app.ai.model_execution import finish
 from app.api.local_only import local_request_verdict
+from app.core.errors import AppError
 from app.core.security import decode_token
 from app.db.models.session import PracticeSession, SessionStatus
-from app.realtime.events import ClientEvent, RealtimeEvent, SessionStartData, V2ClientEvent
+from app.modules.interview.composition import TurnRules
+from app.modules.interview.questions import ItemRecord
+from app.realtime.events import (
+    ClientEvent,
+    InterviewStartData,
+    RealtimeEvent,
+    SessionStartData,
+    V2ClientEvent,
+)
+from app.realtime.interview_run import InterviewRun
 from app.realtime.media import decode_media_v2
 from app.realtime.pipeline import SessionPipeline
 from app.services.experiment_exclusion import ExperimentRunning
@@ -25,6 +35,11 @@ from app.services.live_stt import SessionSpeechLease
 from app.services.session_service import safe_delivery_metrics
 
 router = APIRouter(tags=["realtime"])
+
+_INTERVIEW_ERROR_MESSAGES = {
+    "INTERVIEW_NOT_FOUND": "면접 정보를 찾을 수 없습니다. 질문을 다시 만들어 주세요.",
+    "INTERVIEW_ALREADY_STARTED": "이미 시작한 면접입니다. 질문을 다시 만들어 주세요.",
+}
 
 
 def exclude_stt_experiment(handler: Any) -> Any:
@@ -39,6 +54,35 @@ def exclude_stt_experiment(handler: Any) -> Any:
             await websocket.close(code=1013, reason="STT comparison experiment is running")
 
     return guarded
+
+
+def _attach_interview(
+    websocket: WebSocket,
+    pipeline: SessionPipeline,
+    session_id: UUID,
+    start: InterviewStartData,
+) -> InterviewRun:
+    """Bind the plan to this session (validating the chosen questions) and build its run.
+
+    Raises AppError for an unknown or already used plan and for bad question ids.
+    """
+    store = websocket.app.state.interview_store
+    questions = store.attach_session(start.interview_id, session_id, start.question_ids)
+
+    async def emit(name: str, payload: dict[str, Any]) -> None:
+        await pipeline.emit(name, pipeline.elapsed_ms(), payload)
+
+    def save_items(items: list[ItemRecord]) -> None:
+        store.save_items(start.interview_id, items)
+
+    return InterviewRun(
+        questions,
+        TurnRules(),
+        clock=pipeline.elapsed_ms,
+        emit=emit,
+        pending_finals=pipeline.pending_finals,
+        save_items=save_items,
+    )
 
 
 async def _v2_session(
@@ -89,6 +133,18 @@ async def _v2_session(
     # swapped). Only the last value matters, so a flooding client cannot grow memory.
     early_audio_settings: Any = None
     has_early_audio_settings = False
+    # Interview questions are only run on the local demo route (no stored settings): the plan
+    # store lives in app state and the authenticated flow persists sessions another way.
+    interview_run: InterviewRun | None = None
+    interview_id: str | None = None
+
+    def release_interview() -> None:
+        """Give the plan back after a start that failed before the session was running."""
+        nonlocal interview_run, interview_id
+        pipeline.interview = None
+        if interview_id is not None:
+            websocket.app.state.interview_store.detach_session(interview_id, session_id)
+        interview_run = interview_id = None
 
     async def prepare_or_cancel(operation: asyncio.Task[None]) -> bool:
         nonlocal client_sequence, pending_message, early_audio_settings, has_early_audio_settings
@@ -202,6 +258,14 @@ async def _v2_session(
                     if websocket.app.state.script_summarizer.busy:
                         raise ValueError("SUMMARY_BUSY")
                     data = SessionStartData.model_validate(event.data)
+                    if data.interview is not None:
+                        if stored_settings is not None:
+                            raise ValueError("INVALID_SETTINGS")
+                        interview_run = _attach_interview(
+                            websocket, pipeline, session_id, data.interview
+                        )
+                        interview_id = data.interview.interview_id
+                        pipeline.interview = interview_run
                     raw_audio_settings = event.data.get("audio_settings")
                     analysis = {
                         **data.settings.model_dump(),
@@ -236,7 +300,13 @@ async def _v2_session(
 
                     # A failed earlier attempt must not leak its early settings into this one.
                     early_audio_settings, has_early_audio_settings = None, False
-                    if not await prepare_or_cancel(asyncio.create_task(prepare())):
+                    try:
+                        prepared = await prepare_or_cancel(asyncio.create_task(prepare()))
+                    except BaseException:
+                        release_interview()
+                        raise
+                    if not prepared:
+                        release_interview()
                         await pipeline.stop()
                         break
                     started = True
@@ -276,13 +346,28 @@ async def _v2_session(
                     await websocket.app.state.webrtc.close_session(session_id)
                     await pipeline.stop()
                     break
+                elif event.event == "interview.replay":
+                    if not started:
+                        raise ValueError("SESSION_NOT_READY")
+                    if interview_run is None:
+                        raise ValueError("UNSUPPORTED_EVENT")
+                    question_id = event.data.get("question_id")
+                    if not isinstance(question_id, str) or not question_id:
+                        raise ValueError("INVALID_SETTINGS")
+                    await interview_run.replay(question_id)
                 elif event.event == "ping":
                     await pipeline.emit("pong", pipeline.elapsed_ms(), {})
                 else:
                     raise ValueError("UNSUPPORTED_EVENT")
-            except (ValueError, ValidationError) as exc:
+            except (ValueError, ValidationError, AppError) as exc:
                 pipeline.incomplete = True
-                code = "INVALID_SETTINGS" if isinstance(exc, ValidationError) else str(exc)
+                code = (
+                    "INVALID_SETTINGS"
+                    if isinstance(exc, ValidationError)
+                    else exc.code
+                    if isinstance(exc, AppError)
+                    else str(exc)
+                )
                 modules = {
                     name: module.model_dump() for name, module in speech_lease.modules.items()
                 }
@@ -299,7 +384,9 @@ async def _v2_session(
                         and reasons
                         else "다른 연습 세션을 종료한 뒤 시작해 주세요."
                         if code == "OTHER_SESSION_ACTIVE"
-                        else "실시간 입력 또는 모델 상태를 확인해 주세요.",
+                        else _INTERVIEW_ERROR_MESSAGES.get(
+                            code, "실시간 입력 또는 모델 상태를 확인해 주세요."
+                        ),
                         "modules": modules,
                     },
                 )
@@ -316,6 +403,14 @@ async def _v2_session(
             try:
                 await pipeline.stop()
             finally:
+                if interview_run is not None:
+                    if interview_run.started:
+                        # Every exit path saves the items (the pipeline's own stop did already
+                        # when it got as far as the report); the tick task has ended.
+                        interview_run.finalize()
+                    else:
+                        # Never running (calibration unfinished, reload): keep the plan usable.
+                        release_interview()
                 if live_registered:
                     websocket.app.state.live_sessions.discard(session_id)
                 # Only after the pipeline stopped: the lent adapter may be mid-inference.

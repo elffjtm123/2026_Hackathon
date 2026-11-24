@@ -19,6 +19,11 @@ EventName = Literal[
     "transcript.final",
     "metrics.snapshot",
     "session.completed",
+    "interview.question",
+    "interview.question_hidden",
+    "interview.advanced",
+    "interview.replay_rejected",
+    "interview.finished",
     "error",
     "ping",
     "pong",
@@ -33,8 +38,22 @@ class ModuleStatus(BaseModel):
     reason: str | None = None
 
 
+class InterviewStartData(BaseModel):
+    """The plan and the questions the user picked, in the order to ask them."""
+
+    interview_id: str = Field(min_length=1, max_length=64)
+    question_ids: list[str] = Field(min_length=1, max_length=50)
+
+    @model_validator(mode="after")
+    def validate_unique_ids(self) -> "InterviewStartData":
+        if len(set(self.question_ids)) != len(self.question_ids):
+            raise ValueError("question_ids must not repeat")
+        return self
+
+
 class SessionStartData(BaseModel):
     mode: Literal["presentation", "interview"] = "presentation"
+    interview: InterviewStartData | None = None
     settings: AnalysisSettings = Field(default_factory=AnalysisSettings)
     stt_model_id: SttModelId | None = None
     script: str | None = Field(default=None, max_length=20_000)
@@ -51,6 +70,8 @@ class SessionStartData(BaseModel):
             raise ValueError("script and time limit must be provided together")
         if self.mode == "interview" and self.script is not None:
             raise ValueError("interview does not accept a presentation script")
+        if self.interview is not None and self.mode != "interview":
+            raise ValueError("interview questions need interview mode")
         return self
 
 
@@ -73,6 +94,7 @@ class ClientEvent(BaseModel):
         "session.end",
         "session.audio_settings",
         "calibration.start",
+        "interview.replay",
     ]
     timestamp_ms: int = Field(default=0, ge=0)
     data: dict[str, Any] = Field(default_factory=dict)

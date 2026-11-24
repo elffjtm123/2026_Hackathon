@@ -65,6 +65,12 @@ class TurnRules:
     # frame by this pre-roll.
     max_utterance_ms: int = 8000
     pre_roll_ms: int = 200
+    # InterviewRun times the conductor on the audio timeline (latest frame end) because frames
+    # reach the server late; if no frame arrives at all the clock still follows wall time, at
+    # most this far behind it, so silence/no-response advance within this delay. It must exceed
+    # the usual frame lag (capture start, 200 ms chunks, transport) or the lag-immunity is lost:
+    # a lag beyond about allowance + endpoint (~2 s) brings back mid-utterance time-limit cuts.
+    stall_allowance_ms: int = 1500
 
     def reading_ms(self, text: str) -> int:
         ms = self.reading_base_ms + round(len(text) / self.reading_chars_per_second * 1000)

@@ -13,6 +13,7 @@ from app.ai.model_execution import ModelExecution
 from app.core.config import Settings
 from app.modules.delivery.analyzer import DeliveryAnalyzer
 from app.modules.gaze.service import GazeStabilizer
+from app.modules.interview.questions import FinalUtterance as InterviewFinal
 from app.modules.pronunciation.service import estimate_stt_pronunciation_accuracy
 from app.modules.script_sync.service import ScriptSyncService, analyze_script
 from app.modules.speech.analysis import (
@@ -25,6 +26,7 @@ from app.modules.speech.segments import CutReason, FinalUtterance, SpeechSegment
 from app.realtime.aggregator import FeedbackAggregator
 from app.realtime.events import RealtimeEvent
 from app.realtime.experiment_recorder import ExperimentRecorder
+from app.realtime.interview_run import InterviewRun
 from app.realtime.queues import DropOldestQueue
 from app.realtime.state import SessionStateStore
 
@@ -72,6 +74,7 @@ class SessionPipeline:
         self.last_audio_activity_ms = 0
         self.latest_audio_end_ms = 0
         self.speech_waiting = False
+        self.speech_in_flight = False  # the speech worker holds an utterance it has not finished
         # One STT inference at a time; finals wait for an in-flight preview, previews never wait.
         self.stt_lock = asyncio.Lock()
         self.partial_task: asyncio.Task[None] | None = None
@@ -89,6 +92,8 @@ class SessionPipeline:
         self.completed_report: dict[str, Any] | None = None
         # Set only for a live STT model-comparison session.
         self.experiment: ExperimentRecorder | None = None
+        # Set only for an interview with questions; fed frames/finals, started when running.
+        self.interview: InterviewRun | None = None
         self.phase = "preparing"
         self.protocol = 1
         self.running_started_ms: int | None = None
@@ -125,9 +130,12 @@ class SessionPipeline:
         )
 
     def _speech_needed(self) -> bool:
-        """Speech runs for its own feedback or, via the transcript counts, for delivery."""
-        return self._feedback_speech_enabled() or bool(
-            self.analysis_settings.get("delivery_enabled", True)
+        """Speech runs for its own feedback, for delivery's transcript counts, or for an
+        interview (its frames and transcripts drive the questions whatever the toggles say)."""
+        return (
+            self._feedback_speech_enabled()
+            or bool(self.analysis_settings.get("delivery_enabled", True))
+            or self.interview is not None
         )
 
     async def start(self) -> None:
@@ -198,6 +206,9 @@ class SessionPipeline:
                 "audio_origin_ms": self.audio_origin_ms,
             },
         )
+        if self.interview is not None:
+            # The first question appears only now, when the user's answers can be heard.
+            await self.interview.start(self.audio_origin_ms)
 
     async def accept_media(self, media: MediaPayload) -> None:
         if not self.accepting or (media.format == "pcm16" and self.phase != "running"):
@@ -289,6 +300,9 @@ class SessionPipeline:
             running_end_ms = self.elapsed_ms()
             self.phase = "draining"
             incomplete = self.incomplete
+            if self.interview is not None:
+                # Ends the current question as "stopped"; finals still draining attach to it.
+                await self.interview.stop()
             if self.running:
                 if self.protocol == 2:
                     await self.emit("session.draining", self.elapsed_ms(), self.metrics())
@@ -335,6 +349,8 @@ class SessionPipeline:
                 "delivery_metrics": delivery_metrics,
             }
             self.segmenter = None
+            if self.interview is not None and self.interview.started:
+                report["interview_items"] = self.interview.finalize()
             if self.experiment is not None:
                 report["comparison"] = self.experiment.summary(self.video_queue.stats.dropped)
             self.audio_receipts.clear()
@@ -465,7 +481,7 @@ class SessionPipeline:
                 if self.segmenter is None:
                     self.segmenter = SpeechSegmenter(
                         silence_rms_threshold=self.settings.stt_silence_rms_threshold,
-                        observe_frame=self._observe_delivery_frame,
+                        observe_frame=self._observe_frame,
                     )
                 segments = (
                     self.segmenter.flush()
@@ -618,15 +634,14 @@ class SessionPipeline:
     async def _speech_worker(self) -> None:
         while True:
             media = await self.speech_queue.get()
+            self.speech_in_flight = True
             observed = False
             try:
                 if not self._feedback_speech_enabled():
-                    # Delivery still needs the transcript for its counts, but no feedback is shown.
-                    if (
-                        self.delivery is not None
-                        and not self.delivery_failed
-                        and media.format == "pcm16"
-                    ):
+                    # Delivery (or an interview) still needs the transcript, but no feedback
+                    # is shown.
+                    delivery_wanted = self.delivery is not None and not self.delivery_failed
+                    if media.format == "pcm16" and (delivery_wanted or self.interview is not None):
                         try:
                             async with self.stt_lock:
                                 transcript = (await self.speech.infer(media)).transcript or ""
@@ -636,6 +651,13 @@ class SessionPipeline:
                                 extra={"session_id": self.session_id},
                             )
                             transcript = ""
+                        self._notify_interview_final(
+                            media.utterance_id or "",
+                            media.timestamp_ms,
+                            media.end_ms if media.end_ms is not None else media.timestamp_ms,
+                            media.voiced_ms or 0,
+                            transcript.strip(),
+                        )
                         await self._observe_delivery_utterance(
                             media, *_delivery_counts(transcript.strip())
                         )
@@ -661,6 +683,9 @@ class SessionPipeline:
                     if media.voiced_ms is not None
                     else round(float(result.metrics.get("duration_sec", 0) or 0) * 1000),
                     (result.transcript or "").strip(),
+                )
+                self._notify_interview_final(
+                    final.utterance_id, final.start_ms, final.end_ms, final.voiced_ms, final.text
                 )
                 metrics = analyze_utterance(
                     final,
@@ -708,7 +733,28 @@ class SessionPipeline:
                 if not observed:
                     await self._observe_delivery_utterance(media, 0, 0)
             finally:
+                self.speech_in_flight = False
                 self.speech_queue.task_done()
+
+    def pending_finals(self) -> int:
+        """Finals still on their way for utterances that have started: the one being spoken
+        plus those queued or being transcribed. Utterances that cannot become finals (audio
+        not yet segmented) are not counted; the conductor's wait cap covers such gaps."""
+        segmenter = self.segmenter
+        speaking = 1 if segmenter is not None and segmenter.speaking else 0
+        return speaking + self.speech_queue.qsize() + (1 if self.speech_in_flight else 0)
+
+    def _observe_frame(self, start_ms: int, end_ms: int, rms: float, voiced: bool) -> None:
+        """The segmenter's per-frame observation point, shared by delivery and the interview."""
+        self._observe_delivery_frame(start_ms, end_ms, rms, voiced)
+        if self.interview is not None:
+            self.interview.observe_frame(start_ms, end_ms, voiced)
+
+    def _notify_interview_final(
+        self, utterance_id: str, start_ms: int, end_ms: int, voiced_ms: int, text: str
+    ) -> None:
+        if self.interview is not None and text:
+            self.interview.on_final(InterviewFinal(utterance_id, start_ms, end_ms, text, voiced_ms))
 
     def _observe_delivery_frame(self, start_ms: int, end_ms: int, rms: float, voiced: bool) -> None:
         if self.delivery is None or self.delivery_failed:
