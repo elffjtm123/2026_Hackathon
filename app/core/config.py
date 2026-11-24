@@ -77,6 +77,15 @@ class Settings(BaseSettings):
     audio_chunk_ms: int = 750
     module_timeout_seconds: float = 3.0
     max_script_chars: int = 20_000
+    interview_document_max_bytes: int = 10 * 1024 * 1024
+    interview_document_max_pages: int = 50
+    # Total extracted characters across all uploaded files of one request.
+    interview_document_max_chars: int = 30_000
+    interview_document_max_uncompressed_bytes: int = 50 * 1024 * 1024
+    # Wall-clock budget for extracting all files of one request (checked between PDF pages).
+    interview_document_extract_seconds: float = Field(default=10, gt=0)
+    # Cap on decoded size of one PDF content stream; bounds decompression-bomb work.
+    interview_document_max_stream_bytes: int = 2 * 1024 * 1024
     summary_server_path: str = ".models/llama/llama-server"
     summary_model_path: str = ".models/Qwen3.5-9B-Q4_K_M.gguf"
     summary_timeout_seconds: float = Field(default=600, gt=0, le=600)

@@ -19,6 +19,7 @@ from app.ai.script_summary import LocalScriptSummarizer
 from app.ai.uniface_gaze import UnavailableGazeAdapter
 from app.api.health import router as health_router
 from app.api.v1.auth import router as auth_router
+from app.api.v1.interview import router as interview_router
 from app.api.v1.pulse import router as pulse_router
 from app.api.v1.scripts import router as scripts_router
 from app.api.v1.sessions import router as sessions_router
@@ -123,6 +124,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.model_execution = execution
         app.state.script_summarizer = LocalScriptSummarizer(settings, execution)
         app.state.live_sessions = set()
+        app.state.interview_document_gate = asyncio.Semaphore(1)
         app.state.database = database
         app.state.state_store = state_store
         app.state.gaze = gaze
@@ -250,6 +252,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(auth_router, prefix=settings.api_prefix)
     app.include_router(sessions_router, prefix=settings.api_prefix)
     app.include_router(scripts_router, prefix=settings.api_prefix)
+    app.include_router(interview_router, prefix=settings.api_prefix)
     app.include_router(websocket_router, prefix=settings.api_prefix)
     app.include_router(stt_experiments_router, prefix=settings.api_prefix)
     app.include_router(pulse_router, prefix=settings.api_prefix)

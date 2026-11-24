@@ -9,27 +9,23 @@ from starlette.responses import StreamingResponse
 
 from app.api.deps import CurrentUser
 from app.api.disconnect import disconnected_request
-from app.api.local_only import local_request_verdict
+from app.api.local_guard import GuardMessages, require_local_idle_request
 from app.core.errors import AppError
 from app.modules.script_sync.service import analyze_script, normalize_script
 from app.schemas.script import ScriptAnalyzeRequest, ScriptAnalyzeResponse, ScriptSummaryRequest
 
 router = APIRouter(tags=["scripts"])
 
+SUMMARY_GUARD = GuardMessages(
+    local_mode_required="메모리 분리 요약은 로컬 AI 모드에서만 지원합니다.",
+    development_only="로컬 개발 화면에서만 요약할 수 있습니다.",
+    practice_active="발표·면접 세션을 종료한 뒤 요약해 주세요.",
+)
+
 
 @router.post("/scripts/summarize")
 async def script_summarize(payload: ScriptSummaryRequest, request: Request) -> Any:
-    settings = request.app.state.settings
-    if settings.ai_mode != "local":
-        raise AppError(
-            "LOCAL_MODE_REQUIRED", "메모리 분리 요약은 로컬 AI 모드에서만 지원합니다.", 409
-        )
-    if local_request_verdict(request, origin="required") != "allowed":
-        raise AppError("DEVELOPMENT_ONLY", "로컬 개발 화면에서만 요약할 수 있습니다.", 403)
-    if request.app.state.live_sessions or any(
-        p.running for p in request.app.state.pipelines.pipelines.values()
-    ):
-        raise AppError("PRACTICE_ACTIVE", "발표·면접 세션을 종료한 뒤 요약해 주세요.", 409)
+    require_local_idle_request(request, SUMMARY_GUARD)
     if "application/x-ndjson" in request.headers.get("accept", ""):
 
         async def stream() -> AsyncIterator[str]:

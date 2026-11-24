@@ -204,8 +204,15 @@ class InterviewStore:
 | `GET /api/v1/interview/{id}/evaluation` | NDJSON 진행 | 마지막 줄 `InterviewEvaluation` |
 | `DELETE /api/v1/interview/{id}/evaluation` | — | 진행 중 평가 취소 |
 
-- 상한: 파일당 10MB, 50쪽, 추출 텍스트 합계 30,000자(설정값).
-- 오류 코드: `INTERVIEW_DOCUMENT_UNREADABLE`, `INTERVIEW_DOCUMENT_TOO_LARGE`, `INTERVIEW_PLAN_FAILED`, `INTERVIEW_MODEL_UNAVAILABLE`, `INTERVIEW_NOT_FOUND`, `PRACTICE_ACTIVE`, `SUMMARY_BUSY`.
+- 상한(설정값): 파일당 10MB, 50쪽, 추출 텍스트 합계 30,000자(넘으면 앞 파일부터 채우고 나머지는 잘라 `truncated` 경고), DOCX 압축 해제 50MB, PDF 스트림 2MB, 요청당 추출 시간 10초. 추출은 한 번에 하나씩만 한다.
+- 오류 코드
+  - `INTERVIEW_DOCUMENT_REQUEST_INVALID`(422): multipart 형식 오류, 파일 0개·4개 이상, 종류 누락·중복·알 수 없음
+  - `INTERVIEW_DOCUMENT_TOO_LARGE`(413): 요청·파일 크기, 쪽수, DOCX 압축 해제 크기 초과
+  - `INTERVIEW_DOCUMENT_UNREADABLE`(422): 형식 불일치·알 수 없는 형식, 손상·암호화 파일, PDF 스트림 상한 초과, 추출 시간 초과
+  - `INTERVIEW_PLAN_FAILED`, `INTERVIEW_MODEL_UNAVAILABLE`, `INTERVIEW_NOT_FOUND`
+  - `PRACTICE_ACTIVE`, `SUMMARY_BUSY`, `INTERVIEW_BUSY`(면접 계획·평가 생성 중)
+- 텍스트를 찾지 못한 파일(스캔 PDF 등)은 오류가 아니라 `text=""`와 `no_text` 경고로 돌려준다.
+- 알려진 한계: 2MB를 넘는 PDF 개체(Form XObject) 안의 글자는 경고 없이 빠진다. 디자인 도구로 만든 포트폴리오에서 실제로 문제가 되면 상한을 다시 정한다.
 
 ### 5.2 세션 시작
 
