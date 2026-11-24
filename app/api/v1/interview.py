@@ -1,14 +1,25 @@
 import asyncio
+import json
+from collections.abc import AsyncIterator, Callable
 from typing import Any
 
+from anyio import CancelScope
 from fastapi import APIRouter, Request
 from python_multipart.exceptions import MultipartParseError
 from python_multipart.multipart import MultipartParser, parse_options_header
+from starlette.responses import StreamingResponse
 
+from app.api.disconnect import disconnected_request
 from app.api.local_guard import GuardMessages, require_local_idle_request, require_no_offline_job
 from app.core.errors import AppError
-from app.modules.interview.documents import DocumentExtractor, DocumentKind, DocumentLimits
-from app.schemas.interview import InterviewDocumentOut
+from app.modules.interview.composition import Composition
+from app.modules.interview.documents import (
+    DocumentExtractor,
+    DocumentKind,
+    DocumentLimits,
+    DocumentText,
+)
+from app.schemas.interview import InterviewDocumentOut, InterviewPlanOut, InterviewPlanRequest
 
 router = APIRouter(tags=["interview"])
 
@@ -153,3 +164,138 @@ async def extract_interview_documents(request: Request) -> list[dict[str, Any]]:
         }
         for item in results
     ]
+
+
+PLAN_GUARD = GuardMessages(
+    local_mode_required="면접 연습은 로컬 AI 모드에서만 지원합니다.",
+    development_only="로컬 개발 화면에서만 면접 연습을 쓸 수 있습니다.",
+    practice_active="발표·면접 세션을 종료한 뒤 질문을 만들어 주세요.",
+    summary_busy="대본 요약을 마친 뒤 질문을 만들어 주세요.",
+    interview_busy="진행 중인 면접 준비가 끝난 뒤 질문을 만들어 주세요.",
+)
+_PLAN_FAILED = "질문 생성에 실패했습니다. 다시 시도하세요."
+
+
+def _reserve_plan(request: Request) -> None:
+    execution = request.app.state.model_execution
+    try:
+        execution.reserve_offline("interview_plan")
+    except ValueError as exc:
+        raise AppError(
+            str(exc), "모델 정리 또는 진행 중인 작업이 끝난 뒤 시도하세요.", 409
+        ) from exc
+
+
+def _validated_documents(request: Request, payload: InterviewPlanRequest) -> list[DocumentText]:
+    limit = request.app.state.settings.interview_document_max_chars
+    if sum(len(d.text) for d in payload.documents) > limit:
+        raise AppError(
+            "INTERVIEW_PLAN_REQUEST_INVALID",
+            f"서류 텍스트는 합계 {limit:,}자까지 쓸 수 있습니다.",
+            422,
+        )
+    # Only the model call reads this text; it is neither stored nor logged.
+    return [DocumentText(DocumentKind(d.kind), d.text) for d in payload.documents]
+
+
+async def _make_plan(
+    request: Request,
+    payload: InterviewPlanRequest,
+    documents: list[DocumentText],
+    on_progress: Callable[[dict[str, Any]], None] | None,
+) -> dict[str, Any]:
+    state = request.app.state
+    try:
+        plan = await state.interview_llm.plan(
+            documents, payload.job, Composition(), payload.exclude_common_ids, on_progress
+        )
+    except AppError:
+        raise
+    except Exception as exc:
+        # Includes failures the generator did not map; never echo their text (may hold input).
+        raise AppError("INTERVIEW_PLAN_FAILED", _PLAN_FAILED, 503) from exc
+    interview_id = state.interview_store.create(plan)
+    return InterviewPlanOut.model_validate(
+        {
+            "interview_id": interview_id,
+            "questions": [
+                {**vars(q), "rubric_items": [r.value for r in q.rubric_items]}
+                for q in plan.questions
+            ],
+            "warnings": plan.warnings,
+        }
+    ).model_dump()
+
+
+@router.post("/interview/plans")
+async def create_interview_plan(payload: InterviewPlanRequest, request: Request) -> Any:
+    """Make the interview questions. `Accept: application/x-ndjson` streams
+    `{"event": "progress", "data": {"stage", ...}}` lines and ends with one
+    `{"event": "complete", "data": {interview_id, questions, warnings}}` or
+    `{"event": "error", "data": {code, message}}` line; otherwise the plan is returned as JSON.
+
+    The model reservation is released only after the generator (and so llama-server) is done,
+    also when the client disconnects.
+    """
+    require_local_idle_request(request, PLAN_GUARD)
+    require_no_offline_job(request, PLAN_GUARD)
+    documents = _validated_documents(request, payload)
+    execution = request.app.state.model_execution
+    _reserve_plan(request)
+    if "application/x-ndjson" not in request.headers.get("accept", ""):
+        try:
+            async with disconnected_request(
+                request, "INTERVIEW_PLAN_CANCELLED", "연결이 종료되어 질문 생성을 중단했습니다."
+            ):
+                return await _make_plan(request, payload, documents, None)
+        finally:
+            execution.release_offline("interview_plan")
+
+    queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=512)
+
+    def progress(data: dict[str, Any]) -> None:
+        # Progress is advisory: drop frames instead of failing when a slow reader fills the queue.
+        try:
+            queue.put_nowait({"event": "progress", "data": data})
+        except asyncio.QueueFull:
+            pass
+
+    async def produce() -> None:
+        try:
+            result = await _make_plan(request, payload, documents, progress)
+            # The terminal frame must never be dropped or the client hangs.
+            await queue.put({"event": "complete", "data": result})
+        except AppError as exc:
+            await queue.put({"event": "error", "data": {"code": exc.code, "message": exc.message}})
+        except Exception:
+            # Anything else (store, response building) must still end the stream.
+            await queue.put(
+                {
+                    "event": "error",
+                    "data": {"code": "INTERVIEW_PLAN_FAILED", "message": _PLAN_FAILED},
+                }
+            )
+
+    # Started now, not when the response is first iterated, so the reservation is always
+    # released: the done callback runs after the generator has exited, even if the task is
+    # cancelled before its first step.
+    producer = asyncio.create_task(produce())
+    producer.add_done_callback(lambda _: execution.release_offline("interview_plan"))
+
+    async def stream() -> AsyncIterator[str]:
+        try:
+            while True:
+                event = await queue.get()
+                yield json.dumps(event, ensure_ascii=False) + "\n"
+                if event["event"] in {"complete", "error"}:
+                    break
+        finally:
+            producer.cancel()
+            with CancelScope(shield=True):
+                await asyncio.gather(producer, return_exceptions=True)
+
+    return StreamingResponse(
+        stream(),
+        media_type="application/x-ndjson",
+        headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+    )

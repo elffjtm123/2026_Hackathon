@@ -58,6 +58,28 @@ def test_api_origin_and_invalid_input(client):
     assert not client.app.state.pretrained_pulse.request_active
 
 
+@pytest.mark.parametrize(
+    ("owner", "code"),
+    [
+        ("summary", "SUMMARY_BUSY"),
+        ("interview_plan", "INTERVIEW_BUSY"),
+        ("interview_evaluation", "INTERVIEW_BUSY"),
+    ],
+)
+def test_infer_is_rejected_while_an_offline_job_owns_the_models(client, owner, code):
+    client.app.state.model_execution.owner = owner
+    headers = {"origin": "http://testserver", "content-type": "application/octet-stream"}
+    response = client.post("/api/v1/pulse/infer", content=packet(), headers=headers)
+    assert (response.status_code, response.json()["error"]["code"]) == (409, code)
+
+
+def test_infer_is_rejected_while_a_session_borrows_the_generation_model(client, monkeypatch):
+    monkeypatch.setattr(type(client.app.state.model_execution), "generation_active", True)
+    headers = {"origin": "http://testserver", "content-type": "application/octet-stream"}
+    response = client.post("/api/v1/pulse/infer", content=packet(), headers=headers)
+    assert (response.status_code, response.json()["error"]["code"]) == (409, "INTERVIEW_BUSY")
+
+
 def test_missing_model_is_explicit(client, tmp_path):
     client.app.state.pretrained_pulse.directory = tmp_path
     headers = {"origin": "http://testserver", "content-type": "application/octet-stream"}

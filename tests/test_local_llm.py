@@ -124,6 +124,14 @@ async def test_multiple_calls_share_one_server(assets) -> None:
 
 
 @pytest.mark.asyncio
+async def test_seed_can_be_overridden_per_call(assets) -> None:
+    async with llm(assets).loaded() as session:
+        default = await session.complete_json("one", SCHEMA, max_tokens=11)
+        other = await session.complete_json("one", SCHEMA, max_tokens=11, seed=7)
+    assert (default["seed"], other["seed"]) == (42, 7)
+
+
+@pytest.mark.asyncio
 async def test_oversized_output_is_rejected(assets) -> None:
     async with llm(assets).loaded() as session:
         with pytest.raises(ValueError, match="Oversized"):

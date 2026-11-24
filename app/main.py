@@ -13,6 +13,8 @@ from fastapi.responses import JSONResponse
 
 from app.ai.base import GazeAdapter, SpeechAdapter
 from app.ai.http import HTTPGazeAdapter, HTTPSpeechAdapter
+from app.ai.interview_llm import InterviewLlm
+from app.ai.local_llm import LocalLlm
 from app.ai.local_stt import create_local_qwen_speech_adapter as create_local_qwen_speech_adapter
 from app.ai.model_execution import ModelExecution
 from app.ai.script_summary import LocalScriptSummarizer
@@ -40,6 +42,7 @@ from app.realtime.registry import PipelineRegistry
 from app.realtime.state import SessionStateStore
 from app.realtime.webrtc import WebRTCManager
 from app.services.experiment_exclusion import ExperimentExclusion
+from app.services.interview_store import InterviewStore
 from app.services.live_stt import LiveSpeechManager
 from app.services.pretrained_pulse import PretrainedPulse
 from app.services.stt_experiments import ExperimentManager
@@ -123,6 +126,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.settings = settings
         app.state.model_execution = execution
         app.state.script_summarizer = LocalScriptSummarizer(settings, execution)
+        app.state.interview_llm = InterviewLlm(
+            LocalLlm(settings), timeout_seconds=settings.interview_plan_timeout_seconds
+        )
+        app.state.interview_store = InterviewStore(
+            settings.interview_plan_ttl_seconds, settings.interview_store_max_entries
+        )
         app.state.live_sessions = set()
         app.state.interview_document_gate = asyncio.Semaphore(1)
         app.state.database = database

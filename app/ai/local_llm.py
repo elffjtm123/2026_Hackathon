@@ -76,6 +76,7 @@ class LlmSession:
         max_tokens: int,
         on_delta: Callable[[str], None] | None = None,
         schema_name: str = "response",
+        seed: int = 42,
     ) -> Any:
         text, reason = "", None
         async with self._client.stream(
@@ -87,7 +88,7 @@ class LlmSession:
                 "top_p": 0.8,
                 "top_k": 20,
                 "min_p": 0,
-                "seed": 42,
+                "seed": seed,
                 "max_tokens": max_tokens,
                 "stream": True,
                 "cache_prompt": False,

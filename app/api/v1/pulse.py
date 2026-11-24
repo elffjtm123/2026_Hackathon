@@ -51,6 +51,10 @@ async def infer(request: Request, model_id: str = 'pure_efficientphys') -> dict:
     execution = request.app.state.model_execution
     if execution is not None and execution.owner == "summary":
         raise AppError("SUMMARY_BUSY", "대본 요약을 마친 뒤 발표를 시작해 주세요.", 409)
+    # Interview planning/evaluation or a session borrowing the generation model: the pulse
+    # ONNX model must not load next to Qwen.
+    if execution is not None and execution.generation_active:
+        raise AppError("INTERVIEW_BUSY", "면접 질문·평가 생성을 마친 뒤 시도해 주세요.", 409)
     if request.headers.get("content-type", "").split(";")[0] != "application/octet-stream":
         raise AppError("PULSE_CONTENT_TYPE", "올바른 영상 패킷이 필요합니다.", 415)
     manager = request.app.state.pretrained_pulse

@@ -86,6 +86,10 @@ class Settings(BaseSettings):
     interview_document_extract_seconds: float = Field(default=10, gt=0)
     # Cap on decoded size of one PDF content stream; bounds decompression-bomb work.
     interview_document_max_stream_bytes: int = 2 * 1024 * 1024
+    # Interview plans live only in memory; expired or surplus (oldest first) entries are dropped.
+    interview_plan_ttl_seconds: float = Field(default=2 * 60 * 60, gt=0)
+    interview_store_max_entries: int = Field(default=50, gt=0)
+    interview_plan_timeout_seconds: float = Field(default=300, gt=0, le=600)
     summary_server_path: str = ".models/llama/llama-server"
     summary_model_path: str = ".models/Qwen3.5-9B-Q4_K_M.gguf"
     summary_timeout_seconds: float = Field(default=600, gt=0, le=600)

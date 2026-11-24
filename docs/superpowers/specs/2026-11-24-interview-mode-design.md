@@ -131,7 +131,7 @@ class InterviewLlm:
     async def evaluate(self, items: list[ItemRecord], on_progress) -> InterviewEvaluation: ...
 ```
 
-- `plan`: 공통 질문은 `question_bank`에서 고르고(LLM 없음), 서류 기반 질문은 한 번의 모델 로딩 안에서 재료 추출 → 질문 생성 2회 호출로 만든다. 결과는 `questions` 모듈로 검증(근거 인용 존재, 금지 주제, 길이, 중복)하고, 서류 재료가 모자라면 공통 질문으로 채운다. 반환값에는 서류 텍스트가 없다.
+- `plan`: 공통 질문은 `question_bank`에서 고르고(LLM 없음), 서류 기반 질문은 한 번의 모델 로딩 안에서 재료 추출 → 질문 생성으로 만든다. 컨텍스트가 4096토큰이라 서류를 약 1,800자씩 나눠 조각마다 재료 추출을 1회 부르고(최대 8회, 조각당 재료 4개), 질문 생성은 1회 부른다. 제한 시간(300초)의 60%를 쓰면 추출을 멈추고 그때까지의 재료로 질문을 만든다. 시간이 모자라거나 재시도 후에도 실패하면 오류 대신 공통 질문으로 채우고 `document_questions_failed` 경고를 붙인다. 재시도는 다른 seed와 고칠 점을 덧붙인 프롬프트로 한다. 결과는 `questions` 모듈로 검증(근거 인용 존재, 금지 주제, 길이, 중복)하고, 서류 재료가 모자라면 공통 질문으로 채운다. 반환값에는 서류 텍스트가 없다.
 - `follow_ups`: 라운드 휴식 중 호출. 평가 가능한 본 질문마다 `follow_ups` 규칙 신호를 먼저 계산하고, LLM은 허용된 `gap_type` 중 하나와 답변 인용(`answer_quote`), 질문 문장을 낸다. 인용이 답변에 없거나 실패하면 고정 문장을 쓴다. 빠진 요소가 많은 순으로 최대 2개.
 - `evaluate`: 평가 불가 항목은 `rubric`으로 먼저 걸러 LLM을 부르지 않는다. 나머지는 질문당 1회 호출(추가 질문 답변을 묶어 입력)하고, 항목별 `{grade, evidence_quote, evidence_source, reason, improvement}`를 받는다. 근거 인용이 답변에 없으면 그 항목은 무효. 점수는 `rubric.score()`로 계산한다. 마지막에 종합 피드백을 1회 호출한다.
 - 프롬프트와 JSON schema는 이 모듈 안의 상수로 두고, 각 호출의 검증 실패는 1회 재시도 후 실패로 처리한다.
@@ -200,7 +200,7 @@ class InterviewStore:
 | 요청 | 입력 | 출력 |
 |---|---|---|
 | `POST /api/v1/interview/documents` | multipart: 파일 1~3개(종류: 자기소개서·이력서·포트폴리오) | 파일별 `{kind, text, warnings}`. 서버에 남기지 않음 |
-| `POST /api/v1/interview/plans` | `{documents: [{kind, text}], job, exclude_common_ids: []}`. `Accept: application/x-ndjson`이면 진행 상황을 줄 단위로 보냄 | 마지막 줄 `{interview_id, questions: [PlannedQuestion]}` |
+| `POST /api/v1/interview/plans` | `{documents: [{kind, text}] (0~3개), job?: str|null (30자 이하, 비우면 직무 없음), exclude_common_ids: []}`. `Accept: application/x-ndjson`이면 진행 상황을 줄 단위로 보냄 | `{interview_id, questions: [PlannedQuestion], warnings}`. NDJSON은 `{"event":"progress","data":{stage,…}}` 줄들 뒤에 마지막 줄 `{"event":"complete","data":{…}}` 또는 `{"event":"error","data":{code,message}}` |
 | `GET /api/v1/interview/{id}/evaluation` | NDJSON 진행 | 마지막 줄 `InterviewEvaluation` |
 | `DELETE /api/v1/interview/{id}/evaluation` | — | 진행 중 평가 취소 |
 
@@ -209,7 +209,11 @@ class InterviewStore:
   - `INTERVIEW_DOCUMENT_REQUEST_INVALID`(422): multipart 형식 오류, 파일 0개·4개 이상, 종류 누락·중복·알 수 없음
   - `INTERVIEW_DOCUMENT_TOO_LARGE`(413): 요청·파일 크기, 쪽수, DOCX 압축 해제 크기 초과
   - `INTERVIEW_DOCUMENT_UNREADABLE`(422): 형식 불일치·알 수 없는 형식, 손상·암호화 파일, PDF 스트림 상한 초과, 추출 시간 초과
-  - `INTERVIEW_PLAN_FAILED`, `INTERVIEW_MODEL_UNAVAILABLE`, `INTERVIEW_NOT_FOUND`
+  - `INTERVIEW_PLAN_REQUEST_INVALID`(422): 서류 글자 수 합계 초과. 그 밖의 요청 형식 오류는 프레임워크 검증 오류(422, 입력 원문은 돌려주지 않음)
+  - `INTERVIEW_MODEL_UNAVAILABLE`(503): 모델·실행 파일 없음
+  - `INTERVIEW_PLAN_FAILED`(503 서버 시작 실패·예상 못 한 오류, 504 서버 준비 시간 초과). 모델 호출 실패나 생성 시간 초과는 오류가 아니라 공통 질문으로 채운 계획과 경고로 돌려준다
+  - `INTERVIEW_PLAN_CANCELLED`(499): 일반 JSON 요청 중 연결 끊김
+  - `INTERVIEW_NOT_FOUND`(404)
   - `PRACTICE_ACTIVE`, `SUMMARY_BUSY`, `INTERVIEW_BUSY`(면접 계획·평가 생성 중)
 - 텍스트를 찾지 못한 파일(스캔 PDF 등)은 오류가 아니라 `text=""`와 `no_text` 경고로 돌려준다.
 - 알려진 한계: 2MB를 넘는 PDF 개체(Form XObject) 안의 글자는 경고 없이 빠진다. 디자인 도구로 만든 포트폴리오에서 실제로 문제가 되면 상한을 다시 정한다.
