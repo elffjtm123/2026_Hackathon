@@ -49,11 +49,11 @@ export function KaraokeGuide({
   );
   const hint = sentenceHints[progress?.current_sentence_index ?? 0]?.trim();
   const guideStatus = currentIndex >= 0
-    ? progress?.alignment_status === 'uncertain' ? '정렬 불확실 · 마지막 위치 유지' : '대본 위치 확인'
-    : phase === 'preparing' ? '모델 준비 중 · 첫 문장 미리보기'
+    ? progress?.alignment_status === 'uncertain' ? '정렬 불확실, 마지막 위치 유지' : '대본 위치 확인'
+    : phase === 'preparing' ? '모델 준비 중, 첫 문장 미리보기'
     : phase === 'calibrating' ? '정면 보정 후 대본을 읽어 주세요'
     : progress?.alignment_status === 'uncertain' ? '대본과 일치하는 발화를 찾지 못했습니다. 원문을 확인해 주세요.'
-    : phase === 'running' && elapsedSeconds >= 10 ? '음성 인식 결과 대기 · 마이크 입력을 확인해 주세요'
+    : phase === 'running' && elapsedSeconds >= 10 ? '음성 인식 결과 대기, 마이크 입력을 확인해 주세요'
     : '대본을 읽으면 인식된 위치에 맞춰 진행합니다';
 
   if ((!karaokeEnabled && !keywordHintEnabled) || !plan.normalizedScript) {
@@ -63,11 +63,11 @@ export function KaraokeGuide({
   return (
     <section className="karaoke-guide" aria-label="발표 진행 오버레이">
       <div className="progress-track">
-        <span style={{ width: `${actualPercent}%` }} />
+        <span style={{ transform: `scaleX(${actualPercent / 100})` }} />
       </div>
       {keywordHintEnabled ? (
         <div className="keyword-hints" aria-live="polite">
-          <span>{hint || '힌트 미설정 · 대본을 확인하세요.'}</span>
+          <span>{hint || '힌트 미설정, 대본을 확인하세요.'}</span>
         </div>
       ) : (
         <div className="karaoke-line" aria-live="polite">
@@ -91,8 +91,9 @@ export function KaraokeGuide({
           )}
         </div>
       )}
+      <p className="karaoke-status">{guideStatus}</p>
       <div className="karaoke-stats">
-        <span>실제 진행 {actualPercent}% · {guideStatus}</span>
+        <span>실제 진행 {actualPercent}%</span>
         <span>목표 진행 {Math.min(100, Math.round(elapsedSeconds / Math.max(timeLimitSeconds, 1) * 100))}%</span>
         <span>{formatTime(elapsedSeconds)} / {formatTime(timeLimitSeconds)}</span>
         <span>남은 시간 {formatTime(remainingSeconds)}</span>

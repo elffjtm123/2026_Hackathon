@@ -33,6 +33,7 @@ export function SessionControls({
 }: SessionControlsProps) {
   return (
     <section className="controls-bar" aria-label="세션 컨트롤">
+      <span className="wordmark">Realtime Coach</span>
       <div className="mode-tabs" role="tablist" aria-label="연습 모드">
         <button
           type="button"

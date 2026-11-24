@@ -28,15 +28,15 @@ export function LiveComparisonPanel({summary}: {summary: PracticeSummary | null}
     window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
   return <section className="live-comparison-panel" aria-label="통합 모델 비교 기록">
-    <h2>통합 연습 비교 기록 · {comparison.label}</h2>
-    <p>얼굴·시선과 음성을 함께 실행한 결과입니다. 상태: {summary.incomplete ? '미완료 — 오류 포함' : '완료'}</p>
+    <h2>통합 연습 비교 기록: {comparison.label}</h2>
+    <p>얼굴·시선과 음성을 함께 실행한 결과입니다. 상태: {summary.incomplete ? '미완료, 오류 포함' : '완료'}</p>
     <dl className="summary-grid">
       <div><dt>음성 평균 추론</dt><dd>{ms(comparison.performance?.speech_rate?.average_inference_ms)}</dd></div>
       <div><dt>시선 평균 추론</dt><dd>{ms(comparison.performance?.gaze?.average_inference_ms)}</dd></div>
       <div><dt>음성 최대 결과 지연</dt><dd>{ms(comparison.performance?.speech_rate?.max_result_age_ms)}</dd></div>
       <div><dt>최대 음성 큐 대기</dt><dd>{comparison.audio_queue_peak ?? '미측정'} 패킷</dd></div>
       <div><dt>교체된 영상 프레임</dt><dd>{comparison.dropped_video_frames ?? '미측정'}개</dd></div>
-      <div><dt>음성 모델 준비 시간</dt><dd>{ms(comparison.load_ms)}{comparison.already_loaded ? ' · 기존 상주 모델' : ''}</dd></div>
+      <div><dt>음성 모델 준비 시간</dt><dd>{ms(comparison.load_ms)}{comparison.already_loaded ? ', 기존 상주 모델' : ''}</dd></div>
     </dl>
     <p>오류: {errors.length ? errors.map(([code, count]) => `${code} ${count}회`).join(' / ') : '보고된 오류 없음'}</p>
     <p>음성 결과 지연은 청크 시작 기준으로 조립·큐·추론 시간을 포함합니다. 네트워크 왕복 시간이나 자막 표시 시간은 아닙니다.</p>

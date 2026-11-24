@@ -32,7 +32,7 @@ test('대본 옆 요약 버튼과 아래 문장별 수정 결과가 표시된다
   assert.equal((markup.match(/묶음 요약 힌트/g)??[]).length,1);
   const pending = renderToStaticMarkup(createElement(PresentationSetup, {...props,isSummarizing:true,
     summaryProgress:{stage:'generating',completed_sentences:1,total_sentences:2,failed_sentences:0}}));
-  assert.match(pending, /Qwen3.5-9B Q4_K_M/);
+  assert.doesNotMatch(pending, /Qwen3.5-9B/);
   assert.match(pending, /원문 2문장 중 1문장 처리/);
   assert.match(pending, /<progress[^>]*max="2"[^>]*value="1"/);
   assert.match(pending, /<button[^>]*disabled=""[^>]*>요약 중/);
