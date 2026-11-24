@@ -2,15 +2,13 @@
 
 import asyncio
 import json
-import os
-import socket
 import time
 from collections.abc import Callable
-from pathlib import Path
 from typing import Any
 
 import httpx
 
+from app.ai.local_llm import LlmSession, LocalLlm, terminate_process
 from app.ai.model_execution import ModelExecution
 from app.core.config import Settings
 from app.core.errors import AppError
@@ -35,6 +33,7 @@ class LocalScriptSummarizer:
     def __init__(self, settings: Settings, execution: ModelExecution | None = None) -> None:
         self.settings = settings
         self.execution = execution
+        self.llm = LocalLlm(settings)
         self.busy = False
         self._process: asyncio.subprocess.Process | None = None
         self._owner: asyncio.Task[Any] | None = None
@@ -77,6 +76,12 @@ class LocalScriptSummarizer:
             items = await asyncio.wait_for(
                 asyncio.shield(inference), timeout=self.settings.summary_timeout_seconds
             )
+        except AppError as exc:
+            if exc.code != "LOCAL_MODEL_UNAVAILABLE":
+                raise
+            raise AppError(
+                "SUMMARY_UNAVAILABLE", "요약 모델과 실행 파일을 준비해 주세요.", 503
+            ) from exc
         except asyncio.TimeoutError as exc:
             raise AppError(
                 "SUMMARY_TIMEOUT", "요약 시간이 초과되었습니다. 다시 시도하세요.", 504
@@ -155,6 +160,11 @@ class LocalScriptSummarizer:
     async def _batch(
         self, client: httpx.AsyncClient, prompt: str, sentences: list[str], start: int, end: int
     ) -> list[dict[str, Any]]:
+        return await self._summarize_batch(LlmSession(client), prompt, sentences, start, end)
+
+    async def _summarize_batch(
+        self, session: LlmSession, prompt: str, sentences: list[str], start: int, end: int
+    ) -> list[dict[str, Any]]:
         schema = {
             "type": "object",
             "properties": {
@@ -186,67 +196,40 @@ class LocalScriptSummarizer:
             "additionalProperties": False,
         }
         items: list[dict[str, Any]] = []
-        text, position, reason = "", None, None
+        text, position = "", None
         decoder = json.JSONDecoder()
-        async with client.stream(
-            "POST",
-            "/v1/chat/completions",
-            json={
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.2,
-                "top_p": 0.8,
-                "top_k": 20,
-                "min_p": 0,
-                "seed": 42,
-                "max_tokens": 1536,
-                "stream": True,
-                "cache_prompt": False,
-                "chat_template_kwargs": {"enable_thinking": False},
-                "response_format": {
-                    "type": "json_schema",
-                    "json_schema": {"name": "summary", "schema": schema},
-                },
-            },
-        ) as response:
-            response.raise_for_status()
-            async for line in response.aiter_lines():
-                if not line.startswith("data: "):
-                    continue
-                if len(line) > 65536:
-                    raise ValueError("Oversized model frame")
-                if line[6:] == "[DONE]":
+
+        def on_delta(delta: str) -> None:
+            nonlocal text, position
+            text += delta
+            if position is None:
+                opening = text.find("[")
+                if opening < 0:
+                    return
+                position = opening + 1
+            while True:
+                while position < len(text) and text[position] in " \r\n\t,":
+                    position += 1
+                if position == len(text) or text[position] == "]":
                     break
-                choice = json.loads(line[6:])["choices"][0]
-                reason = choice.get("finish_reason") or reason
-                text += choice.get("delta", {}).get("content") or ""
-                if len(text) > 32768:
-                    raise ValueError("Oversized model output")
-                if position is None:
-                    opening = text.find("[")
-                    if opening < 0:
-                        continue
-                    position = opening + 1
-                while True:
-                    while position < len(text) and text[position] in " \r\n\t,":
-                        position += 1
-                    if position == len(text) or text[position] == "]":
-                        break
-                    try:
-                        raw, consumed = decoder.raw_decode(text, position)
-                    except json.JSONDecodeError:
-                        break
-                    item = self._group(
-                        raw, sentences, items[-1]["end_sentence"] + 1 if items else start, end
-                    )
-                    items.append(item)
-                    position = consumed
-                    self._completed = item["end_sentence"] + 1
-                    self._total = len(sentences)
-                    self._notify("generating")
-        document = json.loads(text)
+                try:
+                    raw, consumed = decoder.raw_decode(text, position)
+                except json.JSONDecodeError:
+                    break
+                item = self._group(
+                    raw, sentences, items[-1]["end_sentence"] + 1 if items else start, end
+                )
+                items.append(item)
+                position = consumed
+                self._completed = item["end_sentence"] + 1
+                self._total = len(sentences)
+                self._notify("generating")
+
+        document = await session.complete_json(
+            prompt, schema, max_tokens=1536, on_delta=on_delta, schema_name="summary"
+        )
         if (
-            reason != "stop"
-            or not isinstance(document, dict)
+            not isinstance(document, dict)
             or set(document) != {"groups"}
             or not isinstance(document["groups"], list)
             or len(document["groups"]) != len(items)
@@ -257,138 +240,54 @@ class LocalScriptSummarizer:
         return items
 
     async def _run(self, sentences: list[str]) -> list[dict[str, Any]]:
-        server, model = await asyncio.to_thread(self._asset_paths)
-        with socket.socket() as sock:
-            sock.bind(("127.0.0.1", 0))
-            port = sock.getsockname()[1]
-        spawn = asyncio.create_task(
-            asyncio.create_subprocess_exec(
-                server,
-                "-m",
-                model,
-                "-ngl",
-                "999",
-                "--no-repack",
-                "--fit",
-                "off",
-                "-t",
-                "4",
-                "-tb",
-                "4",
-                "-c",
-                "4096",
-                "-np",
-                "1",
-                "--host",
-                "127.0.0.1",
-                "--port",
-                str(port),
-                "--no-cache-prompt",
-                "--cache-ram",
-                "0",
-                "--reasoning",
-                "off",
-                "--chat-template-kwargs",
-                '{"enable_thinking":false}',
-                "--no-webui",
-                "--log-disable",
-                creationflags=0x08000000 if os.name == "nt" else 0,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
-        )
-        # Cancellation may arrive after the OS child exists but before spawn returns its handle.
-        cancelled = False
-        while not spawn.done():
+        async with self.llm.loaded() as session:
             try:
-                await asyncio.shield(spawn)
-            except asyncio.CancelledError:
-                cancelled = True
-        self._process = spawn.result()
-        if cancelled:
-            raise asyncio.CancelledError
-        # Only this short-lived localhost process receives the script; no proxy or logging.
-        async with httpx.AsyncClient(
-            base_url=f"http://127.0.0.1:{port}", timeout=30, trust_env=False
-        ) as client:
-            for _ in range(240):
-                if self._process.returncode is not None:
-                    raise ValueError("Native summary model failed to start")
-                try:
-                    response = await client.get("/health")
-                    if response.status_code == 200 and response.json().get("status") == "ok":
-                        break
-                except httpx.TransportError:
-                    pass
-                await asyncio.sleep(0.25)
-            else:
-                raise asyncio.TimeoutError()
-            items: list[dict[str, Any]] = []
-            self._notify("generating")
-            start = 0
-            while start < len(sentences):
-                # shortcut: no cross-batch groups; add overlap if real scripts need it.
-                end = min(start + 16, len(sentences))
-                while True:
-                    prompt = (
-                        INSTRUCTION
-                        + "\n<발표문>\n"
-                        + "\n".join(f"[{i}] {sentences[i]}" for i in range(start, end))
-                        + "\n</발표문>"
-                    )
-                    tokenized = await client.post(
-                        "/tokenize", json={"content": prompt, "add_special": True}
-                    )
-                    tokenized.raise_for_status()
-                    tokens = tokenized.json()["tokens"]
-                    if not isinstance(tokens, list):
-                        raise ValueError("Invalid tokenizer response")
-                    if len(tokens) <= 2304 or end - start == 1:
-                        break
-                    end = start + (end - start) // 2
-                try:
-                    if len(tokens) > 2304:
-                        raise ValueError("Sentence exceeds context budget")
-                    batch = await self._batch(client, prompt, sentences, start, end)
-                except (ValueError, KeyError, IndexError, TypeError):
-                    batch = [
-                        {
-                            "start_sentence": start,
-                            "end_sentence": end - 1,
-                            "original": " ".join(sentences[start:end]),
-                            "hint": None,
-                            "error": "이 구간 요약 실패: 직접 작성하거나 다시 시도하세요.",
-                        }
-                    ]
-                    self._failed += end - start
-                items.extend(batch)
-                self._completed = end
+                items: list[dict[str, Any]] = []
                 self._notify("generating")
-                start = end
+                start = 0
+                while start < len(sentences):
+                    # shortcut: no cross-batch groups; add overlap if real scripts need it.
+                    end = min(start + 16, len(sentences))
+                    while True:
+                        prompt = (
+                            INSTRUCTION
+                            + "\n<발표문>\n"
+                            + "\n".join(f"[{i}] {sentences[i]}" for i in range(start, end))
+                            + "\n</발표문>"
+                        )
+                        count = await session.count_tokens(prompt)
+                        if count <= 2304 or end - start == 1:
+                            break
+                        end = start + (end - start) // 2
+                    try:
+                        if count > 2304:
+                            raise ValueError("Sentence exceeds context budget")
+                        batch = await self._summarize_batch(session, prompt, sentences, start, end)
+                    except (ValueError, KeyError, IndexError, TypeError):
+                        batch = [
+                            {
+                                "start_sentence": start,
+                                "end_sentence": end - 1,
+                                "original": " ".join(sentences[start:end]),
+                                "hint": None,
+                                "error": "이 구간 요약 실패: 직접 작성하거나 다시 시도하세요.",
+                            }
+                        ]
+                        self._failed += end - start
+                    items.extend(batch)
+                    self._completed = end
+                    self._notify("generating")
+                    start = end
+            finally:
+                # Announce cleanup before loaded() terminates the server on exit.
+                self._notify("cleaning")
         return items
 
-    def _asset_paths(self) -> tuple[str, str]:
-        paths = [Path(self.settings.summary_server_path), Path(self.settings.summary_model_path)]
-        if not all(path.is_file() and path.stat().st_size > 0 for path in paths):
-            raise AppError("SUMMARY_UNAVAILABLE", "요약 모델과 실행 파일을 준비해 주세요.", 503)
-        return str(paths[0].resolve()), str(paths[1].resolve())
-
     async def _stop(self) -> None:
+        # loaded() already reaps its child; this covers a process handed in from elsewhere.
         process = self._process
         if process is not None:
-            if process.returncode is None:
-                try:
-                    process.terminate()
-                except ProcessLookupError:
-                    pass
-            try:
-                await asyncio.wait_for(process.wait(), timeout=5)
-            except asyncio.TimeoutError:
-                try:
-                    process.kill()
-                except ProcessLookupError:
-                    pass
-                await process.wait()
+            await terminate_process(process)
             self._process = None
 
     async def close(self) -> None:
