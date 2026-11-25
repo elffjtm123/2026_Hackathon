@@ -161,6 +161,9 @@ MAX_EVIDENCE_QUOTE_CHARS = 150
 MAX_FEEDBACK_CHARS = 150
 MAX_SUMMARY_ITEM_CHARS = 120
 MAX_SUMMARY_ITEMS = 3
+# A non-zero grade needs a quote of at least this many characters (spaces and punctuation not
+# counted); shorter ones ("모델을") match almost any answer and prove nothing.
+MIN_EVIDENCE_CHARS = 8
 MIN_ANSWER_PROMPT_CHARS = 300  # an answer is cut no further than this to fit the context
 _SUMMARY_KEYS = ("strengths", "improvements", "next_goals")
 
@@ -508,11 +511,14 @@ class InterviewLlm:
         if remaining <= 0:
             return failed, "evaluation_timeout"
         applicable = list(question.rubric_items)
-        answers: dict[EvidenceSource, str] = {"main": main.transcript}
-        if follow_up is not None:
-            answers["follow_up"] = follow_up.transcript
         try:
-            prompt = await self._evaluation_prompt(session, main, follow_up)
+            prompt, cap = await self._evaluation_prompt(session, main, follow_up)
+            # Quotes are checked against the text the prompt showed, not the full transcript: a
+            # quote from the part that was cut out was not read by the model, so it is not
+            # evidence the model found.
+            answers: dict[EvidenceSource, str] = {"main": main.transcript.strip()[:cap]}
+            if follow_up is not None:
+                answers["follow_up"] = follow_up.transcript.strip()[:cap]
             grades, excluded = await asyncio.wait_for(
                 self._call(
                     session,
@@ -544,16 +550,16 @@ class InterviewLlm:
 
     async def _evaluation_prompt(
         self, session: _Session, main: ItemRecord, follow_up: ItemRecord | None
-    ) -> str:
-        """Both answers are cut together until the prompt fits the context; quotes are still
-        checked against the full transcripts."""
+    ) -> tuple[str, int]:
+        """The prompt and the per-answer character cap it uses; both answers are cut together
+        until the prompt fits the context."""
         cap = MAX_ANSWER_PROMPT_CHARS
         while True:
             prompt = _evaluation_prompt(main, follow_up, cap)
             if await session.count_tokens(prompt) <= PROMPT_TOKEN_BUDGET:
-                return prompt
+                return prompt, cap
             if cap <= MIN_ANSWER_PROMPT_CHARS:
-                return prompt
+                return prompt, cap
             cap = max(cap * 2 // 3, MIN_ANSWER_PROMPT_CHARS)
 
     async def _summarize(
@@ -1004,7 +1010,8 @@ def _parse_evaluation(
 
     A malformed reply raises (retried); a reply where no item has valid evidence raises
     `_Invalid` (retried with a hint); a reply where only some items are invalid is returned
-    as is. Grade 0 needs no quote, but a quote that is given must be in the answer it names.
+    as is. Grade 0 needs no quote; a non-zero grade's quote must be at least MIN_EVIDENCE_CHARS long, and
+    every given quote must be in the (shown part of the) answer it names.
     """
     if not isinstance(raw, dict):
         raise ValueError("Invalid evaluation response")
@@ -1024,7 +1031,11 @@ def _parse_evaluation(
         ):
             raise ValueError("Invalid evaluation entry")
         compact_quote = _compact(quote)
-        found = compact_quote in compact_answers[source] if compact_quote else value == 0
+        if value == 0 and not compact_quote:
+            found = True  # nothing was observed, so there is nothing to quote
+        else:
+            long_enough = value == 0 or len(compact_quote) >= MIN_EVIDENCE_CHARS
+            found = long_enough and compact_quote in compact_answers[source]
         if not found:
             excluded.append(item)
             continue

@@ -491,20 +491,26 @@ async def evaluate_interview(interview_id: str, request: Request) -> Any:
         try:
             result = await _evaluate_stored_items(request, interview_id, progress)
             await queue.put({"event": "complete", "data": result})
-        except asyncio.CancelledError:
-            try:
-                queue.put_nowait(
-                    error_frame("INTERVIEW_EVALUATION_CANCELLED", _EVALUATION_CANCELLED)
-                )
-            except asyncio.QueueFull:
-                pass
-            raise
         except AppError as exc:
             await queue.put(error_frame(exc.code, exc.message))
         except Exception:
             await queue.put(error_frame("INTERVIEW_EVALUATION_FAILED", _EVALUATION_FAILED))
 
     producer = _start_evaluation(request, interview_id, produce)
+
+    def end_stream_when_cancelled(done: asyncio.Task[Any]) -> None:
+        # A task cancelled before its first step never runs `produce`, so no terminal frame
+        # would be queued and the stream would wait forever. Any frame after the first
+        # terminal one is never read.
+        if done.cancelled():
+            try:
+                queue.put_nowait(
+                    error_frame("INTERVIEW_EVALUATION_CANCELLED", _EVALUATION_CANCELLED)
+                )
+            except asyncio.QueueFull:
+                pass  # the stream is full of progress frames and ends on the next terminal one
+
+    producer.add_done_callback(end_stream_when_cancelled)
 
     async def stream() -> AsyncIterator[str]:
         try:

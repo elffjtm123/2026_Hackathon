@@ -401,3 +401,31 @@ async def test_delete_cancels_a_running_evaluation_and_waits_for_cleanup(
     # The reservation is free again, so a new evaluation can run.
     fake.block = False
     assert client.get(url(interview_id), headers=ORIGIN).status_code == 200
+
+
+class CancelOnRegister(dict):
+    """Cancels a task the moment it is registered, before it ever takes a step (a DELETE that
+    lands between the start of the evaluation and the first step of its task)."""
+
+    def __setitem__(self, key, task) -> None:
+        super().__setitem__(key, task)
+        task.cancel()
+
+
+async def test_delete_before_the_first_step_still_ends_the_stream(client, fake) -> None:
+    state = client.app.state
+    state.interview_evaluations = CancelOnRegister()
+    interview_id = finished_interview(client)
+    run, _, sent = start_request(client.app, "GET", url(interview_id), b"application/x-ndjson")
+    try:
+        await asyncio.wait_for(run, timeout=3)  # a stream without a terminal line hangs here
+    finally:
+        run.cancel()
+        await asyncio.gather(run, return_exceptions=True)
+    lines = body_of(sent).splitlines()
+    last = json.loads(lines[-1])
+    assert last["event"] == "error"
+    assert last["data"]["code"] == "INTERVIEW_EVALUATION_CANCELLED"
+    assert [json.loads(line)["event"] for line in lines].count("error") == 1
+    assert fake.calls == [] and state.model_execution.owner is None
+    assert not state.interview_store.get(interview_id).evaluating

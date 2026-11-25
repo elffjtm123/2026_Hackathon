@@ -359,3 +359,53 @@ async def test_the_model_name_comes_from_the_settings_when_there_are_some() -> N
     llm.settings = SimpleNamespace(summary_model_path=".models/Qwen3.5-9B-Q4_K_M.gguf")
     result = await interview.evaluate([answered(main_q(), ANSWER)], session())
     assert result.model == "Qwen3.5-9B-Q4_K_M.gguf"
+
+
+async def test_a_short_quote_is_not_valid_evidence_for_a_non_zero_grade() -> None:
+    interview, _ = make()
+    # "모델을" is in the answer but is too short (3 characters) to show anything.
+    fake = session(evaluation=good_eval(reasoning=grade(3, "모델을"), specificity=grade(3)))
+    result = await interview.evaluate([answered(main_q(), ANSWER)], fake)
+    (item,) = result.items
+    assert item.excluded_items == [R.REASONING] and item.partial
+    assert set(item.grades) == {R.SPECIFICITY}
+    # The shortest quote that still counts (8 characters without spaces).
+    fake = session(
+        evaluation=good_eval(reasoning=grade(3, "검출 모델을 직접 학습"), specificity=grade(3))
+    )
+    result = await interview.evaluate([answered(main_q(), ANSWER)], fake)
+    assert result.items[0].excluded_items == []
+
+
+class TokenSession(SchemaSession):
+    """One token per character, so long answers force the prompt to shrink."""
+
+    async def count_tokens(self, prompt: str) -> int:
+        return len(prompt)
+
+
+FILLER = "가" * 4000
+TAIL = "마지막에 덧붙인 결과 확인 방법과 배운 점을 정리했습니다"
+
+
+async def test_long_answers_are_cut_until_the_prompt_fits_the_context() -> None:
+    from app.ai.interview_llm import PROMPT_TOKEN_BUDGET
+
+    interview, _ = make()
+    fake = TokenSession({"evaluation": good_eval(), "summary": SUMMARY})
+    await interview.evaluate([answered(main_q(), ANSWER + FILLER)], fake)
+    prompt = fake.calls[0][1]
+    assert len(prompt) <= PROMPT_TOKEN_BUDGET
+    assert ANSWER in prompt  # the start of the answer is kept
+    assert prompt.count("가") < 1500  # cut below the default cap
+
+
+async def test_a_quote_from_the_part_cut_out_of_the_prompt_is_invalid() -> None:
+    # The model never saw that text, so a quote from it cannot be real evidence.
+    interview, _ = make()
+    evaluation = good_eval(reasoning=grade(3, TAIL), specificity=grade(3))
+    fake = TokenSession({"evaluation": evaluation, "summary": SUMMARY})
+    result = await interview.evaluate([answered(main_q(), ANSWER + FILLER + TAIL)], fake)
+    (item,) = result.items
+    assert item.excluded_items == [R.REASONING] and item.partial
+    assert TAIL not in fake.calls[0][1]
