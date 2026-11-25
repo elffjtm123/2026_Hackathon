@@ -58,6 +58,12 @@ class ModelExecution:
         """True while an offline job owns the models or a session borrows the generation model."""
         return isinstance(self.owner, str) or self._borrower is not None
 
+    @property
+    def realtime_stopped(self) -> bool:
+        """True while a session owns the models but its realtime runtime is not running
+        (suspending, suspended, resuming), i.e. while the generation model may load."""
+        return isinstance(self.owner, UUID) and self._phase != "running"
+
     def reserve_offline(self, kind: OfflineKind) -> None:
         if self.owner is not None:
             if isinstance(self.owner, UUID):

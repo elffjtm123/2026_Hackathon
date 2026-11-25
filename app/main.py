@@ -175,6 +175,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             webrtc=app.state.webrtc,
         )
         app.state.pretrained_pulse = PretrainedPulse(settings.pulse_model_dir)
+        app.state.pretrained_pulse.execution = execution
         pulse_cleanup = asyncio.create_task(app.state.pretrained_pulse.idle_cleanup())
         # Guards the check-then-increment of websocket_counts across concurrent handshakes.
         app.state.websocket_lock = asyncio.Lock()

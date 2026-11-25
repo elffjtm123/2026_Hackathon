@@ -34,9 +34,10 @@ Subscriber = Callable[[RealtimeEvent], Awaitable[None]]
 logger = logging.getLogger(__name__)
 # Audio time between display-only previews of the utterance still being spoken.
 PARTIAL_INTERVAL_MS = 1500
-# The first audio after a round break may be stamped at most this far before the resume (it
-# was captured while the models were coming back); older audio belongs to the break.
-RESUME_AUDIO_TOLERANCE_MS = 1000
+# After a round break, audio is judged by where it sits between the break's start and the
+# resume (see `_stale_audio_before`); in a short break it may be this far behind the resume
+# (capture lag, 200 ms packets stamped at their start, transport).
+RESUME_AUDIO_LAG_MS = 2500
 
 
 def _delivery_counts(text: str) -> tuple[int, int]:
@@ -103,6 +104,7 @@ class SessionPipeline:
         self._break_started_ms = 0
         self._audio_resync = False  # the first audio after a break may skip ahead
         self._resumed_ms = 0
+        self._stale_audio_logged = False
         self._utterance_counter = 0  # utterance ids keep counting across segmenters
         self._drain_lock = asyncio.Lock()
         self.protocol = 1
@@ -252,6 +254,17 @@ class SessionPipeline:
             {"media_type": "audio", "accepted_sequence": media.sequence},
         )
 
+    def _stale_audio_before(self) -> int:
+        """First timestamp the audio after a break may have.
+
+        A client whose sample counter kept running sends audio stamped near the resume, minus
+        its capture lag; one whose counter stalled sends audio stamped near the break's start.
+        The halfway point separates them. In a short break it is never stricter than the
+        resume minus `RESUME_AUDIO_LAG_MS`.
+        """
+        half = self._break_started_ms + (self._resumed_ms - self._break_started_ms) // 2
+        return min(half, self._resumed_ms - RESUME_AUDIO_LAG_MS)
+
     async def accept_media(self, media: MediaPayload) -> None:
         if self.break_state is not None and self.phase in {"running", "suspended"}:
             await self._drop_media_during_break(media)
@@ -274,15 +287,24 @@ class SessionPipeline:
                 {"media_type": "audio", "accepted_sequence": media.sequence},
             )
             return
+        resync = kind == "pcm16" and self._audio_resync
+        if resync and media.timestamp_ms < self._stale_audio_before():
+            # Stamped in the break: the client's sample counter stalled with it. Not an error;
+            # drop it (acked, position remembered) and keep waiting for real-time audio.
+            await self._drop_media_during_break(media)
+            if not self._stale_audio_logged:
+                # The client broke the contract (its sample counter stalled): not an error to
+                # it, but the report must show that this part of the audio was lost.
+                self._stale_audio_logged = True
+                self.incomplete = True
+                logger.warning(
+                    "audio_from_the_break_dropped", extra={"session_id": self.session_id}
+                )
+            return
         if (
             media.timestamp_ms > self.elapsed_ms() + 1000
             or media.timestamp_ms < self.media_timestamps[kind]
         ):
-            self.incomplete = True
-            raise ValueError("INVALID_MEDIA_TIMESTAMP")
-        resync = kind == "pcm16" and self._audio_resync
-        if resync and media.timestamp_ms < self._resumed_ms - RESUME_AUDIO_TOLERANCE_MS:
-            # Samples stamped inside the break: the client's sample counter stopped with it.
             self.incomplete = True
             raise ValueError("INVALID_MEDIA_TIMESTAMP")
         if media.sequence <= last or (
@@ -442,6 +464,7 @@ class SessionPipeline:
         self.partial_last_end_ms = None
         self._audio_resync = True
         self._resumed_ms = now
+        self._stale_audio_logged = False
         self._start_workers()
         self.accepting = True
         self.phase = "running"

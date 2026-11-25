@@ -270,3 +270,19 @@ def test_another_session_cannot_start_during_the_break(client, fast) -> None:
             assert error["data"]["code"] in {"SESSION_BUSY", "OTHER_SESSION_ACTIVE"}
         send_v2(ws, "session.end", 3, session_id)
         completed(ws)
+
+
+def test_the_pulse_model_is_released_when_the_break_begins(client, fast) -> None:
+    interview_id = make_plan(client)
+    llm = use_llm(client, BlockingSession({}))
+    pulse = client.app.state.pretrained_pulse
+    pulse.session = object()  # an ONNX session loaded by round 1
+    with client.websocket_connect(URL) as ws:
+        send_v2(ws, "session.start", 1, data=start_data(interview_id, ["q1"]))
+        session_id = until(ws, "session.ready")["session_id"]
+        send_v2(ws, "calibration.start", 2, session_id)
+        origin = until(ws, "session.running")["data"]["audio_origin_ms"]
+        break_started(ws, client, origin, llm)  # generation is running
+        assert pulse.session is None
+        send_v2(ws, "session.end", 3, session_id)
+        completed(ws)

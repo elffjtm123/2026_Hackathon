@@ -52,6 +52,44 @@ async def terminate_process(process: asyncio.subprocess.Process) -> None:
         await process.wait()
 
 
+async def _read_response(reader: asyncio.StreamReader) -> bytes:
+    """Everything up to EOF (HTTP/1.0 closes the connection), at most MAX_FRAME_CHARS."""
+    data = bytearray()
+    while len(data) < MAX_FRAME_CHARS:
+        chunk = await reader.read(MAX_FRAME_CHARS - len(data))
+        if not chunk:
+            break
+        data.extend(chunk)
+    return bytes(data)
+
+
+async def server_ready(port: int) -> bool:
+    """One /health probe over a plain socket.
+
+    Not httpx: it logs an INFO line per request, and this is polled every 250 ms.
+    """
+    try:
+        reader, writer = await asyncio.wait_for(asyncio.open_connection("127.0.0.1", port), 5)
+    except (OSError, asyncio.TimeoutError):
+        return False
+    try:
+        writer.write(b"GET /health HTTP/1.0\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+        await writer.drain()
+        raw = await asyncio.wait_for(_read_response(reader), 5)
+    except (OSError, asyncio.TimeoutError):
+        return False
+    finally:
+        writer.close()
+    head, _, body = raw.partition(b"\r\n\r\n")
+    if b" 200" not in head.split(b"\r\n", 1)[0]:
+        return False
+    try:
+        document = json.loads(body)
+    except ValueError:
+        return False
+    return isinstance(document, dict) and document.get("status") == "ok"
+
+
 class LlmSession:
     """A ready llama-server; valid only inside the `LocalLlm.loaded()` block that made it."""
 
@@ -196,12 +234,8 @@ class LocalLlm:
                 for _ in range(240):
                     if process.returncode is not None:
                         raise ValueError("Native generation model failed to start")
-                    try:
-                        response = await client.get("/health")
-                        if response.status_code == 200 and response.json().get("status") == "ok":
-                            break
-                    except httpx.TransportError:
-                        pass
+                    if await server_ready(port):
+                        break
                     await asyncio.sleep(0.25)
                 else:
                     raise asyncio.TimeoutError()

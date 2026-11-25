@@ -346,16 +346,65 @@ async def test_the_generation_model_loads_only_while_the_realtime_runtime_is_sto
     assert s.execution.owner is None
 
 
-async def test_audio_stamped_inside_the_break_is_rejected_after_the_resume() -> None:
-    """The client's sample counter must keep running with the session clock through the break."""
-    s = await started()
+@pytest.mark.parametrize("lag_ms", [0, 800, 1300, 2000])
+async def test_a_client_whose_counter_kept_running_is_accepted_whatever_its_capture_lag(
+    lag_ms,
+) -> None:
+    """Capture lags the session clock (it started after session.running) and a 200 ms packet
+    is stamped at its start: the first packet after the resume is that old when it arrives."""
+    s = await started("안녕하세요")
     p = s.pipeline
     await p.suspend()
     p.started_monotonic -= 30
     await p.resume()
-    with pytest.raises(ValueError, match="INVALID_MEDIA_TIMESTAMP"):
-        await p.accept_media(media(p, 2, 20 * 16000, LOUD * 3200))  # origin + 20 s, in the break
-    assert p.incomplete
+    start = max(0, p.elapsed_ms() - p.audio_origin_ms - lag_ms - 200) * 16
+    start -= start % 3200
+    await p.accept_media(media(p, 1, start, LOUD * 8000))
+    await p.accept_media(media(p, 2, start + 8000, QUIET * 8000))
+    await p.audio_queue.join()
+    await p.speech_queue.join()
+    assert not p.incomplete and "error" not in s.events
+    (final,) = s.run.finals  # the round-two answer reaches the interview
+    assert final.start_ms == p.audio_origin_ms + start // 16
+    await p.stop()
+
+
+async def test_audio_from_a_counter_that_stalled_in_the_break_is_dropped_quietly(caplog) -> None:
+    s = await started("안녕하세요")
+    p = s.pipeline
+    await p.suspend()
+    p.started_monotonic -= 30
+    await p.resume()
+    acks = len([e for e in s.events if e == "media.ack"])
+    # Stamped where the break began, 30 s in the past.
+    with caplog.at_level("WARNING", logger="app.realtime.pipeline"):
+        await p.accept_media(media(p, 1, 0, LOUD * 3200))
+        await p.accept_media(media(p, 2, 3200, LOUD * 3200))
+    # Not a client-visible error, but the report shows the contract was broken.
+    assert p.incomplete and "error" not in s.events
+    assert [r.message for r in caplog.records].count("audio_from_the_break_dropped") == 1
+    assert len([e for e in s.events if e == "media.ack"]) == acks + 2  # acked, not queued
+    assert p.audio_queue.empty() and p.segmenter is None
+    start = (p.elapsed_ms() - p.audio_origin_ms - 200) * 16  # real-time audio follows
+    await p.accept_media(media(p, 3, start, LOUD * 8000))
+    await p.accept_media(media(p, 4, start + 8000, QUIET * 8000))
+    await p.audio_queue.join()
+    await p.speech_queue.join()
+    assert [f.text for f in s.run.finals] == ["안녕하세요"]
+    assert s.run.finals[0].start_ms == p.audio_origin_ms + start // 16
+    await p.stop()
+
+
+async def test_a_short_break_is_never_judged_stricter_than_the_capture_lag_allows() -> None:
+    s = await started()
+    p = s.pipeline
+    await p.suspend()
+    p.started_monotonic -= 2  # a 2 s break
+    await p.resume()
+    start = max(0, p.elapsed_ms() - p.audio_origin_ms - 2000) * 16
+    start -= start % 3200
+    await p.accept_media(media(p, 1, start, LOUD * 3200))
+    assert p.next_audio_sample == start + 3200
     await p.stop()
 
 
@@ -364,9 +413,11 @@ async def test_samples_already_dropped_during_the_break_cannot_be_sent_again() -
     p = s.pipeline
     await p.suspend()
     await p.accept_media(media(p, 1, 0, LOUD * 3200))
+    p.started_monotonic -= 30
     await p.resume()
+    again = MediaPayload(p.session_id, p.elapsed_ms() - 100, LOUD * 6400, 2, 0, 3200, "pcm16")
     with pytest.raises(ValueError, match="MEDIA_SEQUENCE_GAP"):
-        await p.accept_media(media(p, 2, 0, LOUD * 3200))
+        await p.accept_media(again)
     await p.stop()
 
 

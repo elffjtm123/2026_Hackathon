@@ -245,3 +245,47 @@ def test_bundled_model_checksum_is_enforced(tmp_path, monkeypatch):
     frames = np.zeros((91, 72, 72, 3), dtype=np.uint8)
     with pytest.raises(ValueError, match="PULSE_MODEL_CHECKSUM_MISMATCH"):
         runner._run(times, frames, "ma_ubfc_tscan")
+
+
+async def test_infer_refuses_to_load_while_the_realtime_models_are_stopped_for_a_break(
+    tmp_path, monkeypatch
+) -> None:
+    from uuid import uuid4
+
+    from app.ai.model_execution import ModelExecution
+    from app.core.errors import AppError
+
+    class Runtime:
+        async def start(self) -> None:
+            pass
+
+        async def stop(self) -> None:
+            pass
+
+    execution = ModelExecution(Runtime())
+    pulse = PretrainedPulse(str(tmp_path))
+    pulse.execution = execution
+    monkeypatch.setattr(pulse, "available", lambda *a: True)
+    monkeypatch.setattr("app.services.pretrained_pulse.read_pulse_packet", lambda *a: (None, None))
+
+    def load(*args):
+        pulse.session = "ONNX"  # the lazy load of _run
+        return {}
+
+    monkeypatch.setattr(pulse, "_run", load)
+    session = uuid4()
+    await execution.start_session(session)
+    await pulse.infer(b"x")  # round 1: fine
+    await pulse.release()
+    await execution.suspend_session(session)  # suspended, not yet borrowing
+    with pytest.raises(AppError) as refused:
+        await pulse.infer(b"x")
+    assert refused.value.code == "INTERVIEW_BUSY" and pulse.session is None
+    async with execution.borrowing(session):  # the generation model is loaded
+        with pytest.raises(AppError):
+            await pulse.infer(b"x")
+        assert pulse.session is None
+    await execution.resume_session(session)
+    await pulse.infer(b"x")  # the realtime models are back
+    assert pulse.session == "ONNX"
+    await execution.stop_session(session)

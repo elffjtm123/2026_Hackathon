@@ -101,6 +101,8 @@ class PretrainedPulse:
         self.request_active = False
         self.last_used = 0.0
         self.loaded_model_id: str | None = None
+        # Set to the ModelExecution: no ONNX session may load while a generation model may.
+        self.execution: Any = None
 
     def paths(self, model_id: str):
         pulse_contract(model_id)
@@ -161,6 +163,13 @@ class PretrainedPulse:
             raise AppError("PULSE_UNAVAILABLE", "맥박 모델이 종료되었습니다.", 503)
         if self.busy:
             raise AppError("PULSE_BUSY", "다른 맥박 입력을 처리 중입니다.", 409)
+        # Checked again here: the router's check ran before the body was read, and a round
+        # break may have begun since (`_run` loads the session lazily).
+        execution = self.execution
+        if execution is not None and (execution.generation_active or execution.realtime_stopped):
+            raise AppError(
+                "INTERVIEW_BUSY", "면접 질문·평가 생성을 마친 뒤 시도해 주세요.", 409
+            )
         # A malformed packet is the client's error whatever the model state, so validate first.
         try:
             times, frames = read_pulse_packet(payload, model_id)
@@ -183,6 +192,13 @@ class PretrainedPulse:
         finally:
             self.busy = False
             self.last_used = time.monotonic()
+
+    async def release(self) -> None:
+        """Drop the loaded ONNX session now (e.g. before a generation model is loaded)."""
+        while self.busy:  # noqa: ASYNC110  (same wait as close())
+            await asyncio.sleep(0.05)
+        self.session = None
+        self.loaded_model_id = None
 
     async def idle_cleanup(self) -> None:
         while not self.closed:

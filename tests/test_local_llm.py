@@ -200,3 +200,43 @@ async def test_repeated_cancellation_waits_for_stubborn_child_to_be_reaped(tmp_p
     with pytest.raises(asyncio.CancelledError):
         await task
     assert_gone(assets[2])
+
+
+async def test_server_ready_probes_health_without_httpx_log_lines(caplog) -> None:
+    import asyncio
+
+    from app.ai.local_llm import server_ready
+
+    body = b'{"status":"ok"}'
+    reply = {"data": b"HTTP/1.0 200 OK\r\nContent-Length: %d\r\n\r\n" % len(body) + body}
+
+    async def serve(reader, writer):
+        await reader.readuntil(b"\r\n\r\n")
+        head, _, rest = reply["data"].partition(b"\r\n\r\n")
+        if reply.get("split"):
+            writer.write(head + b"\r\n\r\n")
+            await writer.drain()
+            await asyncio.sleep(0.05)
+            writer.write(rest)
+        else:
+            writer.write(reply["data"])
+        await writer.drain()
+        writer.close()
+
+    server = await asyncio.start_server(serve, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    try:
+        with caplog.at_level("INFO"):
+            assert await server_ready(port)
+            reply["split"] = True  # headers and body in separate writes
+            assert await server_ready(port)
+            reply["split"] = False
+            reply["data"] = b'HTTP/1.0 503 Unavailable\r\n\r\n{"status":"loading"}'
+            assert not await server_ready(port)
+            reply["data"] = b'HTTP/1.0 200 OK\r\n\r\n{"status":"loading"}'
+            assert not await server_ready(port)
+        assert not [r for r in caplog.records if r.name.startswith("httpx")]
+    finally:
+        server.close()
+        await server.wait_closed()
+    assert not await server_ready(port)  # nothing listens any more
