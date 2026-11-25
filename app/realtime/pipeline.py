@@ -95,6 +95,10 @@ class SessionPipeline:
         self.completed_report: dict[str, Any] | None = None
         # Set only for an interview with questions; fed frames/finals, started when running.
         self.interview: InterviewRun | None = None
+        # Called just before session.completed is sent, so a client reacting to that event
+        # no longer finds the session counted as active (the socket handler's own cleanup
+        # runs a moment later).
+        self.on_completing: Callable[[], None] | None = None
         self.phase = "preparing"
         # Round break: None, "suspending", "suspended" or "resuming" (see suspend()).
         self.break_state: str | None = None
@@ -531,6 +535,8 @@ class SessionPipeline:
                     name: module.model_dump()
                     for name, module in self.execution.runtime.modules.items()
                 }
+            if self.on_completing is not None:
+                self.on_completing()
             await self.emit("session.completed", self.elapsed_ms(), data)
             return report
 

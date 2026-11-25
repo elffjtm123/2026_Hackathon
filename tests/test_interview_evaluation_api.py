@@ -429,3 +429,30 @@ async def test_delete_before_the_first_step_still_ends_the_stream(client, fake) 
     assert [json.loads(line)["event"] for line in lines].count("error") == 1
     assert fake.calls == [] and state.model_execution.owner is None
     assert not state.interview_store.get(interview_id).evaluating
+
+
+def test_a_completed_session_no_longer_blocks_the_evaluation_request(
+    client, fake, monkeypatch
+) -> None:
+    """The client may call the API the moment it receives session.completed, while the socket
+    handler is still finishing (its cleanup removes the session from `live_sessions` later)."""
+    from app.realtime.pipeline import SessionPipeline
+    from tests.test_session_flow import send_v2
+
+    stop = SessionPipeline.stop
+
+    async def slow_cleanup(self, *args, **kwargs):
+        result = await stop(self, *args, **kwargs)
+        await asyncio.sleep(0.5)  # the handler's finally runs this long after session.completed
+        return result
+
+    monkeypatch.setattr(SessionPipeline, "stop", slow_cleanup)
+    with client.websocket_connect("/api/v1/ws/practice-demo?protocol=2") as ws:
+        send_v2(ws, "session.start", 1, data={"settings": {"gaze_enabled": False}})
+        ready = ws.receive_json()
+        assert client.get(url("missing"), headers=ORIGIN).status_code == 409  # still practicing
+        send_v2(ws, "session.end", 2, ready["session_id"])
+        while ws.receive_json()["event"] != "session.completed":
+            pass
+        response = client.get(url("missing"), headers=ORIGIN)
+        assert (response.status_code, code(response)) == (404, "INTERVIEW_NOT_FOUND")

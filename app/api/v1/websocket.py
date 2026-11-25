@@ -287,7 +287,9 @@ async def _v2_session(
                             stored_settings if stored_settings is not None else analysis_settings
                         )
                         pipeline.set_audio_settings(raw_audio_settings)
-                        websocket.app.state.live_sessions.add(session_id)
+                        live_sessions = websocket.app.state.live_sessions
+                        live_sessions.add(session_id)
+                        pipeline.on_completing = lambda: live_sessions.discard(session_id)
                         live_registered = True
                         await pipeline.prepare()
 
@@ -568,7 +570,9 @@ async def _practice_demo(websocket: WebSocket) -> None:
             await websocket.send_json(feedback)
 
     pipeline.subscribe(subscriber_id, send)
-    websocket.app.state.live_sessions.add(session_id)
+    live_sessions = websocket.app.state.live_sessions
+    live_sessions.add(session_id)
+    pipeline.on_completing = lambda: live_sessions.discard(session_id)
     try:
         await pipeline.start()
         await pipeline.emit("session.ready", pipeline.elapsed_ms(), {"transport": "practice-demo"})
