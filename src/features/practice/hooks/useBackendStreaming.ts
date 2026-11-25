@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, type RefObject } from 'react';
 import workletUrl from '../pcm-capture.worklet.ts?worker&url';
 import { captureSize } from '../sessionLifecycle';
 import type { MediaPacket } from '../../../lib/mediaProtocol';
+import { createAudioPacketForwarder } from '../audioPackets';
 
 type Options = {
   isActive: boolean; captureAudio: boolean; stream: MediaStream | null; audioContext: AudioContext | null;
@@ -47,6 +48,7 @@ export function useBackendStreaming({isActive, captureAudio, stream, audioContex
   useEffect(() => {
     if (!captureAudio || !stream || !audioContext) return;
     let stopped = false, sequence = 0;
+    const forward = createAudioPacketForwarder(packet => {sequence = packet.sequence; sendAudioPacket(packet);});
     let node: AudioWorkletNode | null = null;
     let source: MediaStreamAudioSourceNode | null = null;
     let gain: GainNode | null = null;
@@ -62,8 +64,7 @@ export function useBackendStreaming({isActive, captureAudio, stream, audioContex
       node.port.onmessage = (message: MessageEvent<{event: string; startSample: number; sampleCount: number; payload: ArrayBuffer}>) => {
         if (message.data.event === 'flushed') {flushDone?.(); return;}
         try {
-          sendAudioPacket({sequence: ++sequence, startSample: message.data.startSample,
-            sampleCount: message.data.sampleCount, payload: message.data.payload});
+          forward(message.data);
         } catch (error) {cleanup(); onError(error as Error);}
       };
       source.connect(node); node.connect(gain); gain.connect(audioContext.destination);

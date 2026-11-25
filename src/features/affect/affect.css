@@ -43,6 +43,9 @@
 .pulse-reference svg { display: block; width: 100%; max-width: 440px; }
 .pulse-reference text { fill: var(--color-muted); font-size: 10px; }
 .pulse-reference-line { fill: none; stroke: var(--color-muted); stroke-width: 2; }
+.pulse-reference-break { fill: var(--color-paper-3); }
+.pulse-reference-legend { display: inline-block; width: 12px; height: 12px; margin-right: var(--space-xs); border: 1px solid var(--color-rule); background: var(--color-paper-3); vertical-align: -1px; }
+.pulse-reference-dot.is-break { fill: var(--color-ink-2); }
 .pulse-reference-dot { fill: var(--light); stroke: var(--color-ink-2); stroke-width: 2; }
 @media (max-width: 45rem) { .affect-layout { grid-template-columns: minmax(0, 1fr); } .affect-chart svg { margin: auto; } }
 @media (prefers-reduced-motion: reduce) { .affect-time { transition: none; } }

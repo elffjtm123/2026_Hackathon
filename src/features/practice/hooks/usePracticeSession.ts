@@ -124,6 +124,7 @@ export function usePracticeSession(initialMode: PracticeMode = 'presentation') {
     elapsedSeconds,
     feedbackState,
     summary,
+    completionReport,
     startSession,
     endSession,
     completeSession,

@@ -1,4 +1,11 @@
 import type { PracticeMode, PresentationFeatureSettings, SessionCompletionReport } from "./types";
+import { isRecordingPhase, type SessionPhase } from '../../lib/realtimeProtocol.ts';
+
+// Audio is captured from running until the report is requested. A round break does not change the
+// client phase, so capture (and its sample counter) runs straight through it.
+export function captureAudioWanted(phase: SessionPhase, connection: string): boolean {
+  return isRecordingPhase(phase) && connection === 'connected';
+}
 
 // Auto gain control flattens loudness, which the delivery analysis measures. Echo cancellation and
 // noise suppression stay at browser defaults.
@@ -11,10 +18,18 @@ export function audioSettingsOf(stream: Pick<MediaStream, 'getAudioTracks'> | nu
   return typeof applied === 'boolean' ? { autoGainControl: applied } : undefined;
 }
 
+// A server `error` event ends the session unless it only reports something that was handled. A failed
+// round break is followed by `interview.finished`, so the session still has to end normally.
+const NON_FATAL_ERRORS = ['CALIBRATION_TIMEOUT', 'INTERVIEW_ROUND_BREAK_FAILED'];
+export const isFatalServerError = (code: string) => !NON_FATAL_ERRORS.includes(code);
+
+export type InterviewStart = {interview_id: string; question_ids: string[]};
+
 export function sessionStartData(mode: PracticeMode, settings: PresentationFeatureSettings,
-    script: string | undefined, timeLimitSeconds: number | undefined) {
+    script: string | undefined, timeLimitSeconds: number | undefined, interview?: InterviewStart | null) {
   return {
     mode,
+    ...(mode === 'interview' && interview ? {interview} : {}),
     settings: {karaoke_guide_enabled: settings.karaokeGuideEnabled, delivery_enabled: settings.deliveryEnabled},
     ...(mode === 'presentation' && script ? {script, time_limit_seconds: timeLimitSeconds} : {}),
   };

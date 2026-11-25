@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { PracticeMode } from '../types';
-import { audioSettingsOf, completePracticeSession } from '../sessionLifecycle';
+import { audioSettingsOf, completePracticeSession, type InterviewStart } from '../sessionLifecycle';
 import type { usePracticeSession } from './usePracticeSession';
 import type { useUserMedia } from './useUserMedia';
 import type { useFeedbackSocket } from './useFeedbackSocket';
@@ -15,12 +15,13 @@ type Options = {
   isSummaryPending: () => boolean;
   onBeforeStart: () => void;
   onActivityChange?: (busy: boolean) => void;
+  interview?: InterviewStart | null;
 };
 
 // Start → prepare → calibrate → run → complete, including cancellation, socket failure and the
 // presentation time limit. A stale start (generation changed) never touches the newer attempt.
 export function usePracticeLifecycle({session, media, socket, flushStreaming, script, timeLimitSeconds,
-  isSummaryPending, onBeforeStart, onActivityChange}: Options) {
+  isSummaryPending, onBeforeStart, onActivityChange, interview}: Options) {
   const [isStarting, setIsStarting] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
   const [operationError, setOperationError] = useState<string | null>(null);
@@ -41,7 +42,7 @@ export function usePracticeLifecycle({session, media, socket, flushStreaming, sc
       const mediaReady = media.startMedia();
       const audioSettings = mediaReady.then(audioSettingsOf, () => undefined);
       const ready = socket.connect(nextSessionId, session.mode, session.featureSettings, script,
-        timeLimitSeconds, audioSettings);
+        timeLimitSeconds, audioSettings, interview);
       await Promise.all([mediaReady, ready]);
       if (generation !== generationRef.current) return;
       socket.startCalibration();
@@ -53,9 +54,11 @@ export function usePracticeLifecycle({session, media, socket, flushStreaming, sc
     } finally {
       if (generation === generationRef.current) setIsStarting(false);
     }
-  }, [isSummaryPending, onActivityChange, session, onBeforeStart, media, socket, script, timeLimitSeconds]);
+  }, [isSummaryPending, onActivityChange, session, onBeforeStart, media, socket, script, timeLimitSeconds, interview]);
 
-  const end = useCallback(async () => {
+  // `incomplete` marks a stop by the user (an interview that was not run to its last question).
+  const end = useCallback(async (options?: {incomplete?: boolean}) => {
+    const incomplete = options?.incomplete === true;
     if (isStarting && !session.isActive) {
       generationRef.current++; setIsStarting(false); media.stopMedia(); socket.disconnect(); return;
     }
@@ -70,7 +73,7 @@ export function usePracticeLifecycle({session, media, socket, flushStreaming, sc
       }
       if (session.phase === 'calibrating') {
         media.stopMedia();
-        const report = await socket.finish(session.sessionId);
+        const report = await socket.finish(session.sessionId, incomplete);
         session.completeSession(report);
         socket.disconnect();
         return;
@@ -78,7 +81,7 @@ export function usePracticeLifecycle({session, media, socket, flushStreaming, sc
       const report = await completePracticeSession({
         flushMedia: flushStreaming,
         closeMedia: media.stopMedia,
-        requestCompletion: () => socket.finish(session.sessionId!),
+        requestCompletion: () => socket.finish(session.sessionId!, incomplete),
         closeSocket: socket.disconnect,
       });
       session.completeSession(report);

@@ -5,7 +5,9 @@ import type {PracticeSummary} from '../../lib/realtimeProtocol';
 
 export type FaceSample = {time:number; eyeWide:number};
 export type PulseSample = {time:number; bpm:number};
-export type SessionSignals = {faces:FaceSample[]; pulses:PulseSample[]};
+export type TimeSpan = {startMs:number; endMs:number};
+// `breaks` are the round-break spans of an interview (session ms); the break is shown, never cut out.
+export type SessionSignals = {faces:FaceSample[]; pulses:PulseSample[]; breaks?:TimeSpan[]; endMs?:number};
 const finite=(v:unknown):v is number=>typeof v==='number'&&Number.isFinite(v);
 const clamp=(v:number)=>Math.max(-1,Math.min(1,v));
 const mean=(v:number[])=>v.reduce((a,b)=>a+b,0)/Math.max(1,v.length);
@@ -35,7 +37,25 @@ export class SessionSignalRecorder {
     this.lastPulse=key;this.data.pulses.push({time:now-age*1000,bpm:result.bpm});
     this.data.pulses=this.data.pulses.slice(-7200);
   }
-  snapshot():SessionSignals{return {faces:[...this.data.faces],pulses:[...this.data.pulses]};}
+  snapshot(breaks:TimeSpan[]=[],endMs?:number):SessionSignals{return {faces:[...this.data.faces],pulses:[...this.data.pulses],breaks:breaks.map(b=>({...b})),endMs};}
+}
+
+export type PulseSeries={samples:{timeMs:number;bpm:number;inBreak:boolean}[];breaks:TimeSpan[];endMs:number};
+const PULSE_BUCKET_MS=5000;
+// Pulse estimates in time order, one point per 5 s bucket (median bpm and time), flagged when the
+// point falls in a break. All times are on the session clock, like the break spans; the axis ends at
+// the snapshot's session time or, failing that, the last sample or break. The report's `duration_ms`
+// is a different clock (it leaves out preparation, calibration and breaks) and is never used here.
+export function pulseSeries(signals:SessionSignals):PulseSeries{
+  const breaks=(signals.breaks??[]).map(b=>({...b}));
+  const buckets=new Map<number,PulseSample[]>();
+  for(const p of signals.pulses){const key=Math.floor(p.time/PULSE_BUCKET_MS);buckets.set(key,[...(buckets.get(key)??[]),p]);}
+  const samples=[...buckets.entries()].sort((a,b)=>a[0]-b[0]).map(([,group])=>{
+    const timeMs=median(group.map(p=>p.time));
+    return {timeMs,bpm:median(group.map(p=>p.bpm)),inBreak:breaks.some(b=>timeMs>=b.startMs&&timeMs<b.endMs)};
+  });
+  const endMs=Math.max(signals.endMs??0,0,...samples.map(s=>s.timeMs),...breaks.map(b=>b.endMs));
+  return {samples,breaks,endMs};
 }
 
 export type ActivationLevel='higher'|'similar'|'lower';

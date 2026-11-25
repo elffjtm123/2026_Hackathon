@@ -6,6 +6,8 @@ type FeedbackPanelProps = {
   connectionStatus: ConnectionStatus;
   feedback: FeedbackState;
   socketError: string | null;
+  // The script-match card has no meaning without a script, so interviews turn it off.
+  showPronunciation?: boolean;
 };
 
 const statusLabels: Record<ConnectionStatus, string> = {
@@ -20,6 +22,7 @@ export function FeedbackPanel({
   connectionStatus,
   feedback,
   socketError,
+  showPronunciation = true,
 }: FeedbackPanelProps) {
   return (
     <section className="side-panel" aria-label="최신 피드백">
@@ -71,7 +74,7 @@ export function FeedbackPanel({
       ) : (
         <p className="muted-text">세션을 시작하면 피드백이 표시됩니다.</p>
       )}
-      <div className="feedback-detail">
+      {showPronunciation ? <div className="feedback-detail">
         <div>
           <span className="label">발음 명료도, 대본 일치도 추정</span>
           <strong>{feedback.pronunciation?.pronunciation?.accuracy == null ? '미측정'
@@ -79,7 +82,7 @@ export function FeedbackPanel({
           <p>{feedback.pronunciation?.pronunciation?.message
             ?? '대본과 실제 STT 결과가 있어야 추정합니다. 음향학적 발음 정확도는 아닙니다.'}</p>
         </div>
-      </div>
+      </div> : null}
     </section>
   );
 }

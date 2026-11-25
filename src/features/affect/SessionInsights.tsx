@@ -1,7 +1,7 @@
 import {useEffect,useMemo,useRef,useState} from 'react';
 import type {PracticeSummary} from '../../lib/realtimeProtocol';
-import {analyzeActivation,BASELINE_MIN_WINDOWS,BASELINE_START_MS,coachingFor,
-  type ActivationAnalysis,type ActivationPoint,type SessionSignals} from './analysis';
+import {analyzeActivation,BASELINE_MIN_WINDOWS,BASELINE_START_MS,coachingFor,pulseSeries,
+  type ActivationAnalysis,type SessionSignals} from './analysis';
 import './affect.css';
 
 const W=360,H=200,PAD=34,MID=H/2,AMP=70;
@@ -33,18 +33,24 @@ function ActivationChart({analysis,selected,onSelect}:{analysis:ActivationAnalys
 }
 
 // Separate chart and scale: rPPG is unvalidated and is never combined with the voice result.
-function PulseReference({points}:{points:ActivationPoint[]}){
-  const values=points.filter(p=>p.pulse.bpm!==null);
+// A round break is shaded, not cut out: the pulse is measured through it.
+function PulseReference({signals}:{signals:SessionSignals}){
+  const series=useMemo(()=>pulseSeries(signals),[signals]);
+  const values=series.samples;
   if(!values.length)return <p className="affect-note">맥박 추정 추세: 이번 연습에서 유효한 추정값이 없습니다.</p>;
-  const end=Math.max(1,...points.map(p=>p.endMs)),lo=Math.min(...values.map(p=>p.pulse.bpm!))-5,hi=Math.max(...values.map(p=>p.pulse.bpm!))+5;
-  const x=(p:ActivationPoint)=>PAD+(W-PAD-8)*((p.startMs+p.endMs)/2)/end,y=(bpm:number)=>12+(76-12)*(hi-bpm)/(hi-lo);
+  const end=Math.max(1,series.endMs),lo=Math.min(...values.map(p=>p.bpm))-5,hi=Math.max(...values.map(p=>p.bpm))+5;
+  const x=(ms:number)=>PAD+(W-PAD-8)*Math.min(ms,end)/end,y=(bpm:number)=>12+(76-12)*(hi-bpm)/(hi-lo);
   return <div className="pulse-reference"><h3>맥박 추정 추세 (참고용·미검증)</h3>
-    <svg viewBox={`0 0 ${W} 96`} role="img" aria-label="구간별 맥박 추정값, 참고용·미검증">
+    <svg viewBox={`0 0 ${W} 96`} role="img" aria-label="시간에 따른 맥박 추정값, 참고용·미검증">
+      {series.breaks.map((b,i)=><g key={i}><rect x={x(b.startMs)} y={8} width={Math.max(2,x(b.endMs)-x(b.startMs))} height={72} className="pulse-reference-break"/>
+        <title>{`${seconds(b.startMs)}–${seconds(b.endMs)}초, 라운드 휴식`}</title></g>)}
       <text x={PAD-4} y={16} textAnchor="end">{hi.toFixed(0)}</text><text x={PAD-4} y={80} textAnchor="end">{lo.toFixed(0)}</text>
-      <path d={values.map((p,i)=>`${i?'L':'M'}${x(p)} ${y(p.pulse.bpm!)}`).join('')} className="pulse-reference-line"/>
-      {values.map((p,i)=><circle key={i} cx={x(p)} cy={y(p.pulse.bpm!)} r="4" className="pulse-reference-dot">
-        <title>{`${seconds(p.startMs)}–${seconds(p.endMs)}초, ${p.pulse.bpm!.toFixed(0)} BPM (추정 ${p.pulse.count}개)`}</title></circle>)}
+      <path d={values.map((p,i)=>`${i?'L':'M'}${x(p.timeMs)} ${y(p.bpm)}`).join('')} className="pulse-reference-line"/>
+      {values.map((p,i)=><circle key={i} cx={x(p.timeMs)} cy={y(p.bpm)} r="3.5" className={`pulse-reference-dot${p.inBreak?' is-break':''}`}>
+        <title>{`${seconds(p.timeMs)}초, ${p.bpm.toFixed(0)} BPM${p.inBreak?' (라운드 휴식 중)':''}`}</title></circle>)}
+      <text x={PAD} y={94}>0초</text><text x={W-8} y={94} textAnchor="end">{seconds(end)}초</text>
     </svg>
+    {series.breaks.length>0&&<p className="affect-note"><span className="pulse-reference-legend" aria-hidden="true"/>음영 구간은 라운드 휴식입니다. 휴식 중에도 맥박은 계속 측정했고, 말하기 분석에서만 이 구간을 뺍니다.</p>}
     <p className="affect-note">카메라 맥박 추정은 정확도가 검증되지 않았습니다. 목소리 활성도 계산에 쓰지 않고, 화면에서만 보여 주며 JSON 내려받기에도 넣지 않습니다.</p></div>;
 }
 
@@ -77,7 +83,7 @@ export function SessionInsights({summary,signals}: {summary:PracticeSummary;sign
         <li>맥박 추정값, 시선 이탈, 습관어는 목소리 활성도 계산에 쓰지 않습니다.</li>
       </ul></details>
     </div></div>
-    <PulseReference points={analysis.points}/>
+    <PulseReference signals={signals}/>
     {analysis.points.length>0&&<details><summary>구간별 결과와 측정 부족 이유</summary><div className="affect-table"><table><thead><tr><th>구간</th><th>결과</th><th>음높이 변화</th><th>속도 변화</th><th>음량 변화</th><th>표정 관찰</th><th>부족한 근거</th></tr></thead>
       <tbody>{analysis.points.map((p,i)=><tr key={i}><td><button className="affect-time" onClick={()=>setSelected(i)}>{seconds(p.startMs)}~{seconds(p.endMs)}초{p.inBaseline?', 기준':''}</button></td>
         <td>{p.label}</td><td>{signed(p.evidence.f0Semitones,'반음')}</td><td>{percent(p.evidence.rateChange)}</td>

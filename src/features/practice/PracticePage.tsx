@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { FeatureToggles } from "./components/FeatureToggles";
 import { InterviewContent } from "./components/InterviewContent";
 import { LiveStage } from "./components/LiveStage";
@@ -16,7 +16,14 @@ import { useSessionSignals } from "./hooks/useSessionSignals";
 import { DataNotes } from "./components/DataNotes";
 import { practiceStage, showPageSocketError } from "./practiceStage";
 import {selectVisibleFeedback} from './feedbackState';
-import {isRecordingPhase} from '../../lib/realtimeProtocol';
+import {captureAudioWanted} from './sessionLifecycle';
+import {InterviewSetup} from '../interview/InterviewSetup';
+import {StoredResultView} from '../interview/StoredResultView';
+import {canReplay, interviewScreen} from '../interview/interviewState';
+import {browserStorage, deleteResult, loadResults, type StoredResult} from '../interview/storage';
+import {useInterviewResult} from '../interview/useInterviewResult';
+import {useInterviewRun} from '../interview/useInterviewRun';
+import {useInterviewSetup} from '../interview/useInterviewSetup';
 import { readSessionValue } from './sessionValue';
 import { usePulseEstimate } from '../pulse/usePulseEstimate';
 import { pulseResearchCaution } from '../pulse/pulseReport';
@@ -28,11 +35,14 @@ export function PracticePage({onActivityChange}: {onActivityChange?: (busy: bool
   const media = useUserMedia();
   const presentationVideo = useRef<HTMLVideoElement | null>(null);
   const script = usePresentationScript(session.mode);
-  const socket = useFeedbackSocket(session.receiveFeedback, session.applyPhase);
-  const signals = useSessionSignals(session.phase, socket.sessionTime, session.summary?.sessionId ?? null);
+  const interviewRun = useInterviewRun();
+  const interviewSetup = useInterviewSetup();
+  const socket = useFeedbackSocket(session.receiveFeedback, session.applyPhase, interviewRun.receiveEvent);
+  const runBreaks = useRef(interviewRun.run.breaks); runBreaks.current = interviewRun.run.breaks;
+  const signals = useSessionSignals(session.phase, socket.sessionTime, session.summary?.sessionId ?? null, () => runBreaks.current);
   const streaming = useBackendStreaming({
     isActive: ['calibrating', 'running', 'draining'].includes(session.phase) && socket.status === "connected",
-    captureAudio: isRecordingPhase(session.phase) && socket.status === 'connected',
+    captureAudio: captureAudioWanted(session.phase, socket.status),
     stream: media.stream,
     videoRef: presentationVideo,
     audioContext: media.audioContext,
@@ -49,7 +59,7 @@ export function PracticePage({onActivityChange}: {onActivityChange?: (busy: bool
     faceFeatures: {enabled: true, onResult: signals.receiveFaceFeatures, sessionTime: socket.sessionTime}});
   const lifecycle = usePracticeLifecycle({session, media, socket, flushStreaming: streaming.stopStreaming,
     script: script.script, timeLimitSeconds: script.timeLimitSeconds, isSummaryPending: script.isSummaryPending,
-    onBeforeStart: signals.resetRecording, onActivityChange});
+    onBeforeStart: signals.resetRecording, onActivityChange, interview: interviewSetup.start});
   const {locked, isStarting, isStopping, operationError, completedMode} = lifecycle;
   const busy = locked || script.isSummarizing;
   useEffect(() => { onActivityChange?.(busy); return () => onActivityChange?.(false); }, [busy, onActivityChange]);
@@ -62,8 +72,35 @@ export function PracticePage({onActivityChange}: {onActivityChange?: (busy: bool
   const visibleFeedback = selectVisibleFeedback(session.feedbackState, feedbackNow);
   const stage = practiceStage({locked, hasSummary: !!session.summary});
   const interview = session.mode === "interview";
-  const socketErrorShown = showPageSocketError({error: socket.error, stage, interview,
-    interviewReport: completedMode === "interview" && !!session.summary, operationError});
+  // A session that ended before its first question (start cancelled, connection lost) has no result:
+  // the server gives the plan back, so the screen returns to the question list.
+  const [reportDismissed, setReportDismissed] = useState(false);
+  const [viewingId, setViewingId] = useState<string | null>(null);
+  const [pastResults, setPastResults] = useState<StoredResult[]>(() => loadResults());
+  const {report: interviewReport, showSetup, planSpent} = interviewScreen({locked, completed: completedMode === "interview",
+    hasSummary: !!session.summary, asked: interviewRun.run.status !== "idle", dismissed: reportDismissed});
+  useEffect(() => { if (showSetup) setPastResults(loadResults()); }, [showSetup]);
+  const endRef = useRef<() => void>(() => undefined);
+  endRef.current = () => { void lifecycle.end(); };
+  const onFinished = useCallback(() => endRef.current(), []);
+  const interviewResult = useInterviewResult({run: interviewRun.run, plan: interviewSetup.plan, chosenIds: interviewSetup.chosen,
+    summary: interviewReport ? session.summary : null, items: session.completionReport?.interviewItems ?? [], onFinished});
+  const startInterview = () => {
+    if (!interviewSetup.start || locked || planSpent) return;
+    interviewRun.reset(); interviewResult.reset(); setReportDismissed(false); setViewingId(null);
+    void lifecycle.start();
+  };
+  const newInterview = () => {
+    interviewSetup.resetPlan(); interviewRun.reset(); interviewResult.reset(); setReportDismissed(true);
+  };
+  const replay = () => {
+    const question = interviewRun.run.question;
+    if (!question || !canReplay(interviewRun.run)) return;
+    try { socket.sendInterviewReplay(question.id); interviewRun.markReplayRequested(); } catch { /* the socket reports the lost connection */ }
+  };
+  const viewing = pastResults.find(r => r.interview_id === viewingId) ?? null;
+  const socketErrorShown = showPageSocketError({error: socket.error, stage, interview: interview && !showSetup,
+    interviewReport, operationError});
 
   const setup = <PresentationSetup
     script={script.script}
@@ -111,9 +148,10 @@ export function PracticePage({onActivityChange}: {onActivityChange?: (busy: bool
         isStopping={isStopping}
         elapsedSeconds={session.elapsedSeconds}
         onModeChange={session.setMode}
-        onStart={lifecycle.start}
-        onEnd={lifecycle.end}
+        onStart={interview ? startInterview : lifecycle.start}
+        onEnd={interview ? () => { void lifecycle.end({incomplete: true}); } : lifecycle.end}
         startBlocked={script.isSummarizing}
+        startDisabled={interview && (!interviewSetup.start || planSpent)}
       />
     <main className={`practice-shell${interview ? " practice-shell--interview" : ""}`}>
       <div className="screen">
@@ -123,18 +161,32 @@ export function PracticePage({onActivityChange}: {onActivityChange?: (busy: bool
         {socketErrorShown ? <p className="error-banner" role="alert">{socket.error}</p> : null}
 
         {interview ? <>
-          <SessionStatus phase={session.phase} connectionStatus={socket.status} onRecalibrate={socket.startCalibration} />
-          <InterviewContent
-            stream={media.stream}
-            feedback={visibleFeedback}
-            connectionStatus={socket.status}
-            socketError={socket.error}
-            isRunning={session.isActive}
-            isStopping={isStopping}
-            onEnd={lifecycle.end}
-            summary={completedMode === "interview" ? session.summary : null}
-            videoRef={presentationVideo}
-          />
+          {showSetup ? (viewing ? <StoredResultView result={viewing} onBack={() => setViewingId(null)}
+            onDelete={() => { deleteResult(browserStorage(), viewing.interview_id); setViewingId(null); setPastResults(loadResults()); }} />
+            : <InterviewSetup setup={interviewSetup} disabled={isStarting || isStopping} onStart={startInterview}
+              pastResults={pastResults} onOpenResult={setViewingId}
+              onDeleteResult={id => { deleteResult(browserStorage(), id); setPastResults(loadResults()); }} />) : <>
+            <SessionStatus phase={session.phase} connectionStatus={socket.status} onRecalibrate={socket.startCalibration} />
+            <InterviewContent
+              stream={media.stream}
+              feedback={visibleFeedback}
+              connectionStatus={socket.status}
+              socketError={socket.error}
+              isRunning={session.isActive}
+              isStopping={isStopping}
+              summary={interviewReport ? session.summary : null}
+              videoRef={presentationVideo}
+              run={interviewRun.run}
+              now={feedbackNow}
+              onReplay={replay}
+              reportItems={session.completionReport?.interviewItems ?? []}
+              reportQuestions={interviewSetup.plan?.questions ?? []}
+              evaluation={interviewResult.evaluation.state}
+              onCancelEvaluation={() => { void interviewResult.evaluation.cancel(); }}
+              onRetryEvaluation={interviewSetup.plan ? () => { void interviewResult.evaluation.start(interviewSetup.plan!.interview_id); } : undefined}
+              onNewInterview={newInterview}
+            />
+          </>}
           <div className="live-assist__notes"><p className="pulse-caution">{pulseResearchCaution}</p><DataNotes pulseMode={pulseEstimate.modeState.mode} /></div>
           {guide}
         </> : stage === 'live' ? <>
@@ -164,7 +216,7 @@ export function PracticePage({onActivityChange}: {onActivityChange?: (busy: bool
           </section>
         </> : prepare}
 
-        {interview && session.summary && signals.recorded ? <SessionInsights summary={session.summary} signals={signals.recorded} /> : null}
+        {interview && !showSetup && interviewReport && session.summary && signals.recorded ? <SessionInsights summary={session.summary} signals={signals.recorded} /> : null}
       </div>
     </main>
     </>

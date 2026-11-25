@@ -126,7 +126,7 @@ button[aria-busy="true"] { cursor: progress; }
 /* Practice phase */
 .live-stage { display: grid; grid-template-columns: minmax(0, 1fr) var(--side-w); gap: var(--gap-columns); align-items: start; }
 .live-stage__main { display: grid; gap: var(--space-sm); min-width: 0; }
-.video-stage { position: relative; overflow: hidden; aspect-ratio: 16 / 9; min-height: 280px; max-height: 72dvh; border-radius: var(--radius-card); background: var(--color-ink); }
+.video-stage { position: relative; overflow: hidden; aspect-ratio: 16 / 9; width: 100%; min-width: 0; min-height: 280px; max-height: 72dvh; border-radius: var(--radius-card); background: var(--color-ink); }
 .video-preview { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
 .video-placeholder { position: absolute; inset: 0; display: grid; place-items: center; color: var(--color-paper-3); font-weight: 500; }
 
@@ -204,7 +204,8 @@ button[aria-busy="true"] { cursor: progress; }
 }
 @media (max-width: 40rem) {
   .summary-grid, .interview-report .summary-grid { grid-template-columns: minmax(0, 1fr); }
-  .video-stage { aspect-ratio: 4 / 3; }
+  /* min-height 280px with a 4:3 box would force the box 373px wide: 30px past a 343px column at 375px */
+  .video-stage { aspect-ratio: 4 / 3; min-height: 0; }
   .feedback-overlay { left: var(--space-xs); bottom: var(--space-xs); width: calc(100% - var(--space-md)); }
   .presentation-pulse-overlay { top: var(--space-xs); right: var(--space-xs); }
   .karaoke-line, .keyword-hints { font-size: var(--text-lg); }

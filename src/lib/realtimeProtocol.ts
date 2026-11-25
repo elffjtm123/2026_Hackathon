@@ -1,4 +1,5 @@
 import {deliveryForUi, type DeliveryMetrics} from '../features/delivery/metrics.ts';
+import type {InterviewItem} from '../features/interview/types.ts';
 
 export type GazeStatus =
   | "center"
@@ -99,7 +100,23 @@ export function completionForUi(data: Record<string, unknown>): SessionCompletio
     gaze:{awayCount:report.gaze_away_count ?? 0,awayDurationMs:report.gaze_away_duration_ms ?? 0,
       awayRatio:report.gaze_metrics?.away_ratio ?? null,coverageRatio:report.gaze_metrics?.coverage_ratio ?? null,
     status:report.gaze_metrics?.status},
-    deliveryMetrics: deliveryForUi(data.delivery_metrics)};
+    deliveryMetrics: deliveryForUi(data.delivery_metrics),
+    interviewItems: interviewItemsForUi((data as {interview_items?: unknown}).interview_items)};
+}
+
+// Per-question records of an interview; anything malformed is dropped rather than shown.
+export function interviewItemsForUi(value: unknown): InterviewItem[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap(raw => {
+    const v = raw as Record<string, unknown> | null;
+    if (!v || typeof v.question_id !== 'string' || typeof v.text !== 'string') return [];
+    const num = (x: unknown, fallback = 0) => typeof x === 'number' && Number.isFinite(x) ? x : fallback;
+    const reasons = ['silence', 'time_limit', 'no_response', 'stopped'];
+    return [{question_id: v.question_id, round: num(v.round, 1), parent_id: typeof v.parent_id === 'string' ? v.parent_id : null,
+      text: v.text, shown_ms: num(v.shown_ms), answer_started_ms: typeof v.answer_started_ms === 'number' ? v.answer_started_ms : null,
+      ended_ms: num(v.ended_ms), advance_reason: (reasons.includes(String(v.advance_reason)) ? v.advance_reason : 'stopped') as InterviewItem['advance_reason'],
+      replay_used: v.replay_used === true, transcript: typeof v.transcript === 'string' ? v.transcript : ''}];
+  });
 }
 
 export function summaryForUi(sessionId: string, report: SessionCompletionReport | null,
@@ -242,6 +259,7 @@ export type SessionCompletionReport = {
     status?:string;
   };
   incomplete: boolean;
+  interviewItems?: InterviewItem[];
 };
 
 export type SessionCompletionMessage = {

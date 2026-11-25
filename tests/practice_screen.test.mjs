@@ -206,15 +206,17 @@ test('interview mode shows the same privacy notes as presentation', async () => 
   } finally { delete globalThis.sessionStorage; }
 });
 
-test('interview mode puts the question and camera before the passive notices', async () => {
+test('interview mode puts the preparation form before the passive notices', async () => {
   const { PracticePage } = await load('/src/features/practice/PracticePage.tsx');
   globalThis.sessionStorage = { getItem: key => key === 'live-practice-mode' ? 'interview' : null, setItem() {} };
   try {
     const html = renderToStaticMarkup(createElement(PracticePage));
-    const question = html.indexOf('aria-label="면접 질문"');
-    assert.ok(question >= 0, 'question section renders');
+    const setup = html.indexOf('id="interview-docs-title"');
+    assert.ok(setup >= 0, 'the preparation form renders before a session starts');
+    assert.ok(!html.includes('aria-label="면접 질문"'), 'the question panel belongs to the running interview');
     for (const notice of ['데이터 처리 안내', '연구용 추정치입니다', 'affect-run-guide'])
-      assert.ok(html.indexOf(notice) > question, `${notice} must come after the question`);
+      assert.ok(html.indexOf(notice) > setup, `${notice} must come after the form`);
+    assert.match(html, />종료<\/button>/, 'the header end button is there in interview mode too');
   } finally { delete globalThis.sessionStorage; }
 });
 

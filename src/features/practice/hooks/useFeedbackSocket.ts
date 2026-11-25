@@ -5,7 +5,9 @@ import type { ModuleStatus, RealtimeEvent, SessionPhase, SessionReadyData } from
 import { completionForUi, feedbackForUi } from '../../../lib/realtimeProtocol.ts';
 import { encodeMediaV2, type MediaPacket } from '../../../lib/mediaProtocol.ts';
 import { feedbackWsUrl } from '../../../lib/apiBase.ts';
-import { acceptServerEvent, checkMediaBacklog, sessionStartData, deliverAudioSettings, type AudioSettings } from '../sessionLifecycle.ts';
+import { acceptServerEvent, checkMediaBacklog, isFatalServerError, sessionStartData, deliverAudioSettings, type AudioSettings,
+  type InterviewStart } from '../sessionLifecycle.ts';
+import { audioOriginAfterEvent, audioPacketTimestamp } from '../audioPackets.ts';
 
 
 // v1 compatibility adapter; live capture uses v2.
@@ -26,8 +28,12 @@ function pending<T>(milliseconds: number, message: string, onTimeout: (error: Er
   return {promise, resolve, reject, timer};
 }
 
+// Server events that are not feedback: the interview's question flow and the round break.
+const isInterviewEvent = (name: string) => name.startsWith('interview.') || name === 'session.suspended' || name === 'session.resumed';
+
 export function useFeedbackSocket(onFeedback: (feedback: RealtimeFeedback) => void,
-  onPhase: (phase: SessionPhase, sessionId: string, elapsedMs?: number) => void) {
+  onPhase: (phase: SessionPhase, sessionId: string, elapsedMs?: number) => void,
+  onInterviewEvent?: (event: RealtimeEvent) => void) {
   const socketRef = useRef<WebSocket | null>(null);
   const idRef = useRef('');
   const lastSequenceRef = useRef(0);
@@ -40,8 +46,8 @@ export function useFeedbackSocket(onFeedback: (feedback: RealtimeFeedback) => vo
   const videoSequenceRef = useRef(0);
   const audioOriginRef = useRef(0);
   const runningRef = useRef(false);
-  const callbacks = useRef({onFeedback, onPhase});
-  useEffect(() => {callbacks.current = {onFeedback, onPhase};}, [onFeedback, onPhase]);
+  const callbacks = useRef({onFeedback, onPhase, onInterviewEvent});
+  useEffect(() => {callbacks.current = {onFeedback, onPhase, onInterviewEvent};}, [onFeedback, onPhase, onInterviewEvent]);
   const [status, setStatus] = useState<ConnectionStatus>('idle');
   const [error, setError] = useState<string | null>(null);
   const [modules, setModules] = useState<Record<string, ModuleStatus>>({});
@@ -74,7 +80,7 @@ export function useFeedbackSocket(onFeedback: (feedback: RealtimeFeedback) => vo
 
   const connect = useCallback((_clientId: string, mode: PracticeMode, settings: PresentationFeatureSettings,
       script?: string, timeLimitSeconds?: number,
-      audioSettings?: Promise<AudioSettings | undefined>): Promise<SessionReadyData> => {
+      audioSettings?: Promise<AudioSettings | undefined>, interview?: InterviewStart | null): Promise<SessionReadyData> => {
     disconnect();
     setStatus('connecting'); setError(null); setModules({});
     idRef.current = ''; lastSequenceRef.current = 0; acknowledgedRef.current = 0; videoSequenceRef.current = 0;
@@ -87,7 +93,7 @@ export function useFeedbackSocket(onFeedback: (feedback: RealtimeFeedback) => vo
       if (socketRef.current !== socket) return;
       socket.send(JSON.stringify({event: 'session.start', version: 2, session_id: null,
         sequence: ++clientSequenceRef.current, module: 'system', level: 'info', timestamp_ms: 0,
-        data: sessionStartData(mode, settings, script, timeLimitSeconds)}));
+        data: sessionStartData(mode, settings, script, timeLimitSeconds, interview)}));
       // Model preparation starts now; the microphone's AGC follows once the prompt is answered.
       void deliverAudioSettings(audioSettings, applied => {
         socket.send(JSON.stringify({event: 'session.audio_settings', version: 2, session_id: idRef.current || null,
@@ -111,8 +117,12 @@ export function useFeedbackSocket(onFeedback: (feedback: RealtimeFeedback) => vo
         } else if (message.event === 'session.calibrating') {
           callbacks.current.onPhase('calibrating', idRef.current);
         } else if (message.event === 'session.running') {
-          audioOriginRef.current = Number(message.data.audio_origin_ms); runningRef.current = true;
+          audioOriginRef.current = audioOriginAfterEvent(message, audioOriginRef.current); runningRef.current = true;
           callbacks.current.onPhase('running', idRef.current, sessionTime() - Number(message.data.running_started_ms));
+        } else if (isInterviewEvent(message.event)) {
+          // A break never stops the audio: `runningRef` and the sample counter stay as they are.
+          if (message.event === 'session.resumed') audioOriginRef.current = audioOriginAfterEvent(message, audioOriginRef.current);
+          callbacks.current.onInterviewEvent?.(message);
         } else if (message.event === 'session.draining') {
           callbacks.current.onPhase('draining', idRef.current);
         } else if (message.event === 'media.ack') {
@@ -131,7 +141,7 @@ export function useFeedbackSocket(onFeedback: (feedback: RealtimeFeedback) => vo
         } else if (message.event === 'error') {
           if (message.data.modules) setModules(message.data.modules as Record<string, ModuleStatus>);
           const reason = String(message.data.code) + ': ' + String(message.data.message);
-          if (message.data.code === 'CALIBRATION_TIMEOUT') setError(reason);
+          if (!isFatalServerError(String(message.data.code))) setError(reason);
           else fail(new Error(reason));
         }
       } catch (reason) {fail(reason instanceof Error ? reason : new Error('서버 응답 오류'));}
@@ -161,7 +171,7 @@ export function useFeedbackSocket(onFeedback: (feedback: RealtimeFeedback) => vo
       checkMediaBacklog(socket.bufferedAmount + packet.payload.byteLength + 26, unacked + packet.sampleCount);
       const waiting = pending<void>(5000, '음성 수신 확인 시간이 초과되었습니다.', fail);
       ackRef.current.set(packet.sequence, {pending: waiting, samples: packet.sampleCount});
-      socket.send(encodeMediaV2({...packet, type: 2, timestampMs: audioOriginRef.current + Math.floor(packet.startSample * 1000 / 16000)}));
+      socket.send(encodeMediaV2({...packet, type: 2, timestampMs: audioPacketTimestamp(audioOriginRef.current, packet.startSample)}));
     } catch (reason) {fail(reason as Error); throw reason;}
   }, [fail]);
   const awaitAudioAck = useCallback((sequence: number) => {
@@ -179,7 +189,8 @@ export function useFeedbackSocket(onFeedback: (feedback: RealtimeFeedback) => vo
     control('calibration.start');
     setError(null);
   }, [control]);
+  const sendInterviewReplay = useCallback((questionId: string) => control('interview.replay', {question_id: questionId}), [control]);
   useEffect(() => disconnect, [disconnect]);
   return {status, error, modules, connect, disconnect, sessionTime, sendVideoFrame, sendAudioPacket,
-    awaitAudioAck, finish, startCalibration, reportCaptureError: fail};
+    awaitAudioAck, finish, startCalibration, sendInterviewReplay, reportCaptureError: fail};
 }

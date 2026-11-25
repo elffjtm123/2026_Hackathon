@@ -10,6 +10,8 @@ type SessionControlsProps = {
   onStart: () => void;
   onEnd: () => void;
   startBlocked?: boolean;
+  // Only the start button waits (an interview with no questions chosen yet); the mode tabs stay usable.
+  startDisabled?: boolean;
 };
 
 function formatDuration(seconds: number) {
@@ -30,6 +32,7 @@ export function SessionControls({
   onStart,
   onEnd,
   startBlocked = false,
+  startDisabled = false,
 }: SessionControlsProps) {
   return (
     <section className="controls-bar" aria-label="세션 컨트롤">
@@ -62,20 +65,18 @@ export function SessionControls({
           type="button"
           className="primary-button"
           onClick={onStart}
-          disabled={isRunning || isStarting || isStopping || startBlocked}
+          disabled={isRunning || isStarting || isStopping || startBlocked || startDisabled}
         >
           {isStarting ? "시작 중" : "시작"}
         </button>
-        {mode === "presentation" || isStarting ? (
-          <button
-            type="button"
-            className="secondary-button"
-            onClick={onEnd}
-            disabled={(!isRunning && !isStarting) || isStopping}
-          >
-            {isStopping ? "분석 중" : isStarting ? "시작 취소" : "종료"}
-          </button>
-        ) : null}
+        <button
+          type="button"
+          className="secondary-button"
+          onClick={onEnd}
+          disabled={(!isRunning && !isStarting) || isStopping}
+        >
+          {isStopping ? "분석 중" : isStarting ? "시작 취소" : "종료"}
+        </button>
       </div>
     </section>
   );
