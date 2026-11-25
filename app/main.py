@@ -124,11 +124,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.script_summarizer = LocalScriptSummarizer(settings, execution)
         app.state.local_llm = LocalLlm(settings)
         app.state.interview_llm = InterviewLlm(
-            app.state.local_llm, timeout_seconds=settings.interview_plan_timeout_seconds
+            app.state.local_llm,
+            timeout_seconds=settings.interview_plan_timeout_seconds,
+            evaluation_timeout_seconds=settings.interview_evaluation_timeout_seconds,
         )
         app.state.interview_store = InterviewStore(
-            settings.interview_plan_ttl_seconds, settings.interview_store_max_entries
+            settings.interview_plan_ttl_seconds,
+            settings.interview_store_max_entries,
+            delivered_ttl_seconds=settings.interview_evaluation_delivered_ttl_seconds,
         )
+        # interview_id -> the running evaluation task (DELETE cancels it)
+        app.state.interview_evaluations = {}
         app.state.live_sessions = set()
         app.state.interview_document_gate = asyncio.Semaphore(1)
         app.state.database = database

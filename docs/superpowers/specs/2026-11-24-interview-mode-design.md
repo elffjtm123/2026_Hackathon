@@ -197,7 +197,8 @@ class InterviewStore:
     def discard(self, interview_id: str) -> None
 ```
 
-- 앱 상태(`app.state.interviews`)에 하나 둔다. 면접 계획은 생성 후 2시간, 평가 결과는 전달 후 30분 뒤 지운다. 서버를 재시작하면 사라진다.
+- 앱 상태(`app.state.interview_store`)에 하나 둔다. 면접 계획은 생성 후 2시간, 평가 결과는 처음 전달한 뒤 30분(`interview_evaluation_delivered_ttl_seconds`)에 지운다. 다시 받아가도 시간은 늘지 않는다. 서버를 재시작하면 사라진다.
+- 진행 중인 세션이나 평가가 있는 항목은 만료·밀어내기 대상이 아니다. 상태에는 `items_saved`(세션이 항목을 넘겼는지), `evaluating`, `evaluation`, `delivered_at`이 있다. 진행 중인 평가 작업은 `app.state.interview_evaluations[id]`에 두어 `DELETE`가 취소한다.
 - 계획 하나는 세션 하나에만 붙는다. 이미 세션이 붙은 계획으로 다시 시작하면 거부한다.
 
 ## 5. 인터페이스: HTTP와 실시간 이벤트
@@ -210,8 +211,8 @@ class InterviewStore:
 |---|---|---|
 | `POST /api/v1/interview/documents` | multipart: 파일 1~3개(종류: 자기소개서·이력서·포트폴리오) | 파일별 `{kind, text, warnings}`. 서버에 남기지 않음 |
 | `POST /api/v1/interview/plans` | `{documents: [{kind, text}] (0~3개), job?: str|null (30자 이하, 비우면 직무 없음), exclude_common_ids: []}`. `Accept: application/x-ndjson`이면 진행 상황을 줄 단위로 보냄 | `{interview_id, questions: [PlannedQuestion], warnings}`. NDJSON은 `{"event":"progress","data":{stage,…}}` 줄들 뒤에 마지막 줄 `{"event":"complete","data":{…}}` 또는 `{"event":"error","data":{code,message}}` |
-| `GET /api/v1/interview/{id}/evaluation` | NDJSON 진행 | 마지막 줄 `InterviewEvaluation` |
-| `DELETE /api/v1/interview/{id}/evaluation` | — | 진행 중 평가 취소 |
+| `GET /api/v1/interview/{id}/evaluation` | `Accept: application/x-ndjson`이면 진행 상황을 줄 단위로 보냄 | 일반 JSON은 `InterviewEvaluation`. NDJSON은 `{"event":"progress","data":{stage,…}}` 줄들(`loading`, `evaluating`+`index`/`total`, `summarizing`, `cleaning`) 뒤에 마지막 줄 `{"event":"complete","data":<InterviewEvaluation>}` 또는 `{"event":"error","data":{code,message}}` |
+| `DELETE /api/v1/interview/{id}/evaluation` | — | 진행 중 평가를 취소하고 llama-server 정리가 끝난 뒤 204. 진행 중이 아니어도 204 |
 
 - 상한(설정값): 파일당 10MB, 50쪽, 추출 텍스트 합계 30,000자(넘으면 앞 파일부터 채우고 나머지는 잘라 `truncated` 경고), DOCX 압축 해제 50MB, PDF 스트림 2MB, 요청당 추출 시간 10초. 추출은 한 번에 하나씩만 한다.
 - 오류 코드
@@ -223,7 +224,14 @@ class InterviewStore:
   - `INTERVIEW_PLAN_FAILED`(503 서버 시작 실패·예상 못 한 오류, 504 서버 준비 시간 초과). 모델 호출 실패나 생성 시간 초과는 오류가 아니라 공통 질문으로 채운 계획과 경고로 돌려준다
   - `INTERVIEW_PLAN_CANCELLED`(499): 일반 JSON 요청 중 연결 끊김
   - `INTERVIEW_NOT_FOUND`(404)
+  - `INTERVIEW_NOT_READY`(409): 면접 세션이 아직 항목 기록을 저장하지 않았다(진행 중이거나 시작한 적 없음). "면접이 끝난 뒤 평가할 수 있습니다."
+  - `INTERVIEW_EVALUATION_FAILED`(503 서버 시작 실패·예상 못 한 오류, 504 서버 준비 시간 초과). 질문 하나의 모델 호출 실패는 오류가 아니라 `failed` 항목과 경고로 돌려준다. 모델 없음은 `INTERVIEW_MODEL_UNAVAILABLE`
+  - `INTERVIEW_EVALUATION_CANCELLED`(499): 일반 JSON 요청이 평가 중 연결 끊김·`DELETE`로 취소됨. NDJSON은 같은 코드의 `error` 줄로 끝난다
   - `PRACTICE_ACTIVE`, `SUMMARY_BUSY`, `INTERVIEW_BUSY`(면접 계획·평가 생성 중)
+- 평가 요청(`GET .../evaluation`) 동작
+  - 이미 평가 결과가 저장돼 있으면 모델을 쓰지 않고 마지막 `complete` 줄만 바로 돌려준다(일반 JSON이면 결과 JSON). 같은 면접의 평가가 진행 중이면 `INTERVIEW_BUSY`(409).
+  - 그 밖에는 `reserve_offline("interview_evaluation")` 뒤 `LocalLlm.loaded()`를 한 번 열어 전체를 평가하고, llama-server 정리가 끝난 뒤에 예약을 푼다. 클라이언트 연결이 끊기거나 `DELETE`가 오면 취소하고 같은 순서로 정리한다.
+  - 평가 제한 시간은 `interview_evaluation_timeout_seconds`(기본 600초, 모델이 준비된 뒤부터 센다). 넘으면 남은 질문은 `failed`, 경고 `evaluation_timeout`으로 결과를 만든다.
 - 텍스트를 찾지 못한 파일(스캔 PDF 등)은 오류가 아니라 `text=""`와 `no_text` 경고로 돌려준다.
 - 알려진 한계: 2MB를 넘는 PDF 개체(Form XObject) 안의 글자는 경고 없이 빠진다. 디자인 도구로 만든 포트폴리오에서 실제로 문제가 되면 상한을 다시 정한다.
 
@@ -283,19 +291,27 @@ class ItemRecord:
     utterances: list[FinalUtterance]   # utterance_id, start_ms, end_ms, text, voiced_ms
     transcript: str
 
-class ItemEvaluation:
+class ItemEvaluation:       # 본 질문 하나당 하나. 추가 질문 답변은 부모에 묶인다
     question_id: str
-    status: Literal["evaluated", "not_evaluable"]
+    status: Literal["evaluated", "not_evaluable", "not_scored", "failed"]
     not_evaluable_reason: Literal["no_response", "too_short", "recognition_failed"] | None
-    grades: dict[RubricItem, Grade]    # Grade = {grade 0~4, evidence_quote, evidence_source, reason, improvement}
+    grades: dict[RubricItem, Grade]    # Grade = {grade 0~4, evidence_quote, evidence_source: "main"|"follow_up", reason, improvement}
+    excluded_items: list[RubricItem]   # 근거 인용이 무효라 빠진 적용 항목
+    partial: bool                      # excluded_items가 있으면 true ("부분 평가")
     score: float | None                # 0~20
+    follow_up_ids: list[str]           # 함께 평가한 추가 질문
 
 class InterviewEvaluation:
     items: list[ItemEvaluation]
-    overall_score: float | None        # 평가된 항목 점수의 평균
+    overall_score: float | None        # evaluated 항목 점수의 평균
     summary: {strengths: [str], improvements: [str], next_goals: [str]}
     model: str; elapsed_seconds: float
+    warnings: list[Literal["item_evaluation_failed", "summary_failed", "evaluation_timeout"]]
 ```
+
+- `status`: `evaluated`(점수 있음), `not_evaluable`(rubric이 평가 불가로 본 답변), `not_scored`(`rubric_items`가 빈 질문, 마무리), `failed`(모델 호출이 재시도 후에도 실패했거나 적용 항목이 모두 무효이거나 제한 시간이 지남). `not_evaluable`·`not_scored`·`failed`는 점수가 없고 종합 점수에서 빠진다. `failed`는 경고 `item_evaluation_failed`(시간 초과는 `evaluation_timeout`)를 붙인다.
+- 근거 인용 검사: 공백·문장부호를 뺀 부분 문자열로 `evidence_source`가 가리키는 답변(본 답변 또는 추가 질문 답변)에서 찾는다. 등급 0은 인용이 비어도 되지만 인용을 냈다면 있어야 한다. 일부 항목만 무효면 재시도하지 않고 남은 항목으로 점수를 내며(`partial`), 모두 무효이거나 형식 오류면 다른 seed와 고칠 점을 덧붙여 1회 재시도한다.
+- 종합 피드백 호출이 재시도 후에도 실패하면 빈 목록과 경고 `summary_failed`. 평가된 질문이 하나도 없으면 호출하지 않는다.
 
 ### 6.1 브라우저 저장(localStorage)
 

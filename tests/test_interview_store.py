@@ -5,6 +5,7 @@ from uuid import uuid4
 import pytest
 
 from app.core.errors import AppError
+from app.modules.interview.evaluation import EvaluationSummary, InterviewEvaluation
 from app.modules.interview.plan import InterviewPlan
 from app.modules.interview.questions import ItemRecord, PlannedQuestion
 from app.services.interview_store import InterviewStore
@@ -186,3 +187,88 @@ def test_eviction_never_drops_a_plan_with_a_running_session() -> None:
         others.append(store.create(plan()))
     assert store.get(running) is not None
     assert len(store) == 2
+
+
+# --- evaluation (step 8) ---
+
+
+def finished(store: InterviewStore, clock: Clock | None = None) -> str:
+    interview_id = store.create(three_question_plan())
+    store.attach_session(interview_id, uuid4(), ["q1"])
+    store.save_items(interview_id, [])
+    return interview_id
+
+
+def evaluation() -> InterviewEvaluation:
+    return InterviewEvaluation([], None, EvaluationSummary(), "m", 1.0)
+
+
+def test_items_saved_tells_a_finished_session_from_one_that_never_ran() -> None:
+    store = InterviewStore(ttl_seconds=60, max_entries=5, clock=Clock())
+    never = store.create(three_question_plan())
+    assert not store.get(never).items_saved
+    assert store.get(finished(store)).items_saved  # also with an empty item list
+
+
+def test_set_evaluation_keeps_the_result_and_ends_the_running_flag() -> None:
+    store = InterviewStore(ttl_seconds=60, max_entries=5, clock=Clock())
+    interview_id = finished(store)
+    store.begin_evaluation(interview_id)
+    assert store.get(interview_id).evaluating
+    result = evaluation()
+    store.set_evaluation(interview_id, result)
+    state = store.get(interview_id)
+    assert state.evaluation is result and state.evaluation is not None
+    store.end_evaluation(interview_id)
+    assert not store.get(interview_id).evaluating
+
+
+def test_set_evaluation_for_unknown_interview_is_not_found() -> None:
+    store = InterviewStore(ttl_seconds=60, max_entries=5, clock=Clock())
+    with pytest.raises(AppError) as error:
+        store.set_evaluation("missing", evaluation())
+    assert error.value.code == "INTERVIEW_NOT_FOUND"
+    store.end_evaluation("missing")  # a vanished entry is not an error here
+
+
+def test_a_delivered_result_is_removed_thirty_minutes_after_delivery() -> None:
+    clock = Clock()
+    store = InterviewStore(ttl_seconds=2 * 3600, max_entries=5, clock=clock)
+    interview_id = finished(store)
+    store.set_evaluation(interview_id, evaluation())
+    clock.now += 3000  # an undelivered result still lives by the plan TTL
+    assert store.get(interview_id) is not None
+    store.mark_delivered(interview_id)
+    clock.now += 1799
+    store.mark_delivered(interview_id)  # a replay does not extend the lifetime
+    assert store.get(interview_id) is not None
+    clock.now += 2
+    with pytest.raises(AppError):
+        store.get(interview_id)
+
+
+def test_the_delivered_lifetime_is_configurable() -> None:
+    clock = Clock()
+    store = InterviewStore(ttl_seconds=3600, max_entries=5, clock=clock, delivered_ttl_seconds=10)
+    interview_id = finished(store)
+    store.set_evaluation(interview_id, evaluation())
+    store.mark_delivered(interview_id)
+    clock.now += 11
+    assert len(store) == 0
+
+
+def test_a_running_evaluation_is_never_expired_or_evicted() -> None:
+    clock = Clock()
+    store = InterviewStore(ttl_seconds=60, max_entries=2, clock=clock)
+    interview_id = finished(store)
+    store.begin_evaluation(interview_id)
+    clock.now += 3600
+    assert store.get(interview_id) is not None
+    for _ in range(3):
+        clock.now += 1
+        store.create(plan())
+    assert store.get(interview_id) is not None
+    store.end_evaluation(interview_id)
+    clock.now += 61
+    with pytest.raises(AppError):
+        store.get(interview_id)

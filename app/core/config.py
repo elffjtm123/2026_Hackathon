@@ -89,6 +89,11 @@ class Settings(BaseSettings):
     interview_plan_timeout_seconds: float = Field(default=300, gt=0, le=600)
     # Follow-up generation in the round break, model start-up included.
     interview_follow_up_timeout_seconds: float = Field(default=120, gt=0, le=600)
+    # Answer evaluation after the interview (all questions plus the summary, counted from when
+    # the model is ready); questions left when it runs out become failed items.
+    interview_evaluation_timeout_seconds: float = Field(default=600, gt=0)
+    # An evaluation result is kept this long after it was first delivered to the client.
+    interview_evaluation_delivered_ttl_seconds: float = Field(default=30 * 60, gt=0)
     summary_server_path: str = ".models/llama/llama-server"
     summary_model_path: str = ".models/Qwen3.5-9B-Q4_K_M.gguf"
     summary_timeout_seconds: float = Field(default=600, gt=0, le=600)

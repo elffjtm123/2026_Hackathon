@@ -67,3 +67,37 @@ class InterviewPlanOut(BaseModel):
     interview_id: str
     questions: list[PlannedQuestionOut]
     warnings: list[str]
+
+
+class GradeOut(BaseModel):
+    grade: int
+    evidence_quote: str
+    evidence_source: Literal["main", "follow_up"]
+    reason: str
+    improvement: str
+
+
+class ItemEvaluationOut(BaseModel):
+    question_id: str
+    status: Literal["evaluated", "not_evaluable", "not_scored", "failed"]
+    not_evaluable_reason: Literal["no_response", "too_short", "recognition_failed"] | None
+    grades: dict[str, GradeOut]
+    excluded_items: list[str]
+    partial: bool
+    score: float | None
+    follow_up_ids: list[str]
+
+
+class EvaluationSummaryOut(BaseModel):
+    strengths: list[str]
+    improvements: list[str]
+    next_goals: list[str]
+
+
+class InterviewEvaluationOut(BaseModel):
+    items: list[ItemEvaluationOut]
+    overall_score: float | None
+    summary: EvaluationSummaryOut
+    model: str
+    elapsed_seconds: float
+    warnings: list[Literal["item_evaluation_failed", "summary_failed", "evaluation_timeout"]]

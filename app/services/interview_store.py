@@ -1,11 +1,13 @@
 """In-memory interview state; nothing is persisted and a restart clears it.
 
 A plan holds the questions, then the realtime session attached to it and the item records that
-session saved. Step 8 adds the evaluation and its setter.
+session saved, then the evaluation made from those items.
 
-Expiry: `ttl_seconds` counts from the last touch (create, attach, save_items). A plan with a
-running session (attached, items not yet saved) never expires and is never evicted, however long
-the session lasts; its TTL restarts when the session saves its items or detaches.
+Expiry: `ttl_seconds` counts from the last touch (create, attach, save_items, set_evaluation). A
+plan with a running session (attached, items not yet saved) or a running evaluation never expires
+and is never evicted, however long it lasts; its TTL restarts when that work ends. Once an
+evaluation result has been delivered, the entry is removed `delivered_ttl_seconds` after the
+first delivery instead.
 """
 
 from __future__ import annotations
@@ -16,6 +18,7 @@ from dataclasses import dataclass, field
 from uuid import UUID, uuid4
 
 from app.core.errors import AppError
+from app.modules.interview.evaluation import InterviewEvaluation
 from app.modules.interview.plan import InterviewPlan
 from app.modules.interview.questions import ItemRecord, PlannedQuestion
 
@@ -30,6 +33,15 @@ class InterviewState:
     question_ids: list[str] = field(default_factory=list)
     items: list[ItemRecord] = field(default_factory=list)
     running: bool = False  # a session is attached and has not saved its items yet
+    items_saved: bool = False  # the session ended and handed over its items (maybe none)
+    evaluating: bool = False  # an evaluation is running on these items
+    evaluation: InterviewEvaluation | None = None
+    delivered_at: float | None = None  # first time the evaluation result reached the client
+
+    @property
+    def busy(self) -> bool:
+        """Work is in progress, so the entry must not expire or be evicted."""
+        return self.running or self.evaluating
 
 
 class InterviewStore:
@@ -38,8 +50,10 @@ class InterviewStore:
         ttl_seconds: float,
         max_entries: int,
         clock: Callable[[], float] = time.monotonic,
+        delivered_ttl_seconds: float = 30 * 60,
     ) -> None:
         self._ttl = ttl_seconds
+        self._delivered_ttl = delivered_ttl_seconds
         self._max = max_entries
         self._clock = clock
         self._states: dict[str, InterviewState] = {}  # insertion order = creation order
@@ -54,9 +68,9 @@ class InterviewStore:
         now = self._clock()
         self._states[interview_id] = InterviewState(interview_id, plan, now, now)
         while len(self._states) > self._max:
-            evictable = next((i for i, s in self._states.items() if not s.running), None)
+            evictable = next((i for i, s in self._states.items() if not s.busy), None)
             if evictable is None:
-                break  # only running sessions are left; the cap yields to them
+                break  # only busy entries are left; the cap yields to them
             del self._states[evictable]
         return interview_id
 
@@ -103,15 +117,42 @@ class InterviewStore:
         """Keep the session's item records (latest call wins) and end its running state."""
         state = self.get(interview_id)
         state.items = list(items)
+        state.items_saved = True
         state.running = False
         state.touched_at = self._clock()
+
+    def begin_evaluation(self, interview_id: str) -> None:
+        self.get(interview_id).evaluating = True
+
+    def end_evaluation(self, interview_id: str) -> None:
+        """Clear the running flag; a vanished entry is ignored (this runs from cleanup)."""
+        state = self._states.get(interview_id)
+        if state is not None:
+            state.evaluating = False
+            state.touched_at = self._clock()
+
+    def set_evaluation(self, interview_id: str, evaluation: InterviewEvaluation) -> None:
+        state = self.get(interview_id)
+        state.evaluation = evaluation
+        state.touched_at = self._clock()
+
+    def mark_delivered(self, interview_id: str) -> None:
+        """Start the removal countdown at the first delivery; a replay does not extend it."""
+        state = self._states.get(interview_id)
+        if state is not None and state.delivered_at is None:
+            state.delivered_at = self._clock()
 
     def discard(self, interview_id: str) -> None:
         self._states.pop(interview_id, None)
 
     def _expire(self) -> None:
-        cutoff = self._clock() - self._ttl
-        for interview_id in [
-            i for i, s in self._states.items() if not s.running and s.touched_at < cutoff
-        ]:
+        now = self._clock()
+        for interview_id in [i for i, s in self._states.items() if self._expired(s, now)]:
             del self._states[interview_id]
+
+    def _expired(self, state: InterviewState, now: float) -> bool:
+        if state.busy:
+            return False
+        if state.delivered_at is not None:
+            return state.delivered_at < now - self._delivered_ttl
+        return state.touched_at < now - self._ttl

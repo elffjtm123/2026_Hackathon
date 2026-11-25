@@ -1,10 +1,10 @@
 import asyncio
 import json
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Coroutine
 from typing import Any
 
 from anyio import CancelScope
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, Response
 from python_multipart.exceptions import MultipartParseError
 from python_multipart.multipart import MultipartParser, parse_options_header
 from starlette.responses import StreamingResponse
@@ -19,7 +19,13 @@ from app.modules.interview.documents import (
     DocumentLimits,
     DocumentText,
 )
-from app.schemas.interview import InterviewDocumentOut, InterviewPlanOut, InterviewPlanRequest
+from app.modules.interview.evaluation import InterviewEvaluation
+from app.schemas.interview import (
+    InterviewDocumentOut,
+    InterviewEvaluationOut,
+    InterviewPlanOut,
+    InterviewPlanRequest,
+)
 
 router = APIRouter(tags=["interview"])
 
@@ -299,3 +305,233 @@ async def create_interview_plan(payload: InterviewPlanRequest, request: Request)
         media_type="application/x-ndjson",
         headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
     )
+
+
+# ------------------------------------------------------------------ evaluation
+
+EVALUATION_GUARD = GuardMessages(
+    local_mode_required="면접 연습은 로컬 AI 모드에서만 지원합니다.",
+    development_only="로컬 개발 화면에서만 면접 연습을 쓸 수 있습니다.",
+    practice_active="발표·면접 세션을 종료한 뒤 평가해 주세요.",
+    summary_busy="대본 요약을 마친 뒤 평가해 주세요.",
+    interview_busy="진행 중인 면접 준비 또는 평가가 끝난 뒤 시도하세요.",
+)
+_EVALUATION_FAILED = "답변 평가에 실패했습니다. 다시 시도하세요."
+_EVALUATION_CANCELLED = "평가를 중단했습니다."
+
+
+def _evaluation_output(evaluation: InterviewEvaluation) -> dict[str, Any]:
+    return InterviewEvaluationOut.model_validate(
+        {
+            **vars(evaluation),
+            "items": [
+                {
+                    **vars(item),
+                    "grades": {k.value: vars(g) for k, g in item.grades.items()},
+                    "excluded_items": [k.value for k in item.excluded_items],
+                }
+                for item in evaluation.items
+            ],
+            "summary": vars(evaluation.summary),
+        }
+    ).model_dump()
+
+
+def _ndjson(lines: AsyncIterator[str]) -> StreamingResponse:
+    return StreamingResponse(
+        lines,
+        media_type="application/x-ndjson",
+        headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+    )
+
+
+async def _evaluate_stored_items(
+    request: Request,
+    interview_id: str,
+    on_progress: Callable[[dict[str, Any]], None] | None,
+) -> dict[str, Any]:
+    """Load the generation model once, evaluate the stored items and keep the result.
+
+    Failures of single model calls are not errors (they become failed items and warnings);
+    only a model that cannot start, or an unexpected failure, raises.
+    """
+    state = request.app.state
+    items = list(state.interview_store.get(interview_id).items)
+
+    def progress(stage: str) -> None:
+        if on_progress is not None:
+            try:
+                on_progress({"stage": stage})
+            except Exception:
+                pass  # advisory, and must not interrupt native-process cleanup
+
+    try:
+        progress("loading")
+        async with state.local_llm.loaded() as session:
+            try:
+                evaluation = await state.interview_llm.evaluate(items, session, on_progress)
+            finally:
+                progress("cleaning")  # llama-server is terminated when this block exits
+        output = _evaluation_output(evaluation)
+        state.interview_store.set_evaluation(interview_id, evaluation)
+        return output
+    except AppError as exc:
+        if exc.code == "LOCAL_MODEL_UNAVAILABLE":
+            raise AppError(
+                "INTERVIEW_MODEL_UNAVAILABLE", "로컬 생성 모델과 실행 파일을 준비해 주세요.", 503
+            ) from exc
+        raise
+    except asyncio.TimeoutError as exc:  # llama-server never became ready
+        raise AppError(
+            "INTERVIEW_EVALUATION_FAILED", "생성 모델이 시작되지 않았습니다. 다시 시도하세요.", 504
+        ) from exc
+    except Exception as exc:
+        # Never echo the text of the failure: it may hold the user's answers.
+        raise AppError("INTERVIEW_EVALUATION_FAILED", _EVALUATION_FAILED, 503) from exc
+
+
+def _start_evaluation(
+    request: Request, interview_id: str, job: Callable[[], Coroutine[Any, Any, Any]]
+) -> asyncio.Task[Any]:
+    """Run `job` as the evaluation of `interview_id` (the caller has reserved the models).
+
+    The task is started now, and the done callback runs after llama-server has been reaped even
+    if the task is cancelled: it frees the reservation, the running flag and the DELETE handle.
+    """
+    state = request.app.state
+    state.interview_store.begin_evaluation(interview_id)
+    task = asyncio.create_task(job())
+    state.interview_evaluations[interview_id] = task
+
+    def finish(done: asyncio.Task[Any]) -> None:
+        if state.interview_evaluations.get(interview_id) is done:
+            del state.interview_evaluations[interview_id]
+        state.interview_store.end_evaluation(interview_id)
+        state.model_execution.release_offline("interview_evaluation")
+
+    task.add_done_callback(finish)
+    return task
+
+
+@router.get("/interview/{interview_id}/evaluation")
+async def evaluate_interview(interview_id: str, request: Request) -> Any:
+    """Evaluate the answers of a finished interview. `Accept: application/x-ndjson` streams
+    `{"event": "progress", "data": {"stage", ...}}` lines and ends with one
+    `{"event": "complete", "data": <evaluation>}` or `{"event": "error", "data": {code, message}}`
+    line; otherwise the evaluation is returned as JSON. A stored result is replayed without the
+    model. The model reservation is released only after llama-server is gone, also when the
+    client disconnects or the evaluation is cancelled.
+    """
+    require_local_idle_request(request, EVALUATION_GUARD)
+    state = request.app.state
+    store = state.interview_store
+    stored = store.get(interview_id)
+    if not stored.items_saved:
+        raise AppError("INTERVIEW_NOT_READY", "면접이 끝난 뒤 평가할 수 있습니다.", 409)
+    streaming = "application/x-ndjson" in request.headers.get("accept", "")
+    if stored.evaluation is not None:
+        result = _evaluation_output(stored.evaluation)
+        store.mark_delivered(interview_id)
+        if not streaming:
+            return result
+
+        async def replay() -> AsyncIterator[str]:
+            yield json.dumps({"event": "complete", "data": result}, ensure_ascii=False) + "\n"
+
+        return _ndjson(replay())
+    if stored.evaluating:
+        raise AppError("INTERVIEW_BUSY", EVALUATION_GUARD.interview_busy, 409)
+    require_no_offline_job(request, EVALUATION_GUARD)
+    try:
+        state.model_execution.reserve_offline("interview_evaluation")
+    except ValueError as exc:
+        raise AppError(
+            str(exc), "모델 정리 또는 진행 중인 작업이 끝난 뒤 시도하세요.", 409
+        ) from exc
+
+    if not streaming:
+        task: asyncio.Task[Any] | None = None
+        try:
+            # The disconnect watcher starts before the task: a watcher still starting when the
+            # task has already ended hangs its own cancellation behind BaseHTTPMiddleware.
+            async with disconnected_request(
+                request, "INTERVIEW_EVALUATION_CANCELLED", _EVALUATION_CANCELLED
+            ):
+                task = _start_evaluation(
+                    request,
+                    interview_id,
+                    lambda: _evaluate_stored_items(request, interview_id, None),
+                )
+                await asyncio.wait({task})  # a cancelled wait must not cancel the task itself
+        finally:
+            if task is None:  # never started, so nothing else will free the reservation
+                state.model_execution.release_offline("interview_evaluation")
+            else:
+                task.cancel()
+                with CancelScope(shield=True):
+                    await asyncio.gather(task, return_exceptions=True)
+        if task.cancelled():  # DELETE cancelled it
+            raise AppError("INTERVIEW_EVALUATION_CANCELLED", _EVALUATION_CANCELLED, 499)
+        result_out: dict[str, Any] = task.result()
+        store.mark_delivered(interview_id)
+        return result_out
+
+    queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=512)
+
+    def progress(data: dict[str, Any]) -> None:
+        try:
+            queue.put_nowait({"event": "progress", "data": data})
+        except asyncio.QueueFull:
+            pass  # advisory
+
+    def error_frame(code: str, message: str) -> dict[str, Any]:
+        return {"event": "error", "data": {"code": code, "message": message}}
+
+    async def produce() -> None:
+        try:
+            result = await _evaluate_stored_items(request, interview_id, progress)
+            await queue.put({"event": "complete", "data": result})
+        except asyncio.CancelledError:
+            try:
+                queue.put_nowait(
+                    error_frame("INTERVIEW_EVALUATION_CANCELLED", _EVALUATION_CANCELLED)
+                )
+            except asyncio.QueueFull:
+                pass
+            raise
+        except AppError as exc:
+            await queue.put(error_frame(exc.code, exc.message))
+        except Exception:
+            await queue.put(error_frame("INTERVIEW_EVALUATION_FAILED", _EVALUATION_FAILED))
+
+    producer = _start_evaluation(request, interview_id, produce)
+
+    async def stream() -> AsyncIterator[str]:
+        try:
+            while True:
+                event = await queue.get()
+                if event["event"] == "complete":
+                    store.mark_delivered(interview_id)
+                yield json.dumps(event, ensure_ascii=False) + "\n"
+                if event["event"] in {"complete", "error"}:
+                    break
+        finally:
+            producer.cancel()
+            with CancelScope(shield=True):
+                await asyncio.gather(producer, return_exceptions=True)
+
+    return _ndjson(stream())
+
+
+@router.delete("/interview/{interview_id}/evaluation", status_code=204)
+async def cancel_interview_evaluation(interview_id: str, request: Request) -> Response:
+    """Cancel a running evaluation; returns once llama-server is gone and the models are free."""
+    require_local_idle_request(request, EVALUATION_GUARD)
+    state = request.app.state
+    state.interview_store.get(interview_id)  # 404 for an unknown interview
+    task = state.interview_evaluations.get(interview_id)
+    if task is not None and not task.done():
+        task.cancel()
+        with CancelScope(shield=True):
+            await asyncio.gather(task, return_exceptions=True)
+    return Response(status_code=204)
