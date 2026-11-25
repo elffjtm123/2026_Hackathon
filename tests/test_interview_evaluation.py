@@ -199,7 +199,7 @@ async def test_a_quote_must_come_from_the_answer_named_as_its_source() -> None:
     assert result.items[0].excluded_items == [R.REASONING]
 
 
-async def test_grade_zero_may_come_without_a_quote_but_other_grades_may_not() -> None:
+async def test_grades_zero_and_one_may_come_without_a_quote_but_higher_grades_may_not() -> None:
     interview, _ = make()
     fake = session(evaluation=good_eval(reasoning=grade(0, ""), specificity=grade(2, "", "main")))
     result = await interview.evaluate([answered(main_q(), ANSWER)], fake)
@@ -409,3 +409,23 @@ async def test_a_quote_from_the_part_cut_out_of_the_prompt_is_invalid() -> None:
     (item,) = result.items
     assert item.excluded_items == [R.REASONING] and item.partial
     assert TAIL not in fake.calls[0][1]
+
+
+async def test_a_generic_answer_graded_one_without_a_quote_is_valid() -> None:
+    interview, _ = make()
+    fake = session(evaluation=good_eval(reasoning=grade(1, ""), specificity=grade(1, "")))
+    result = await interview.evaluate([answered(main_q(), ANSWER)], fake)
+    (item,) = result.items
+    assert item.status == "evaluated" and not item.partial
+    assert item.score == 5.0 and fake.count("evaluation") == 1
+
+
+async def test_a_given_quote_is_still_checked_for_grade_one_and_grade_two_needs_one() -> None:
+    interview, _ = make()
+    evaluation = good_eval(reasoning=grade(1, "모델을"), specificity=grade(2, ""))
+    result = await interview.evaluate([answered(main_q(), ANSWER)], session(evaluation=evaluation))
+    # Both items are invalid, so the question fails after its retry.
+    assert result.items[0].status == "failed"
+    evaluation = good_eval(reasoning=grade(1, "답변에 없는 문장입니다"), specificity=grade(3))
+    result = await interview.evaluate([answered(main_q(), ANSWER)], session(evaluation=evaluation))
+    assert result.items[0].excluded_items == [R.REASONING]

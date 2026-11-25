@@ -278,7 +278,7 @@ async def test_empty_documents_skip_the_llm(documents) -> None:
     result = await plan(interview, documents)
     assert llm.entered == 0
     assert kinds(result) == ["common"] * 9
-    assert result.warnings == ["few_materials"]
+    assert result.warnings == []  # practising without documents is a choice, not a shortfall
 
 
 async def test_result_holds_no_document_text() -> None:
