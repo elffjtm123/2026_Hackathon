@@ -510,6 +510,7 @@ async def test_exclude_order_is_kept_with_duplicates() -> None:
     )
     interview, _ = make()
     # basic-closing-2 is the oldest by last use: the duplicate must not move basic-closing-1 up.
-    exclude = ["basic-closing-1", "basic-closing-2", "basic-closing-1", "basic-closing-3"]
+    others = [f"basic-closing-{n}" for n in range(3, 11)]
+    exclude = ["basic-closing-1", "basic-closing-2", "basic-closing-1", *others]
     result = await interview.plan([], None, closing, exclude, None)
     assert [q.bank_id for q in result.questions] == ["basic-closing-2"]

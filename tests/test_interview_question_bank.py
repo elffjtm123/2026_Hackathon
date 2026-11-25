@@ -17,17 +17,82 @@ def sample(seed=0, *, job=None, exclude=(), composition=None):
     return sample_common(composition or Composition(), job, list(exclude), random.Random(seed))
 
 
-def test_bank_has_at_least_three_questions_per_category_and_topic():
+MIN_PER_GROUP = 10
+PERSONALITY = (CommonCategory.PERSONALITY_BEHAVIORAL, CommonCategory.PERSONALITY_SITUATIONAL)
+# IDs of the seed questions; they are stored in users' browser history and must never change.
+_SEED_BASIC_PREFIXES = ("intro", "motive", "strength", "plan", "closing")
+SEED_IDS = (
+    [f"basic-{p}-{n}" for p in _SEED_BASIC_PREFIXES for n in (1, 2, 3)]
+    + [f"beh-{t}-{n}" for t in PersonalityTopic for n in (1, 2, 3)]
+    + [f"sit-{t}-{n}" for t in PersonalityTopic for n in (1, 2, 3)]
+)
+# Plan section 4.0: no family/age/marital/region/religion/appearance/wealth questions.
+FORBIDDEN_KEYWORDS = (
+    "가족", "부모", "아버지", "어머니", "형제", "성장 과정", "성장과정", "나이", "몇 살",
+    "결혼", "연애", "고향", "출신", "종교", "외모", "키가", "재산", "집안", "연봉",
+)  # fmt: skip
+
+
+OPEN_WORDS = ("어떤", "무엇", "어떻게", "언제", "왜", "어디")
+
+
+def groups():
+    """(label, questions) for every category, split by topic for the personality ones."""
     for category in CommonCategory:
-        if category in (
-            CommonCategory.PERSONALITY_BEHAVIORAL,
-            CommonCategory.PERSONALITY_SITUATIONAL,
-        ):
+        if category in PERSONALITY:
             for topic in PersonalityTopic:
-                n = [q for q in COMMON_QUESTIONS if q.category == category and q.topic == topic]
-                assert len(n) >= 3, (category, topic)
+                yield (
+                    (category, topic),
+                    [q for q in COMMON_QUESTIONS if q.category == category and q.topic == topic],
+                )
         else:
-            assert len([q for q in COMMON_QUESTIONS if q.category == category]) >= 3, category
+            yield (category, None), [q for q in COMMON_QUESTIONS if q.category == category]
+
+
+def test_bank_has_at_least_ten_questions_per_category_and_topic():
+    for label, questions in groups():
+        assert len(questions) >= MIN_PER_GROUP, (label, len(questions))
+
+
+def test_seed_question_ids_are_preserved():
+    assert set(SEED_IDS) <= set(BANK_BY_ID)
+
+
+def test_question_ids_are_numbered_without_gaps_per_group():
+    for label, questions in groups():
+        numbers = [int(q.id.rsplit("-", 1)[1]) for q in questions]
+        assert numbers == list(range(1, len(questions) + 1)), label
+
+
+def test_questions_within_length_limits_and_one_sentence_unless_situational():
+    for q in COMMON_QUESTIONS:
+        if q.category == CommonCategory.PERSONALITY_SITUATIONAL:
+            assert len(q.text) <= 200, q.id
+            assert q.text.count("어떻게 하시겠습니까?") == 1, q.id
+        else:
+            assert len(q.text) <= 100, q.id
+
+
+def test_questions_are_not_yes_no_leading_or_forbidden():
+    for q in COMMON_QUESTIONS:
+        assert not any(k in q.text for k in FORBIDDEN_KEYWORDS), q.id
+        asks_yes_no = q.text.rstrip("?").endswith(("있나요", "하셨죠", "맞죠", "아닌가요"))
+        assert not asks_yes_no or any(w in q.text for w in OPEN_WORDS), q.id
+
+
+def test_texts_are_unique_in_the_bank():
+    assert len({q.text for q in COMMON_QUESTIONS}) == len(COMMON_QUESTIONS)
+
+
+def test_every_question_has_a_source_marker_and_intent():
+    for q in COMMON_QUESTIONS:
+        assert q.source in {"NCS 문형", "OPM 문형", "자체 작성"}, q.id
+        assert q.intent, q.id
+
+
+def test_closing_questions_are_not_scored():
+    closing = [q for q in COMMON_QUESTIONS if q.category == CommonCategory.CLOSING]
+    assert closing and all(q.rubric_items == () for q in closing)
 
 
 def test_bank_ids_are_unique_and_sources_are_marked():
