@@ -30,13 +30,11 @@ const server = await createServer({ configFile: false, root: process.cwd(), envD
   optimizeDeps: { noDiscovery: true } });
 after(async () => { await server.close(); await rm(root, { recursive: true, force: true }); });
 
-test('pulse, model themes, STT experiments and script summary all target the 8001 backend', async () => {
+test('pulse and script summary both target the 8001 backend', async () => {
   const { pulseApiBase } = await server.ssrLoadModule('/src/features/pulse/usePulse.ts');
-  const { modelApiBase } = await server.ssrLoadModule('/src/features/model-themes/modelThemes.ts');
   const { feedbackWsUrl } = await server.ssrLoadModule('/src/lib/apiBase.ts');
   const { requestScriptSummary } = await server.ssrLoadModule('/src/features/practice/scriptSummary.ts');
   assert.equal(pulseApiBase, 'http://127.0.0.1:8001/api/v1/pulse');
-  assert.equal(modelApiBase, 'http://127.0.0.1:8001/api/v1/stt-experiments');
   assert.equal(feedbackWsUrl, ws8001);
   const original = globalThis.fetch;
   let requested;

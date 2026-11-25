@@ -51,12 +51,6 @@ dev = [
   "reportlab>=4,<6",
   "ruff>=0.6,<1",
 ]
-stt-experiments = [
-  "faster-whisper>=1.1,<2",
-  "sherpa-onnx>=1.12,<2",
-  "psutil>=5.9,<8",
-  "huggingface-hub>=0.30,<1",
-]
 
 [tool.hatch.build.targets.wheel]
 packages = ["app"]

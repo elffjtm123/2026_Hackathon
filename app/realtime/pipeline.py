@@ -25,7 +25,6 @@ from app.modules.speech.analysis import (
 from app.modules.speech.segments import CutReason, FinalUtterance, SpeechSegmenter
 from app.realtime.aggregator import FeedbackAggregator
 from app.realtime.events import RealtimeEvent
-from app.realtime.experiment_recorder import ExperimentRecorder
 from app.realtime.interview_run import InterviewRun
 from app.realtime.queues import DropOldestQueue
 from app.realtime.state import SessionStateStore
@@ -94,8 +93,6 @@ class SessionPipeline:
         self._sequence_lock = asyncio.Lock()
         self._stop_lock = asyncio.Lock()
         self.completed_report: dict[str, Any] | None = None
-        # Set only for a live STT model-comparison session.
-        self.experiment: ExperimentRecorder | None = None
         # Set only for an interview with questions; fed frames/finals, started when running.
         self.interview: InterviewRun | None = None
         self.phase = "preparing"
@@ -333,8 +330,6 @@ class SessionPipeline:
             if len(self.audio_receipts) > 32:
                 del self.audio_receipts[min(self.audio_receipts)]
         self.media_sequences[kind] = media.sequence
-        if self.experiment is not None:
-            self.experiment.record_audio_queue(self.audio_queue.qsize())
         self.media_timestamps[kind] = media.timestamp_ms
         if kind == "pcm16":
             await self.emit(
@@ -516,8 +511,6 @@ class SessionPipeline:
             self.segmenter = None
             if self.interview is not None and self.interview.started:
                 report["interview_items"] = self.interview.finalize()
-            if self.experiment is not None:
-                report["comparison"] = self.experiment.summary(self.video_queue.stats.dropped)
             self.audio_receipts.clear()
             self._clear_queues()
             if self.execution is not None and self._execution_acquired:
@@ -550,8 +543,6 @@ class SessionPipeline:
         module: str = "system",
         level: str = "info",
     ) -> RealtimeEvent:
-        if event_name == "error" and self.experiment is not None:
-            self.experiment.record_error(str(data.get("code", "UNKNOWN")))
         async with self._sequence_lock:
             self.sequence += 1
             event = RealtimeEvent(
@@ -724,7 +715,6 @@ class SessionPipeline:
         """Preview the running utterance unless that could delay a final; skips are not queued."""
         if (
             self.phase != "running"
-            or self.experiment is not None
             or not self._feedback_speech_enabled()
             or self.segmenter is None
             or (self.partial_task is not None and not self.partial_task.done())
@@ -758,7 +748,7 @@ class SessionPipeline:
         )
 
     async def _emit_partial(self, media: MediaPayload) -> None:
-        """Display-only: never reaches the aggregator, script sync, delivery or experiments."""
+        """Display-only: never reaches the aggregator, script sync or delivery."""
         try:
             async with self.stt_lock:
                 result = await self.speech.infer(media)
@@ -986,8 +976,6 @@ class SessionPipeline:
     async def _handle_result(self, result: AIResult) -> None:
         if self.phase not in {"running", "draining"}:
             return
-        if self.experiment is not None:
-            self.experiment.record_result(result, self.elapsed_ms())
         if not self.aggregator.add(result):
             return
         if result.source == "speech_rate":

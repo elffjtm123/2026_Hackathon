@@ -2,7 +2,6 @@ import asyncio
 import contextlib
 import json
 import time
-from functools import wraps
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -30,8 +29,6 @@ from app.realtime.events import (
 from app.realtime.interview_run import InterviewRun, RoundBreak
 from app.realtime.media import decode_media_v2
 from app.realtime.pipeline import SessionPipeline
-from app.services.experiment_exclusion import ExperimentRunning
-from app.services.live_stt import SessionSpeechLease
 from app.services.session_service import safe_delivery_metrics
 
 router = APIRouter(tags=["realtime"])
@@ -40,20 +37,6 @@ _INTERVIEW_ERROR_MESSAGES = {
     "INTERVIEW_NOT_FOUND": "면접 정보를 찾을 수 없습니다. 질문을 다시 만들어 주세요.",
     "INTERVIEW_ALREADY_STARTED": "이미 시작한 면접입니다. 질문을 다시 만들어 주세요.",
 }
-
-
-def exclude_stt_experiment(handler: Any) -> Any:
-    """Reserve experiment exclusion across demo/authenticated WebSocket lifetimes."""
-
-    @wraps(handler)
-    async def guarded(websocket: WebSocket, *args: Any, **kwargs: Any) -> None:
-        try:
-            with websocket.app.state.experiment_exclusion.practice_connection():
-                await handler(websocket, *args, **kwargs)
-        except ExperimentRunning:
-            await websocket.close(code=1013, reason="STT comparison experiment is running")
-
-    return guarded
 
 
 def _attach_interview(
@@ -144,14 +127,7 @@ async def _v2_session(
 
     pipeline.subscribe(subscriber, send)
     started = False
-    speech_lease = SessionSpeechLease(
-        websocket.app.state.live_speech,
-        session_id,
-        websocket.app.state.speech,
-        websocket.app.state.module_status,
-        enabled=settings.stt_experiments_enabled,
-        authenticated=stored_settings is not None,
-    )
+    module_status = websocket.app.state.module_status
     client_sequence = 0
     calibration_timer: asyncio.Task[None] | None = None
     live_registered = False
@@ -302,13 +278,9 @@ async def _v2_session(
 
                     async def prepare(
                         analysis_settings: dict[str, Any] = analysis,
-                        start_data: SessionStartData = data,
                         raw_audio_settings: Any = raw_audio_settings,
                     ) -> None:
                         nonlocal pipeline, live_registered
-                        await speech_lease.attach(
-                            pipeline, start_data.stt_model_id, start_data.mode
-                        )
                         if stored_settings is not None:
                             prepared = await websocket.app.state.pipelines.get_or_create(
                                 session_id, stored_settings, protocol=2
@@ -323,7 +295,6 @@ async def _v2_session(
                         websocket.app.state.live_sessions.add(session_id)
                         live_registered = True
                         await pipeline.prepare()
-                        speech_lease.refresh(pipeline)
 
                     # A failed earlier attempt must not leak its early settings into this one.
                     early_audio_settings, has_early_audio_settings = None, False
@@ -345,12 +316,8 @@ async def _v2_session(
                         {
                             "transport": "websocket",
                             "modules": {
-                                name: module.model_dump()
-                                for name, module in speech_lease.modules.items()
+                                name: module.model_dump() for name, module in module_status.items()
                             },
-                            "comparison": pipeline.experiment.info
-                            if pipeline.experiment is not None
-                            else None,
                         },
                     )
                 elif event.event == "session.audio_settings":
@@ -395,20 +362,15 @@ async def _v2_session(
                     if isinstance(exc, AppError)
                     else str(exc)
                 )
-                modules = {
-                    name: module.model_dump() for name, module in speech_lease.modules.items()
-                }
-                reasons = [
-                    module.reason for module in speech_lease.modules.values() if module.reason
-                ]
+                modules = {name: module.model_dump() for name, module in module_status.items()}
+                reasons = [module.reason for module in module_status.values() if module.reason]
                 await pipeline.emit(
                     "error",
                     pipeline.elapsed_ms(),
                     {
                         "code": code,
                         "message": "; ".join(reasons)
-                        if code in {"MODEL_UNAVAILABLE_OR_BUSY", "STT_MODEL_LOAD_FAILED"}
-                        and reasons
+                        if code == "MODEL_UNAVAILABLE_OR_BUSY" and reasons
                         else "다른 연습 세션을 종료한 뒤 시작해 주세요."
                         if code == "OTHER_SESSION_ACTIVE"
                         else _INTERVIEW_ERROR_MESSAGES.get(
@@ -440,8 +402,6 @@ async def _v2_session(
                         release_interview()
                 if live_registered:
                     websocket.app.state.live_sessions.discard(session_id)
-                # Only after the pipeline stopped: the lent adapter may be mid-inference.
-                await speech_lease.release()
 
 
 def _frontend_feedback(event: RealtimeEvent) -> dict[str, Any] | None:
@@ -577,7 +537,6 @@ async def practice_demo_websocket(websocket: WebSocket) -> None:
     await _practice_demo(websocket)
 
 
-@exclude_stt_experiment
 async def _practice_demo(websocket: WebSocket) -> None:
     await websocket.accept()
     settings = websocket.app.state.settings
@@ -704,7 +663,6 @@ async def _practice_demo(websocket: WebSocket) -> None:
 
 
 @router.websocket("/ws/sessions/{session_id}")
-@exclude_stt_experiment
 async def session_websocket(websocket: WebSocket, session_id: UUID, token: str) -> None:
     settings = websocket.app.state.settings
     try:

@@ -9,7 +9,6 @@ import pytest
 from app.ai.base import AIResult, MediaPayload
 from app.core.config import Settings
 from app.modules.speech.segments import SpeechSegmenter
-from app.realtime.experiment_recorder import ExperimentRecorder
 from app.realtime.pipeline import SessionPipeline
 from app.realtime.state import SessionStateStore
 
@@ -170,8 +169,7 @@ async def test_partial_arriving_after_its_utterance_is_cut_is_dropped():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["experiment", "feedback_off"])
-async def test_no_partials_for_experiment_or_hidden_transcripts(mode):
+async def test_no_partials_for_hidden_transcripts():
     calls = []
 
     class Speech:
@@ -180,10 +178,7 @@ async def test_no_partials_for_experiment_or_hidden_transcripts(mode):
             return duration_text(media)
 
     p = pipeline(Speech())
-    if mode == "experiment":
-        p.experiment = ExperimentRecorder({})
-    else:
-        p.analysis_settings.update(speech_rate_enabled=False, filler_words_enabled=False)
+    p.analysis_settings.update(speech_rate_enabled=False, filler_words_enabled=False)
     seen = Recorder(p)
     await p.start()
     try:

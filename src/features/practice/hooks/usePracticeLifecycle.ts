@@ -1,13 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { PracticeMode } from '../types';
 import { audioSettingsOf, completePracticeSession } from '../sessionLifecycle';
-import { ensureThemeReady, sttModelIdFor, type ModelTheme } from '../../model-themes/modelThemes';
 import type { usePracticeSession } from './usePracticeSession';
 import type { useUserMedia } from './useUserMedia';
 import type { useFeedbackSocket } from './useFeedbackSocket';
 
 type Options = {
-  theme: ModelTheme;
   session: ReturnType<typeof usePracticeSession>;
   media: ReturnType<typeof useUserMedia>;
   socket: ReturnType<typeof useFeedbackSocket>;
@@ -21,7 +19,7 @@ type Options = {
 
 // Start → prepare → calibrate → run → complete, including cancellation, socket failure and the
 // presentation time limit. A stale start (generation changed) never touches the newer attempt.
-export function usePracticeLifecycle({theme, session, media, socket, flushStreaming, script, timeLimitSeconds,
+export function usePracticeLifecycle({session, media, socket, flushStreaming, script, timeLimitSeconds,
   isSummaryPending, onBeforeStart, onActivityChange}: Options) {
   const [isStarting, setIsStarting] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
@@ -38,14 +36,12 @@ export function usePracticeLifecycle({theme, session, media, socket, flushStream
     setOperationError(null);
     setCompletedMode(null);
     try {
-      await ensureThemeReady(theme);
-      if (generation !== generationRef.current) return;
       const nextSessionId = session.startSession();
       onBeforeStart();
       const mediaReady = media.startMedia();
       const audioSettings = mediaReady.then(audioSettingsOf, () => undefined);
       const ready = socket.connect(nextSessionId, session.mode, session.featureSettings, script,
-        timeLimitSeconds, sttModelIdFor(theme), audioSettings);
+        timeLimitSeconds, audioSettings);
       await Promise.all([mediaReady, ready]);
       if (generation !== generationRef.current) return;
       socket.startCalibration();
@@ -57,7 +53,7 @@ export function usePracticeLifecycle({theme, session, media, socket, flushStream
     } finally {
       if (generation === generationRef.current) setIsStarting(false);
     }
-  }, [isSummaryPending, onActivityChange, theme, session, onBeforeStart, media, socket, script, timeLimitSeconds]);
+  }, [isSummaryPending, onActivityChange, session, onBeforeStart, media, socket, script, timeLimitSeconds]);
 
   const end = useCallback(async () => {
     if (isStarting && !session.isActive) {

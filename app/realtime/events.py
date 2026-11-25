@@ -3,7 +3,6 @@ from uuid import UUID, uuid4
 
 from pydantic import AliasChoices, BaseModel, Field, model_validator
 
-from app.ai.stt_models import SttModelId
 from app.schemas.session import AnalysisSettings
 
 EventName = Literal[
@@ -58,7 +57,6 @@ class SessionStartData(BaseModel):
     mode: Literal["presentation", "interview"] = "presentation"
     interview: InterviewStartData | None = None
     settings: AnalysisSettings = Field(default_factory=AnalysisSettings)
-    stt_model_id: SttModelId | None = None
     script: str | None = Field(default=None, max_length=20_000)
     time_limit_seconds: int | None = Field(
         default=None,
@@ -71,9 +69,6 @@ class SessionStartData(BaseModel):
     def validate_script_pair(self) -> "SessionStartData":
         if (self.script is None) != (self.time_limit_seconds is None):
             raise ValueError("script and time limit must be provided together")
-        if self.interview is not None and self.stt_model_id not in (None, "service_qwen"):
-            # Any other model runs inside the server and would stay loaded in the round break.
-            raise ValueError("an interview with questions uses the service speech model")
         if self.mode == "interview" and self.script is not None:
             raise ValueError("interview does not accept a presentation script")
         if self.interview is not None and self.mode != "interview":

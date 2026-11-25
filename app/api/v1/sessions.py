@@ -19,7 +19,6 @@ from app.schemas.session import (
     WebRTCAnswer,
     WebRTCOffer,
 )
-from app.services.experiment_exclusion import ExperimentRunning
 from app.services.session_service import (
     activate_session,
     complete_session,
@@ -91,11 +90,7 @@ async def webrtc_offer(
     user: CurrentUser,
     db: DBSession,
 ) -> WebRTCAnswer:
-    try:
-        with request.app.state.experiment_exclusion.practice_connection():
-            return await _create_webrtc_answer(session_id, payload, request, user, db)
-    except ExperimentRunning as exc:
-        raise AppError("EXPERIMENT_BUSY", "비교 실험을 종료한 뒤 시작해 주세요.", 409) from exc
+    return await _create_webrtc_answer(session_id, payload, request, user, db)
 
 
 async def _create_webrtc_answer(

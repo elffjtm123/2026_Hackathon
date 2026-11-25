@@ -5,7 +5,7 @@
 /* Hallmark · answered F4 · the mode switch marks the current choice in soft mint, the filled green stays on 시작 alone */
 /* Hallmark · answered F7 · the panels share one container recipe on purpose, an app screen holds one recipe and varies only by content */
 /* Hallmark · waive 28b · the practice video is a live camera MediaStream, mounted only once a session is locked and below the h1 · the Realtime Coach camera preview is a stream with no file, so there is no frame to use as a poster */
-/* Hallmark · dropped #pulse-pos-experiment, #themes, #stt-experiments · the verification links leave the practice screen, the routes stay reachable by URL */
+/* Hallmark · dropped #pulse-pos-experiment link · the verification link leaves the practice screen, the route stays reachable by URL */
 /* Hallmark · dropped onClick={event => { if (busy) event.preventDefault(); }}, onClick={event => { if (locked) event.preventDefault(); }} · these only guarded the removed verification links */
 /* Hallmark · dropped onEnabledChange={signals.setFaceFeaturesEnabled} · the face feature panel leaves the practice screen and face features always run */
 /* Hallmark · dropped onClick={socket.startCalibration}, onResult={signals.receivePulse} · the same two handlers moved into SessionStatus and the headless usePulseEstimate hook under new prop names */
@@ -17,16 +17,16 @@ input[type="checkbox"], meter, progress { accent-color: var(--color-accent); }
 
 /* Buttons, all eight states */
 button { border: 0; }
-.primary-button, .secondary-button, .theme-link, .experiment-link { position: relative; display: inline-flex; align-items: center; justify-content: center; gap: var(--space-xs); min-height: var(--control-h); padding: 0 var(--space-md); border: 1px solid var(--color-rule); border-radius: var(--radius-input); font: 500 var(--text-md)/1 var(--font-body); text-decoration: none; white-space: nowrap; cursor: pointer; transition: background-color var(--dur-micro) var(--ease-out), transform var(--dur-micro) var(--ease-out), box-shadow var(--dur-micro) var(--ease-out); }
-.primary-button::before, .secondary-button::before, .theme-link::before, .experiment-link::before { content: ""; position: absolute; inset: -2px 0; }
+.primary-button, .secondary-button { position: relative; display: inline-flex; align-items: center; justify-content: center; gap: var(--space-xs); min-height: var(--control-h); padding: 0 var(--space-md); border: 1px solid var(--color-rule); border-radius: var(--radius-input); font: 500 var(--text-md)/1 var(--font-body); text-decoration: none; white-space: nowrap; cursor: pointer; transition: background-color var(--dur-micro) var(--ease-out), transform var(--dur-micro) var(--ease-out), box-shadow var(--dur-micro) var(--ease-out); }
+.primary-button::before, .secondary-button::before { content: ""; position: absolute; inset: -2px 0; }
 .primary-button { border-color: var(--color-accent-deep); background: var(--color-accent); color: var(--color-accent-ink); box-shadow: 0 2px 0 var(--color-accent-deep); }
-.secondary-button, .theme-link, .experiment-link { background: var(--light); color: var(--color-ink); box-shadow: 0 2px 0 var(--color-rule); }
+.secondary-button { background: var(--light); color: var(--color-ink); box-shadow: 0 2px 0 var(--color-rule); }
 @media (hover: hover) {
   .primary-button:hover:not(:disabled) { background: var(--color-accent-deep); }
-  .secondary-button:hover:not(:disabled), .theme-link:hover, .experiment-link:hover { background: var(--color-paper-2); }
+  .secondary-button:hover:not(:disabled) { background: var(--color-paper-2); }
 }
-.primary-button:active:not(:disabled), .secondary-button:active:not(:disabled), .theme-link:active, .experiment-link:active { transform: translateY(2px); box-shadow: none; }
-.primary-button:focus-visible, .secondary-button:focus-visible, .theme-link:focus-visible, .experiment-link:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
+.primary-button:active:not(:disabled), .secondary-button:active:not(:disabled) { transform: translateY(2px); box-shadow: none; }
+.primary-button:focus-visible, .secondary-button:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
 button:disabled, [aria-disabled="true"] { border-color: var(--color-rule); background: var(--color-paper-3); color: var(--color-muted); box-shadow: none; cursor: not-allowed; }
 button[aria-busy="true"] { cursor: progress; }
 
@@ -51,7 +51,6 @@ button[aria-busy="true"] { cursor: progress; }
 .screen > h1 { font-size: var(--text-xl); max-width: none; }
 .practice-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-md); margin-bottom: var(--space-lg); }
 .practice-header h1 { font-size: var(--text-xl); }
-.theme-nav { display: flex; flex-wrap: wrap; gap: var(--space-xs); }
 .meta-line { display: flex; flex-wrap: wrap; gap: var(--space-3xs) var(--space-md); }
 .error-banner { margin: 0; padding: var(--space-sm) var(--space-md); border: 1px solid var(--color-error); border-radius: var(--radius-input); background: color-mix(in oklab, var(--color-error) 7%, var(--color-paper)); color: var(--color-error); }
 .error-text { color: var(--color-error); }
@@ -61,7 +60,7 @@ button[aria-busy="true"] { cursor: progress; }
 .session-status p { color: var(--color-ink-2); }
 
 /* Panels: one recipe, a paper surface with a hairline */
-.presentation-setup, .feature-settings, .side-panel, .summary-panel, .interview-question, .interview-action, .interview-report__intro, .interview-report__questions, .live-comparison-panel { border: 1px solid var(--color-rule); border-radius: var(--radius-card); background: var(--light); padding: var(--space-md); }
+.presentation-setup, .feature-settings, .side-panel, .summary-panel, .interview-question, .interview-action, .interview-report__intro, .interview-report__questions { border: 1px solid var(--color-rule); border-radius: var(--radius-card); background: var(--light); padding: var(--space-md); }
 .summary-panel { display: grid; gap: var(--space-md); }
 
 /* Preparation */
@@ -74,8 +73,8 @@ button[aria-busy="true"] { cursor: progress; }
 .prepare__side > .presentation-setup__time { gap: var(--space-xs); }
 .time-input-row { display: flex; align-items: center; gap: var(--space-xs); }
 .time-input-row input { max-width: 8rem; font-family: var(--font-outlier); font-variant-numeric: tabular-nums; }
-.time-input-row input, .presentation-setup textarea, .live-comparison-panel textarea, .experiment-reference textarea, .experiment-shell select, .pulse-model-picker select { width: 100%; min-height: var(--control-h); padding: var(--space-xs) var(--space-sm); border: 1px solid var(--color-muted); border-radius: var(--radius-input); background: var(--color-paper); color: var(--color-ink); font: inherit; outline: 2px solid transparent; outline-offset: -3px; }
-.time-input-row input:focus-visible, .presentation-setup textarea:focus-visible, .live-comparison-panel textarea:focus-visible, .experiment-reference textarea:focus-visible, .experiment-shell select:focus-visible, .pulse-model-picker select:focus-visible { outline-color: var(--color-focus); }
+.time-input-row input, .presentation-setup textarea, .pulse-model-picker select { width: 100%; min-height: var(--control-h); padding: var(--space-xs) var(--space-sm); border: 1px solid var(--color-muted); border-radius: var(--radius-input); background: var(--color-paper); color: var(--color-ink); font: inherit; outline: 2px solid transparent; outline-offset: -3px; }
+.time-input-row input:focus-visible, .presentation-setup textarea:focus-visible, .pulse-model-picker select:focus-visible { outline-color: var(--color-focus); }
 @media (hover: hover) { .time-input-row input:hover:not(:disabled), .presentation-setup textarea:hover:not(:disabled) { background: var(--color-paper-2); } }
 .time-input-row input:disabled, .presentation-setup textarea:disabled { border-color: var(--color-rule); background: var(--color-paper-3); color: var(--color-muted); cursor: not-allowed; }
 .presentation-setup textarea { min-height: 6rem; resize: vertical; line-height: 1.55; }
@@ -192,7 +191,7 @@ button[aria-busy="true"] { cursor: progress; }
 .interview-report__questions { display: grid; gap: var(--space-xs); }
 .interview-report .summary-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 
-.model-hub .error-banner, .experiment-shell .error-banner, .model-hub .theme-notice[role=status], .pulse-experiment > p, .pulse-experiment .pulse-actions, .pulse-experiment .error-banner { margin-block: 0 var(--space-md); }
+.pulse-experiment > p, .pulse-experiment .pulse-actions, .pulse-experiment .error-banner { margin-block: 0 var(--space-md); }
 
 /* Narrow screens: the side column stacks under the main one */
 @media (max-width: 60rem) {

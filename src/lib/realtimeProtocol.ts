@@ -18,19 +18,6 @@ export function modelStatusLabel(module: ModuleStatus): string {
   return {idle:'미로드',loading:'준비 중',ready:'준비 완료',unavailable:'사용 불가'}[module.status];
 }
 export type SessionReadyData = { sessionId: string; timestampMs: number; modules: Record<string, ModuleStatus> };
-// Per result source, exactly as app/realtime/pipeline.py accumulates it.
-export type ComparisonPerformance = { observations: number; measured_latency_count: number;
-  average_inference_ms: number | null; max_result_age_ms: number };
-// `comparison` of an experiment-theme completion report: app/services/live_stt.py info, plus the
-// mode/gaze from the WebSocket and the pipeline's counters at completion.
-export type LiveComparison = {
-  model_id: string; label: string; mode: PracticeMode; device: string | null; load_ms: number;
-  already_loaded: boolean; threads: number | null; metadata: Record<string, unknown>;
-  context: string; silence_rms_threshold: number; segmentation: string; transport: string;
-  gaze: ModuleStatus; notes: string[];
-  performance: Record<string, ComparisonPerformance>; errors: Record<string, number>;
-  audio_queue_peak: number; dropped_video_frames: number;
-};
 export type RealtimeEvent = { event: string; version: number; session_id: string; sequence: number;
   timestamp_ms: number; module: string; level: string; data: Record<string, unknown> };
 
@@ -112,7 +99,6 @@ export function completionForUi(data: Record<string, unknown>): SessionCompletio
     gaze:{awayCount:report.gaze_away_count ?? 0,awayDurationMs:report.gaze_away_duration_ms ?? 0,
       awayRatio:report.gaze_metrics?.away_ratio ?? null,coverageRatio:report.gaze_metrics?.coverage_ratio ?? null,
     status:report.gaze_metrics?.status},
-    comparison: data.comparison as LiveComparison | undefined, backendReport: data,
     deliveryMetrics: deliveryForUi(data.delivery_metrics)};
 }
 
@@ -127,7 +113,7 @@ export function summaryForUi(sessionId: string, report: SessionCompletionReport 
     averageSyllablesPerMinute:report?.speech.averageSyllablesPerMinute ?? null,
     fillerWordCounts:report?.filler.counts ?? null,
     transcript:report?.transcript ?? ephemeralTranscript,incomplete:report?.incomplete ?? true,
-    comparison:report?.comparison,backendReport:report?.backendReport,deliveryMetrics:report?.deliveryMetrics};
+    deliveryMetrics:report?.deliveryMetrics};
 }
 
 export type SpeechPaceStatus = "slow" | "normal" | "fast" | "unknown";
@@ -231,8 +217,6 @@ export type PracticeSummary = {
   fillerWordCounts: Record<string, number> | null;
   transcript: string | null;
   incomplete: boolean;
-  comparison?: LiveComparison;
-  backendReport?: Record<string, unknown>;
 };
 
 export type SessionCompletionReport = {
@@ -258,8 +242,6 @@ export type SessionCompletionReport = {
     status?:string;
   };
   incomplete: boolean;
-  comparison?: LiveComparison;
-  backendReport?: Record<string, unknown>;
 };
 
 export type SessionCompletionMessage = {

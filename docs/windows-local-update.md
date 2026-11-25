@@ -23,19 +23,13 @@ Upstream integrated: `c677d2f` (origin/main). All five upstream commits since
   so the PID owned and reaped by the backend is the actual model process.
 - Child model consoles are hidden. No camera/microphone permissions are granted
   by update scripts; automated smoke tests use the existing public audio fixture.
-- Existing model themes and fixed-recording comparison remain available. Live
-  candidates reuse current safety checks and final-utterance postprocessing.
-  The baseline is now the current native Q8 service, NOT the old FP32 model.
-- Live comparisons use VAD utterances; file experiments still use fixed chunks.
-  Candidate comparisons can include the shared realtime Q8/gaze worker in RAM;
-  their RSS is not a standalone-model memory measurement.
+- The model themes and fixed-recording comparison added here were later removed;
+  only the service STT (the native Q8 service, NOT the old FP32 model) remains.
 
 ## Local startup
 
 Run `npm run dev:backend` and `npm run dev -- --host 127.0.0.1` in this folder.
-Open `http://127.0.0.1:5173/#practice/service_qwen` for the current service,
-`http://127.0.0.1:5173/#models` for preserved model themes, or
-`http://127.0.0.1:5173/#stt-experiments` for fixed-recording comparisons.
+Open `http://127.0.0.1:5173/` for the current service.
 Model status is `idle` while unused; real weights load when practice starts,
 then are released after draining the last utterance.
 

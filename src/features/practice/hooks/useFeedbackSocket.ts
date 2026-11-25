@@ -5,7 +5,6 @@ import type { ModuleStatus, RealtimeEvent, SessionPhase, SessionReadyData } from
 import { completionForUi, feedbackForUi } from '../../../lib/realtimeProtocol.ts';
 import { encodeMediaV2, type MediaPacket } from '../../../lib/mediaProtocol.ts';
 import { feedbackWsUrl } from '../../../lib/apiBase.ts';
-import type { ModelId } from '../../model-themes/modelThemes';
 import { acceptServerEvent, checkMediaBacklog, sessionStartData, deliverAudioSettings, type AudioSettings } from '../sessionLifecycle.ts';
 
 
@@ -74,7 +73,7 @@ export function useFeedbackSocket(onFeedback: (feedback: RealtimeFeedback) => vo
   }, [sessionTime]);
 
   const connect = useCallback((_clientId: string, mode: PracticeMode, settings: PresentationFeatureSettings,
-      script?: string, timeLimitSeconds?: number, modelId?: ModelId,
+      script?: string, timeLimitSeconds?: number,
       audioSettings?: Promise<AudioSettings | undefined>): Promise<SessionReadyData> => {
     disconnect();
     setStatus('connecting'); setError(null); setModules({});
@@ -88,7 +87,7 @@ export function useFeedbackSocket(onFeedback: (feedback: RealtimeFeedback) => vo
       if (socketRef.current !== socket) return;
       socket.send(JSON.stringify({event: 'session.start', version: 2, session_id: null,
         sequence: ++clientSequenceRef.current, module: 'system', level: 'info', timestamp_ms: 0,
-        data: {...sessionStartData(mode, settings, script, timeLimitSeconds), ...(modelId ? {stt_model_id:modelId} : {})}}));
+        data: sessionStartData(mode, settings, script, timeLimitSeconds)}));
       // Model preparation starts now; the microphone's AGC follows once the prompt is answered.
       void deliverAudioSettings(audioSettings, applied => {
         socket.send(JSON.stringify({event: 'session.audio_settings', version: 2, session_id: idRef.current || null,

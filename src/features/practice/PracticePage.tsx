@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState } from "react";
 import { FeatureToggles } from "./components/FeatureToggles";
 import { InterviewContent } from "./components/InterviewContent";
 import { LiveStage } from "./components/LiveStage";
@@ -13,28 +13,21 @@ import { useUserMedia } from "./hooks/useUserMedia";
 import { usePracticeLifecycle } from "./hooks/usePracticeLifecycle";
 import { usePresentationScript } from "./hooks/usePresentationScript";
 import { useSessionSignals } from "./hooks/useSessionSignals";
-import { useThemeAvailability } from "./hooks/useThemeAvailability";
 import { DataNotes } from "./components/DataNotes";
 import { practiceStage, showPageSocketError } from "./practiceStage";
 import {selectVisibleFeedback} from './feedbackState';
 import {isRecordingPhase} from '../../lib/realtimeProtocol';
-import { modelThemes, type ModelTheme } from '../model-themes/modelThemes';
-import { LiveComparisonPanel } from '../model-themes/LiveComparisonPanel';
-import { readSessionValue } from '../model-themes/runHistory';
-import '../model-themes/themes.css';
+import { readSessionValue } from './sessionValue';
 import { usePulseEstimate } from '../pulse/usePulseEstimate';
 import { pulseResearchCaution } from '../pulse/pulseReport';
 import {SessionInsights} from '../affect/SessionInsights';
 import '../delivery/delivery.css';
 
-export function PracticePage({theme = modelThemes[0], onActivityChange}: {
-  theme?: ModelTheme; onActivityChange?: (busy: boolean) => void;
-}) {
+export function PracticePage({onActivityChange}: {onActivityChange?: (busy: boolean) => void}) {
   const session = usePracticeSession(readSessionValue('live-practice-mode') === 'interview' ? 'interview' : 'presentation');
   const media = useUserMedia();
   const presentationVideo = useRef<HTMLVideoElement | null>(null);
   const script = usePresentationScript(session.mode);
-  const {availability, availabilityError, refreshAvailability} = useThemeAvailability(theme);
   const socket = useFeedbackSocket(session.receiveFeedback, session.applyPhase);
   const signals = useSessionSignals(session.phase, socket.sessionTime, session.summary?.sessionId ?? null);
   const streaming = useBackendStreaming({
@@ -54,7 +47,7 @@ export function PracticePage({theme = modelThemes[0], onActivityChange}: {
   const pulseEstimate = usePulseEstimate({stream: media.stream, enabled: true, requestedMode: 'efficientphys', videoRef: presentationVideo,
     autoFallback: true, onResult: signals.receivePulse,
     faceFeatures: {enabled: true, onResult: signals.receiveFaceFeatures, sessionTime: socket.sessionTime}});
-  const lifecycle = usePracticeLifecycle({theme, session, media, socket, flushStreaming: streaming.stopStreaming,
+  const lifecycle = usePracticeLifecycle({session, media, socket, flushStreaming: streaming.stopStreaming,
     script: script.script, timeLimitSeconds: script.timeLimitSeconds, isSummaryPending: script.isSummaryPending,
     onBeforeStart: signals.resetRecording, onActivityChange});
   const {locked, isStarting, isStopping, operationError, completedMode} = lifecycle;
@@ -122,22 +115,9 @@ export function PracticePage({theme = modelThemes[0], onActivityChange}: {
         onEnd={lifecycle.end}
         startBlocked={script.isSummarizing}
       />
-    <main className={`practice-shell themed-practice${interview ? " practice-shell--interview" : ""}`}
-      data-model-theme={theme.id} style={{'--theme-accent': theme.accent, '--theme-tint': theme.tint} as CSSProperties}>
+    <main className={`practice-shell${interview ? " practice-shell--interview" : ""}`}>
       <div className="screen">
         <h1>{interview ? "면접 연습" : "발표 및 면접 실시간 피드백"}</h1>
-        {theme.experiment ? <>
-          <section className="live-theme-banner" aria-label="선택한 모델 테마"><h2>{theme.label}</h2>
-            <p>음성 모델만 변경, 얼굴 방향/눈 시선 보정과 대본·음성 후처리는 기존 기능 그대로</p>
-            <p>{socket.modules.speech?.status === 'ready' && locked ? `현재 실행 모델: ${socket.modules.speech.model}`
-              : availability?.available ? '파일 준비됨, 시작하면 모델 로딩 후 카메라 보정이 진행됩니다.'
-              : availability?.reason ?? '준비 상태 확인 중…'}</p>
-            <p>대본·제한시간·발표/면접 선택은 이 탭에서 테마 간 유지됩니다. 각 테마는 새로 시선을 보정합니다.</p>
-            {availabilityError && <p role="alert">{availabilityError}</p>}
-            <button type="button" className="secondary-button" disabled={locked} onClick={() => { void refreshAvailability(); }}>준비 상태 확인</button>
-          </section>
-        </> : null}
-
         {media.error ? <p className="error-banner">{media.error}</p> : null}
         {operationError ? <p className="error-banner" role="alert">{operationError}</p> : null}
         {socketErrorShown ? <p className="error-banner" role="alert">{socket.error}</p> : null}
@@ -185,7 +165,6 @@ export function PracticePage({theme = modelThemes[0], onActivityChange}: {
         </> : prepare}
 
         {interview && session.summary && signals.recorded ? <SessionInsights summary={session.summary} signals={signals.recorded} /> : null}
-        {theme.experiment ? <LiveComparisonPanel key={session.summary?.sessionId ?? 'pending'} summary={session.summary} /> : null}
       </div>
     </main>
     </>

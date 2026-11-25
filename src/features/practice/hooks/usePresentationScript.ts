@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { PracticeMode } from '../types';
 import { groupHints, manualSummaryGroups, replacementSummaryGroups, type ScriptSummaryGroup, type SummaryProgress } from '../scriptTools';
 import { requestScriptSummary } from '../scriptSummary';
-import { readSessionValue } from '../../model-themes/runHistory';
+import { readSessionValue } from '../sessionValue';
 
 const defaultScript = "안녕하세요. 오늘은 실시간 발표 피드백 서비스의 핵심 기능을 소개하겠습니다. 이 서비스는 시선, 발화 속도, 대본 일치도를 확인해 발표자가 더 안정적으로 연습할 수 있도록 돕습니다.";
 

@@ -6,7 +6,6 @@ import { join } from 'node:path';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { createServer } from 'vite';
-import { modelThemes } from '../src/features/model-themes/modelThemes.ts';
 
 const cacheDir = await mkdtemp(join(tmpdir(), 'practice-screen-vite-'));
 const server = await createServer({ configFile: false, cacheDir, esbuild: { jsx: 'automatic' },
@@ -16,7 +15,7 @@ after(async () => { await server.close(); await rm(cacheDir, { recursive: true, 
 const load = path => server.ssrLoadModule(path);
 const servicePage = async () => {
   const { PracticePage } = await load('/src/features/practice/PracticePage.tsx');
-  return renderToStaticMarkup(createElement(PracticePage, { theme: modelThemes[0] }));
+  return renderToStaticMarkup(createElement(PracticePage));
 };
 
 test('the service screen shows none of the verification blocks', async () => {
@@ -52,16 +51,6 @@ test('face features and pulse start enabled for the session signals', async () =
   const Probe = () => { seen = useSessionSignals('idle', () => 0, null); return null; };
   renderToStaticMarkup(createElement(Probe));
   assert.equal(seen.faceFeaturesEnabled, true);
-});
-
-test('an experiment theme still renders its banner and availability check', async () => {
-  const { PracticePage } = await load('/src/features/practice/PracticePage.tsx');
-  const theme = modelThemes.find(item => item.experiment);
-  const html = renderToStaticMarkup(createElement(PracticePage, { theme }));
-  assert.ok(html.includes('live-theme-banner'));
-  assert.ok(html.includes(theme.label));
-  assert.match(html, /준비 상태 확인/);
-  assert.ok(!html.includes('face-feature-panel'));
 });
 
 test('the screen phase follows lock and summary only', async () => {
@@ -208,7 +197,7 @@ test('interview mode shows the same privacy notes as presentation', async () => 
   const { PracticePage } = await load('/src/features/practice/PracticePage.tsx');
   globalThis.sessionStorage = { getItem: key => key === 'live-practice-mode' ? 'interview' : null, setItem() {} };
   try {
-    const html = renderToStaticMarkup(createElement(PracticePage, { theme: modelThemes[0] }));
+    const html = renderToStaticMarkup(createElement(PracticePage));
     assert.match(html, /<h1[^>]*>면접 연습<\/h1>/);
     assert.match(html, /데이터 처리 안내/);
     assert.match(html, /인터넷 서버로 보내지 않습니다/);
@@ -221,7 +210,7 @@ test('interview mode puts the question and camera before the passive notices', a
   const { PracticePage } = await load('/src/features/practice/PracticePage.tsx');
   globalThis.sessionStorage = { getItem: key => key === 'live-practice-mode' ? 'interview' : null, setItem() {} };
   try {
-    const html = renderToStaticMarkup(createElement(PracticePage, { theme: modelThemes[0] }));
+    const html = renderToStaticMarkup(createElement(PracticePage));
     const question = html.indexOf('aria-label="면접 질문"');
     assert.ok(question >= 0, 'question section renders');
     for (const notice of ['데이터 처리 안내', '연구용 추정치입니다', 'affect-run-guide'])

@@ -133,13 +133,11 @@ def test_bad_question_ids_are_invalid_settings_and_leave_the_plan_usable(client,
         assert until(ws, "interview.question")["data"]["question_id"] == "q2"
 
 
-def test_an_interview_cannot_choose_an_in_process_stt_model(client) -> None:
-    """Such a model stays loaded in the server during the round break."""
+def test_a_leftover_stt_model_id_is_ignored_like_any_unknown_start_field(client) -> None:
+    """Only the service speech model exists; an older client's selection changes nothing."""
     interview_id = make_plan(client)
-    data = start_data(interview_id, ["q1"], stt_model_id="qwen_q8")
-    assert start_error(client, data) == "INVALID_SETTINGS"
-    with client.websocket_connect(URL) as ws:  # the plan is still usable, service model allowed
-        begin(ws, start_data(interview_id, ["q1"], stt_model_id="service_qwen"))
+    with client.websocket_connect(URL) as ws:
+        begin(ws, start_data(interview_id, ["q1"], stt_model_id="qwen_q8"))
         assert until(ws, "interview.question")["data"]["question_id"] == "q1"
 
 

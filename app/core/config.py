@@ -60,9 +60,6 @@ class Settings(BaseSettings):
     stt_library_path: str = ".models/speech/libspeech.dylib"
     stt_device: str = "auto"
     stt_silence_rms_threshold: float = 0.003
-    stt_experiments_enabled: bool = True
-    stt_experiment_model_dir: str = ".models/stt"
-    stt_experiment_threads: int = Field(default=4, ge=1, le=32)
     pronunciation_provider: str = "alignment"
 
     video_queue_size: int = 1

@@ -52,7 +52,6 @@ async def main() -> None:
             data={
                 "mode": "interview",
                 "settings": {"gaze_enabled": False},
-                "stt_model_id": "service_qwen",
             },
         )
         ready = await until("session.ready")

@@ -5,7 +5,7 @@
 세션이 끝나면 집계된 리포트만 남깁니다.
 
 - **백엔드**: FastAPI + SQLAlchemy(async) + WebSocket/WebRTC, 로컬 AI 추론
-- **프론트엔드**: React 19 + Vite + TypeScript (해시 라우트: 기본 연습 화면, 모델 테마, 로컬 실험 화면)
+- **프론트엔드**: React 19 + Vite + TypeScript (해시 라우트: 기본 연습 화면, 로컬 실험 화면)
 - **AI**: MediaPipe Face Landmarker + MobileGaze(시선), Qwen3-ASR 0.6B(음성 인식), Qwen3.5-9B(대본 요약)
 - **모드**: 발표(presentation) / 면접(interview)
 
@@ -27,21 +27,14 @@
 | 기능 | 내용 | 구현 위치 |
 |---|---|---|
 | 맥박 추정(rPPG) | 발표 카메라의 얼굴 영상으로 사전학습 rPPG 모델(EfficientPhys·TS-CAN·PhysFormer)을 CPU에서 추론. 영상·점수는 저장하지 않음 | `app/services/pretrained_pulse.py`, `app/api/v1/pulse.py` |
-| 모델 테마 | 연습 화면 그대로 STT 모델만 후보(Qwen Q8·Whisper·Zipformer)로 바꿔 실행하고, 종료 리포트에 `comparison`(추론 지연·오류·큐 압력) 기록 | `app/services/live_stt.py`, `app/realtime/experiment_recorder.py` |
-| STT 비교 실험 | 같은 녹음을 현재 서비스 STT와 후보 모델에 순서대로 넣어 CER·RTF·메모리 비교 | `app/services/stt_experiments.py`, `app/api/v1/stt_experiments.py` |
 
 프론트엔드는 **발표 모드**(대본 + 카메라 + 실시간 패널)와 **면접 모드**(카메라 + 피드백)를
 한 화면에서 토글합니다. 화면은 URL 해시로 나뉩니다.
 
 | 해시 | 화면 |
 |---|---|
-| (없음) | 기본 연습 화면. 현재 서비스 STT 테마로 시작 |
-| `#themes` | 모델 테마 선택. 고른 테마는 `#practice/<모델 ID>` 연습 화면으로 열림 |
-| `#stt-experiments` | STT 비교 실험(녹음 1개를 여러 모델로 받아쓰기) |
+| (없음), `#practice` | 연습 화면(서비스 STT: Qwen3-ASR-0.6B) |
 | `#pulse-pos-experiment` | POS 기준선 맥박 비교 실험 |
-
-모델 ID 목록은 `app/ai/stt_models.py` 한 곳에서 정의합니다. 프론트엔드
-`src/features/model-themes/modelThemes.ts`가 이 목록과 달라지면 `tests/test_stt_model_ids.py`가 실패합니다.
 
 ---
 
@@ -81,11 +74,11 @@
 
 ```
 app/                    FastAPI 백엔드
-  api/v1/               auth · sessions · scripts · websocket · pulse · stt_experiments 라우터
+  api/v1/               auth · sessions · scripts · websocket · pulse 라우터
   api/local_only.py     로컬 개발 전용 엔드포인트의 "로컬 요청" 판정(한 곳에서 정의)
-  realtime/             파이프라인, 큐, WebRTC, 이벤트 스키마, 집계기, 모델 비교 기록기
-  ai/                   시선/STT/요약 어댑터, 자식 프로세스 IPC, 후보 STT 엔진
-  services/             세션 리포트, 맥박 추론, STT 모델 대여·비교 실험, 실험/연습 상호 배제
+  realtime/             파이프라인, 큐, WebRTC, 이벤트 스키마, 집계기
+  ai/                   시선/STT/요약 어댑터, 자식 프로세스 IPC
+  services/             세션 리포트, 맥박 추론
   modules/              gaze · speech · pronunciation · script_sync 순수 로직
   db/                   SQLAlchemy 모델, 세션
   schemas/              요청·응답 스키마
@@ -155,7 +148,6 @@ shasum -a 256 .models/Qwen3-ASR-0.6B-Q8_0.gguf
 
 **④ 실험 기능용 모델** (선택)
 
-- STT 비교·모델 테마 후보: `python -m scripts.prepare_stt_experiments [--models …] [--llama]` → `.models/stt/`
 - 맥박 추정(rPPG): 기본 모델 MA-UBFC TS-CAN(`ma_ubfc_tscan`)은 `app/assets/pulse/`에 포함되어
   있어 `.[pulse]` 의존성만 설치하면 바로 동작합니다(로드 전 manifest SHA-256 확인).
   `.models/pulse/ubfc/ma_ubfc_tscan.*`가 있으면 그 파일을 먼저 씁니다. 나머지 4개 모델은
@@ -163,8 +155,7 @@ shasum -a 256 .models/Qwen3-ASR-0.6B-Q8_0.gguf
   `python scripts/prepare_ubfc_pulse.py --download`(UBFC 모델) → `.models/pulse/`로 준비합니다
   (변환에 `torch`, `onnx==1.17.0` 필요).
 
-절차와 해석 주의점은 [STT 비교 실험](docs/stt-experiments.md), [모델 테마](docs/model-themes.md),
-[UBFC 맥박 모델](docs/ubfc-pulse-update.md) 문서를 보세요. 파일이 없으면 해당 모델만
+절차와 해석 주의점은 [UBFC 맥박 모델](docs/ubfc-pulse-update.md) 문서를 보세요. 파일이 없으면 해당 모델만
 "준비 안 됨"으로 표시되고 다른 모델로 대체하지 않습니다.
 
 모델·가중치·네이티브 바이너리는 저장소에 포함하지 않습니다. 예외는 기본 맥박 모델
@@ -181,7 +172,6 @@ source .venv/bin/activate
 pip install -e '.[dev,ai]'
 # 선택: 실험 기능을 쓸 때만
 pip install -e '.[pulse]'            # 맥박 추정: numpy + onnxruntime
-pip install -e '.[stt-experiments]'  # STT 후보: faster-whisper, sherpa-onnx, psutil, huggingface-hub
 cp .env.example .env          # 값 확인 후 수정
 alembic upgrade head
 uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
@@ -211,7 +201,7 @@ npm run dev            # 시작 전에 맥박 워커용 MediaPipe 자산을 publ
 VITE_FEEDBACK_WS_URL=ws://127.0.0.1:8000/api/v1/ws/practice-demo
 ```
 
-REST 호출(맥박·모델 테마·STT 실험) 주소는 `VITE_API_BASE_URL`로 바꿀 수 있습니다. 지정하지 않으면
+REST 호출(맥박) 주소는 `VITE_API_BASE_URL`로 바꿀 수 있습니다. 지정하지 않으면
 `VITE_FEEDBACK_WS_URL`의 백엔드(`ws→http`, `wss→https`, `/ws/...` 제거)를 쓰고, 둘 다 없으면
 `http://127.0.0.1:8000/api/v1`입니다(`src/lib/apiBase.ts`). 대본 요약은 항상 WS 주소의 백엔드로 갑니다.
 연습 화면 맥박은 백엔드 사전학습 가중치가 없거나 백엔드에 연결할 수 없으면 브라우저 POS 추정으로 자동 전환합니다.
@@ -258,9 +248,6 @@ REST 호출(맥박·모델 테마·STT 실험) 주소는 `VITE_API_BASE_URL`로 
 |---|---|---|
 | `PULSE_ENABLED` | `true` | 맥박 추정 API(`/api/v1/pulse/*`) 사용 여부 |
 | `PULSE_MODEL_DIR` | `.models/pulse` | rPPG ONNX 모델과 manifest 위치 |
-| `STT_EXPERIMENTS_ENABLED` | `true` | STT 비교 실험 API와 연습 화면의 모델 테마 선택 사용 여부 |
-| `STT_EXPERIMENT_MODEL_DIR` | `.models/stt` | 후보 STT 가중치 위치 |
-| `STT_EXPERIMENT_THREADS` | 4 | 후보 STT의 CPU 스레드 수(1~32) |
 
 **실시간 처리**
 
@@ -347,30 +334,22 @@ WebRTC 경로(`POST /sessions/{id}/webrtc/offer`)도 같은 PCM 규격을 사용
 | `POST` | `/api/v1/scripts/analyze` | 대본 분석(목표 타임라인) |
 | `POST` | `/api/v1/scripts/summarize` | 문장 묶음 요약(NDJSON 스트리밍, 개발 전용) |
 | `WS` | `/api/v1/ws/sessions/{id}?token=…` | 인증 실시간 세션 |
-| `WS` | `/api/v1/ws/practice-demo?protocol=2` | 개발용 데모(loopback + dev 전용). `session.start`의 `stt_model_id`로 모델 테마 선택 |
-| `GET` | `/api/v1/stt-experiments/models` | 후보 모델 준비 상태, 실행 가능 여부 |
-| `POST` | `/api/v1/stt-experiments/jobs` | 비교 실험 시작(16kHz mono WAV ≤ 60초, 모델 1~5개). 연습 세션 중에는 409 |
-| `GET` | `/api/v1/stt-experiments/jobs/{id}` | 실험 진행·결과(메모리에만 보관, 최근 10개) |
-| `POST` | `/api/v1/stt-experiments/jobs/{id}/cancel` | 실험 취소 요청 |
+| `WS` | `/api/v1/ws/practice-demo?protocol=2` | 개발용 데모(loopback + dev 전용) |
 | `GET` | `/api/v1/pulse/model?model_id=…` | 맥박 모델 목록과 준비 상태 |
 | `POST` | `/api/v1/pulse/infer?model_id=…` | 얼굴 영상 패킷(`application/octet-stream`)으로 맥파 추론 |
 | `GET` | `/health/live`, `/health/ready` | 상태 확인 |
 
 모든 오류 응답은 `{"error": {"code", "message", "request_id", "details"}}` 형식입니다.
 
-`/stt-experiments/*`, `/pulse/*`, `/scripts/summarize`, 데모 WebSocket은 로컬 개발 전용입니다.
+`/pulse/*`, `/scripts/summarize`, 데모 WebSocket은 로컬 개발 전용입니다.
 판정은 `app/api/local_only.py` 한 곳에서 합니다.
 
 | 엔드포인트 | 허용 `APP_ENV` | 접속 주소 | 브라우저 Origin |
 |---|---|---|---|
-| `/stt-experiments/*` | `development`, `test` | loopback(`test`에서는 제한 없음) | 보냈다면 `CORS_ORIGINS`에 있어야 함 |
 | `/pulse/model` | `development`, `test` | loopback | 검사 안 함 |
 | `/pulse/infer` | `development`, `test` | loopback | `CORS_ORIGINS`에 있어야 함(필수) |
 | `/scripts/summarize` | `development` | loopback | `CORS_ORIGINS`에 있어야 함(필수) |
 | `/ws/practice-demo` | `development` | loopback | 보냈다면 `CORS_ORIGINS`에 있어야 함 |
-
-비교 실험과 연습 세션은 같은 모델을 쓰므로 동시에 실행하지 않습니다. 실험 중에는 연습
-WebSocket이 1013으로, WebRTC offer가 409로 거절되고, 연습 중에는 실험 시작이 409로 거절됩니다.
 
 ---
 
@@ -417,18 +396,16 @@ node --test tests/
   서비스 코드는 이 가짜 구현을 절대 import하지 않습니다.
 - 프론트엔드 테스트는 Vite SSR 로더로 컴포넌트·프로토콜 로직을 검증합니다.
 - 모델 로딩·네이티브 프로세스가 필요한 일부 테스트는 실제 모델 파일이 있어야 통과합니다.
-  맥박·후보 STT 실모델 테스트는 파일이 없으면 건너뜁니다.
+  맥박 실모델 테스트는 파일이 없으면 건너뜁니다.
 
 ### 12-1. 실험 도구 스크립트
 
 | 스크립트 | 용도 |
 |---|---|
-| `scripts/prepare_stt_experiments.py` | 후보 STT 가중치를 고정 revision으로 받아 `.models/stt/`와 `manifest.json` 생성. `--llama`는 Windows CPU llama.cpp도 설치 |
 | `scripts/prepare_pretrained_pulse.py` | 공식 PURE EfficientPhys 코드·가중치를 받아(`--download`) SHA-256 확인 후 ONNX로 변환. `torch`·`onnxruntime` 필요 |
 | `scripts/prepare_ubfc_pulse.py` | UBFC 학습 rPPG 모델들을 받아(`--download`, `--model`) 검증 후 ONNX로 변환. 기본 `ma_ubfc_tscan`은 `app/assets/pulse/`에 이미 포함되어 있어 재변환할 때만 필요 |
 | `scripts/download_model_ranges.py` | 큰 공개 파일을 HTTP range로 나눠 받고 크기·SHA-256 확인(`URL OUTPUT --size N [--sha256 …]`) |
 | `scripts/smoke_updated_service.py` | 실행 중인 로컬 서버에 공개 음성 샘플을 보내 연습 흐름 전체를 확인(카메라·마이크 미사용) |
-| `scripts/smoke_live_model_themes.py` | 실행 중인 로컬 서버에서 모델 테마별로 공개 얼굴·음성 샘플을 실제 추론(정확도 검증 아님) |
 | `scripts/prepare-pulse-assets.mjs` | `npm run dev/build` 전에 MediaPipe WASM과 맥박 워커 스크립트를 `public/pulse-assets`에 준비 |
 | `scripts/run-backend.mjs` | `npm run dev:backend`가 쓰는 백엔드 실행기 |
 
@@ -457,8 +434,7 @@ docker compose up --build
 - CPU 전용·다중 사용자 동시 세션·공개 배포 튜닝은 범위 밖입니다
 - 세션마다 모델을 다시 로딩하므로 시작 비용이 있습니다(메모리 회수를 위한 의도된 동작)
 - 브라우저 UI에는 로그인 화면이 없어 개발용 데모 엔드포인트만 사용합니다
-- 맥박 추정·모델 테마·STT 비교는 실험 기능입니다. 결과는 모델·실행 엔진·사용자 행동 차이가
-  섞인 값이며 정확도가 검증된 지표가 아닙니다
+- 맥박 추정은 실험 기능입니다. 결과는 정확도가 검증된 지표가 아닙니다
 
 ---
 
@@ -468,8 +444,7 @@ docker compose up --build
 - [음성 파이프라인 현장 확인](docs/speech-field-check.md)
 - [실시간 확인 항목](docs/realtime-field-check.md)
 - [WebRTC·미디어 계약(v1 호환)](docs/webrtc-contract.md)
-- 실험 기능: [모델 테마](docs/model-themes.md) · [STT 비교 실험](docs/stt-experiments.md) ·
-  [사전학습 맥박 추정](docs/pretrained-presentation-pulse.md) · [UBFC 맥박 모델](docs/ubfc-pulse-update.md) ·
+- 실험 기능: [사전학습 맥박 추정](docs/pretrained-presentation-pulse.md) · [UBFC 맥박 모델](docs/ubfc-pulse-update.md) ·
   [POS 맥박 실험](docs/pulse-experiment.md) · [얼굴 특징](docs/face-features.md) ·
   [음성 전달력](docs/voice-delivery-affect.md) · [Windows 로컬 실행](docs/windows-local-update.md)
 - [설계 문서](docs/superpowers/specs/) · [작업 계획](docs/superpowers/plans/)

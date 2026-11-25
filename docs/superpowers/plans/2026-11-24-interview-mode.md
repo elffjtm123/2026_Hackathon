@@ -36,7 +36,7 @@
 |---|---|---|
 | LLM 실행 | `app/ai/script_summary.py` `LocalScriptSummarizer` | llama-server를 요청마다 띄우고 끝나면 정리. JSON schema 응답, 스트리밍 파싱, 타임아웃·정리 로직이 있음 |
 | 모델 점유 관리 | `app/ai/model_execution.py` `ModelExecution` | 현재 `owner`가 `"summary"` 또는 세션 ID. 질문 생성·평가용 소유자를 추가해야 함 |
-| 답변 받아쓰기 | Qwen3-ASR-0.6B Q8_0 (`app/ai/live_stt.py` 등), `app/realtime/aggregator.py` | 지금은 세션 전체 `transcript` 하나로 합쳐짐. 질문별로 나누는 기능이 없음 |
+| 답변 받아쓰기 | Qwen3-ASR-0.6B Q8_0 (실시간 프로세스), `app/realtime/aggregator.py` | 지금은 세션 전체 `transcript` 하나로 합쳐짐. 질문별로 나누는 기능이 없음 |
 | 면접 모드 | `PracticeType.interview`, `events.py`의 `mode="interview"` | 모드 값은 있으나 질문 개념이 없음 |
 | 면접 화면 | `src/features/practice/components/InterviewContent.tsx` | 질문 영역과 "질문별 결과"가 자리표시자 상태 |
 | 세션 저장 | `PracticeSession`, `SessionReport`, alembic `0001`~`0004` | 로그인 경로에서만 쓰임. 화면이 쓰는 로컬 데모 경로(`/ws/practice-demo`)는 DB에 저장하지 않고 결과를 종료 이벤트로만 보냄 |
@@ -132,7 +132,7 @@
 - 데모 파일
   - 샘플 서류 3세트(단계 1)
   - 답변 음성 파일: 질문별 가상 답변을 녹음하거나 생성해 둔다. 좋은 답변, 짧은 답변, 일반론 답변, 중간에 길게 멈추는 답변, 무응답을 섞는다.
-  - 기존 실험 기록 기능(`app/realtime/experiment_recorder.py`, `stt-experiments`)으로 음성을 파이프라인에 재생할 수 있는지 먼저 확인하고, 안 되면 재생용 스크립트를 만든다.
+  - 녹음 파일을 실제 세션처럼 파이프라인에 재생하는 스크립트를 만든다(실험용 받아쓰기 비교 기능은 2026-11-25에 삭제됨).
 - 측정 항목
 
   | 항목 | 확인 내용 |
@@ -154,7 +154,7 @@
 - 채점 안정성: 같은 답변을 N회(예: 5회) 평가해 항목 등급의 표준편차·일치율 측정
 - 사람 평가 일치도: 답변 샘플 20개 내외를 사람 2명과 모델이 같은 기준표로 채점, 가중 카파 또는 순위 상관으로 비교
 - 비교 후보: Kanana-2-3B-Instruct (같은 입력·같은 지표로 비교)
-- 결과는 기존 `stt-experiments`처럼 실험 기록으로 남기고, 주간 보고서에는 수치를 검증 전 결과로 표시한다.
+- 결과는 실험 기록(JSON·CSV)으로 남기고, 주간 보고서에는 수치를 검증 전 결과로 표시한다.
 
 ## 4. 질문 구성 계획
 
