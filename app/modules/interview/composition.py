@@ -12,11 +12,12 @@ from app.modules.interview.questions import (
     PlannedQuestion,
 )
 
-# Stage rank per subtype: 자기소개 → 지원 동기 → job/experience (+ 강점·약점) → personality
+# Stage rank per subtype: 자기소개 → 지원 동기·가치관 → job/experience (+ 강점·약점) → personality
 # → 입사 후 계획 → 마무리. Unknown subtypes sort with job/experience.
 _STAGE = {
     CommonCategory.SELF_INTRODUCTION.value: 0,
     CommonCategory.MOTIVATION.value: 1,
+    CommonCategory.VALUES.value: 1,
     JOB: 2,
     EXPERIENCE: 2,
     CommonCategory.STRENGTH_WEAKNESS.value: 2,

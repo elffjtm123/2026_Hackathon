@@ -11,18 +11,61 @@ from app.modules.interview.question_bank import (
     sample_common,
     to_planned,
 )
-from app.modules.interview.questions import CommonCategory, validate_question
+from app.modules.interview.questions import CommonCategory, RubricItem, validate_question
 
 
 def sample(seed=0, *, job=None, exclude=(), composition=None):
     return sample_common(composition or Composition(), job, list(exclude), random.Random(seed))
 
 
-MIN_PER_GROUP = 10
-# Closing has fewer: two of its ten were removed (2026-11-25); their ids stay unused.
-MIN_CLOSING = 8
-REMOVED_IDS = {"basic-closing-4", "basic-closing-10"}
 PERSONALITY = (CommonCategory.PERSONALITY_BEHAVIORAL, CommonCategory.PERSONALITY_SITUATIONAL)
+# Final list reviewed by the user on 2026-11-25: exact size of every group (total 128).
+EXPECTED_COUNTS = {
+    (CommonCategory.SELF_INTRODUCTION, None): 8,
+    (CommonCategory.MOTIVATION, None): 8,
+    (CommonCategory.STRENGTH_WEAKNESS, None): 8,
+    (CommonCategory.FUTURE_PLAN, None): 6,
+    (CommonCategory.VALUES, None): 4,
+    (CommonCategory.CLOSING, None): 4,
+    (CommonCategory.PERSONALITY_BEHAVIORAL, PersonalityTopic.COLLABORATION): 7,
+    (CommonCategory.PERSONALITY_BEHAVIORAL, PersonalityTopic.CONFLICT): 8,
+    (CommonCategory.PERSONALITY_BEHAVIORAL, PersonalityTopic.FAILURE): 8,
+    (CommonCategory.PERSONALITY_BEHAVIORAL, PersonalityTopic.RESPONSIBILITY): 6,
+    (CommonCategory.PERSONALITY_BEHAVIORAL, PersonalityTopic.PROBLEM_SOLVING): 7,
+    (CommonCategory.PERSONALITY_BEHAVIORAL, PersonalityTopic.ETHICS): 5,
+    (CommonCategory.PERSONALITY_SITUATIONAL, PersonalityTopic.COLLABORATION): 7,
+    (CommonCategory.PERSONALITY_SITUATIONAL, PersonalityTopic.CONFLICT): 10,
+    (CommonCategory.PERSONALITY_SITUATIONAL, PersonalityTopic.FAILURE): 8,
+    (CommonCategory.PERSONALITY_SITUATIONAL, PersonalityTopic.RESPONSIBILITY): 6,
+    (CommonCategory.PERSONALITY_SITUATIONAL, PersonalityTopic.PROBLEM_SOLVING): 11,
+    (CommonCategory.PERSONALITY_SITUATIONAL, PersonalityTopic.ETHICS): 7,
+}
+# Ids dropped from the bank (removed, moved, or removed earlier). They stay retired: never reuse.
+RETIRED_IDS = {
+    "basic-closing-2", "basic-closing-4", "basic-closing-5", "basic-closing-6",
+    "basic-closing-7", "basic-closing-9", "basic-closing-10",
+    "basic-intro-4", "basic-intro-7", "basic-intro-9",
+    "basic-motive-3", "basic-motive-4", "basic-motive-9", "basic-motive-10",
+    "basic-plan-3", "basic-plan-4", "basic-plan-6", "basic-plan-8", "basic-plan-9",
+    "basic-strength-1", "basic-strength-4", "basic-strength-7", "basic-strength-8",
+    "beh-collaboration-4", "beh-collaboration-5", "beh-collaboration-8", "beh-collaboration-9",
+    "beh-conflict-4", "beh-conflict-9", "beh-conflict-10",
+    "beh-failure-2", "beh-failure-4", "beh-failure-8",
+    "beh-responsibility-4", "beh-responsibility-6", "beh-responsibility-7",
+    "beh-responsibility-10",  # moved: its text is now beh-collaboration-11
+    "beh-problem_solving-1", "beh-problem_solving-5", "beh-problem_solving-9",
+    "beh-problem_solving-10",
+    "beh-ethics-3", "beh-ethics-5", "beh-ethics-7", "beh-ethics-8", "beh-ethics-10",
+    "sit-collaboration-4", "sit-collaboration-9", "sit-collaboration-10",
+    "sit-conflict-10",
+    "sit-failure-3", "sit-failure-4",
+    "sit-responsibility-1", "sit-responsibility-4", "sit-responsibility-7",
+    "sit-responsibility-9", "sit-responsibility-10",
+    "sit-ethics-4", "sit-ethics-6",
+    "sit-ethics-10",  # moved: its text is now sit-responsibility-11
+}  # fmt: skip
+# Seeds whose wording was revised in the final list (same id, new text).
+REVISED_SEED_IDS = {"beh-collaboration-3", "beh-conflict-2", "sit-problem_solving-1"}
 # IDs of the seed questions; they are stored in users' browser history and must never change.
 _SEED_BASIC_PREFIXES = ("intro", "motive", "strength", "plan", "closing")
 SEED_IDS = (
@@ -91,6 +134,16 @@ FORBIDDEN_KEYWORDS = (
 )  # fmt: skip
 
 
+# Final texts the user approved that break a writing rule. Every other question must follow it.
+# Situational ends "어떻게 하시겠습니까?" exactly once (plan 4.0): sit-conflict-11 ends
+# "어떻게 대응하시겠습니까?" and is two sentences.
+SITUATIONAL_ENDING_EXCEPTIONS = {"sit-conflict-11"}
+# Behavioural asks for one case with a "가장" superlative: these three have no superlative.
+SUPERLATIVE_EXCEPTIONS = {"beh-conflict-11", "beh-failure-11", "beh-problem_solving-11"}
+# One thing per question: these four ask two things in one question.
+TWO_PART_EXCEPTIONS = {"basic-values-2", "basic-motive-11", "basic-motive-12", "basic-strength-12"}
+TWO_PART_MARKERS = ("무엇이며", "동료와, 반대로")
+
 OPEN_WORDS = ("어떤", "무엇", "어떻게", "언제", "왜", "어디")
 
 
@@ -107,45 +160,61 @@ def groups():
             yield (category, None), [q for q in COMMON_QUESTIONS if q.category == category]
 
 
-def test_bank_has_at_least_ten_questions_per_category_and_topic():
-    for label, questions in groups():
-        minimum = MIN_CLOSING if label == (CommonCategory.CLOSING, None) else MIN_PER_GROUP
-        assert len(questions) >= minimum, (label, len(questions))
+def test_bank_has_the_final_number_of_questions_per_category_and_topic():
+    assert {label: len(questions) for label, questions in groups()} == EXPECTED_COUNTS
+    assert len(COMMON_QUESTIONS) == sum(EXPECTED_COUNTS.values()) == 128
 
 
-def test_seed_question_ids_are_preserved():
-    assert set(SEED_IDS) <= set(BANK_BY_ID)
+def test_seed_question_ids_are_preserved_unless_retired():
     assert len(SEED_IDS) == len(SEED_TEXTS) == 51
+    assert set(SEED_IDS) - RETIRED_IDS <= set(BANK_BY_ID)
 
 
-def test_seed_question_texts_are_preserved():
+def test_seed_question_texts_are_preserved_except_the_revised_ones():
     # A stored id must keep meaning the same question in users' browser history.
-    assert {i: BANK_BY_ID[i].text for i in SEED_IDS} == SEED_TEXTS
+    kept = [i for i in SEED_IDS if i not in RETIRED_IDS]
+    assert {i: BANK_BY_ID[i].text for i in kept if i not in REVISED_SEED_IDS} == {
+        i: SEED_TEXTS[i] for i in kept if i not in REVISED_SEED_IDS
+    }
+    assert REVISED_SEED_IDS <= set(kept)
+    assert all(BANK_BY_ID[i].text != SEED_TEXTS[i] for i in REVISED_SEED_IDS)
 
 
-def test_question_ids_are_numbered_without_gaps_except_the_removed_ones():
-    for label, questions in groups():
-        numbers = [int(q.id.rsplit("-", 1)[1]) for q in questions]
-        removed = {10, 4} if label == (CommonCategory.CLOSING, None) else set()
-        expected = [n for n in range(1, len(questions) + len(removed) + 1) if n not in removed]
-        assert numbers == expected, label  # only the removed ids are missing
+def test_retired_ids_are_absent_from_the_bank():
+    assert len(RETIRED_IDS) == 60
+    assert not RETIRED_IDS & set(BANK_BY_ID)
 
 
-def test_removed_questions_are_gone_and_closing_keeps_the_other_eight():
-    assert not REMOVED_IDS & set(BANK_BY_ID)
-    closing = sorted(
-        int(q.id.rsplit("-", 1)[1])
-        for q in COMMON_QUESTIONS
-        if q.category == CommonCategory.CLOSING
-    )
-    assert closing == [1, 2, 3, 5, 6, 7, 8, 9]
+def test_moved_questions_got_new_ids_in_their_new_topic():
+    moved = {"beh-collaboration-11": "팀을 이끈 경험", "sit-responsibility-11": "거스름돈"}
+    for qid, snippet in moved.items():
+        assert snippet in BANK_BY_ID[qid].text, qid
+
+
+def test_id_prefix_matches_category_and_topic():
+    basic_prefix = {
+        CommonCategory.SELF_INTRODUCTION: "intro",
+        CommonCategory.MOTIVATION: "motive",
+        CommonCategory.STRENGTH_WEAKNESS: "strength",
+        CommonCategory.FUTURE_PLAN: "plan",
+        CommonCategory.VALUES: "values",
+        CommonCategory.CLOSING: "closing",
+    }
+    for q in COMMON_QUESTIONS:
+        if q.category == CommonCategory.PERSONALITY_BEHAVIORAL:
+            assert q.id.startswith(f"beh-{q.topic.value}-"), q.id
+        elif q.category == CommonCategory.PERSONALITY_SITUATIONAL:
+            assert q.id.startswith(f"sit-{q.topic.value}-"), q.id
+        else:
+            assert q.topic is None and q.id.startswith(f"basic-{basic_prefix[q.category]}-"), q.id
 
 
 def test_questions_within_length_limits_and_one_sentence_unless_situational():
     for q in COMMON_QUESTIONS:
         if q.category == CommonCategory.PERSONALITY_SITUATIONAL:
             assert len(q.text) <= 200, q.id
-            assert q.text.count("어떻게 하시겠습니까?") == 1, q.id
+            if q.id not in SITUATIONAL_ENDING_EXCEPTIONS:
+                assert q.text.count("어떻게 하시겠습니까?") == 1, q.id
         else:
             assert len(q.text) <= 100, q.id
 
@@ -190,11 +259,68 @@ def sample_planned(bank_question):
 def test_behavioral_and_situational_follow_the_writing_rules():
     for q in COMMON_QUESTIONS:
         if q.category == CommonCategory.PERSONALITY_BEHAVIORAL:
-            assert "가장" in q.text and "하나" in q.text and "(" in q.text, q.text
+            assert "하나" in q.text and "(" in q.text, q.text
+            assert "가장" in q.text or q.id in SUPERLATIVE_EXCEPTIONS, q.text
         if q.category == CommonCategory.PERSONALITY_SITUATIONAL:
-            assert q.text.endswith("어떻게 하시겠습니까?"), q.text
+            assert q.text.endswith("어떻게 하시겠습니까?") or q.id in SITUATIONAL_ENDING_EXCEPTIONS
         if q.category == CommonCategory.CLOSING:
             assert q.rubric_items == ()
+
+
+def test_exceptions_to_the_writing_rules_are_exactly_the_documented_ones():
+    behavioral = [
+        q for q in COMMON_QUESTIONS if q.category == CommonCategory.PERSONALITY_BEHAVIORAL
+    ]
+    assert {q.id for q in behavioral if "가장" not in q.text} == SUPERLATIVE_EXCEPTIONS
+    situational = [
+        q for q in COMMON_QUESTIONS if q.category == CommonCategory.PERSONALITY_SITUATIONAL
+    ]
+    assert {
+        q.id for q in situational if not q.text.endswith("어떻게 하시겠습니까?")
+    } == SITUATIONAL_ENDING_EXCEPTIONS
+
+
+def test_one_thing_per_question_except_the_documented_ones():
+    two_part = {q.id for q in COMMON_QUESTIONS if any(m in q.text for m in TWO_PART_MARKERS)}
+    assert two_part == TWO_PART_EXCEPTIONS
+
+
+def test_rubric_items_per_category_and_topic():
+    R = RubricItem
+    behavioral = {
+        PersonalityTopic.COLLABORATION: (R.COLLABORATION, R.SPECIFICITY, R.LEARNING),
+        PersonalityTopic.CONFLICT: (R.COLLABORATION, R.SPECIFICITY, R.LEARNING),
+        PersonalityTopic.FAILURE: (R.SPECIFICITY, R.LEARNING),
+        PersonalityTopic.RESPONSIBILITY: (R.SPECIFICITY, R.LEARNING),
+        PersonalityTopic.PROBLEM_SOLVING: (R.REASONING, R.SPECIFICITY, R.LEARNING),
+        PersonalityTopic.ETHICS: (R.REASONING, R.SPECIFICITY, R.LEARNING),
+    }
+    basic = {
+        CommonCategory.SELF_INTRODUCTION: (R.UNDERSTANDING,),
+        CommonCategory.MOTIVATION: (R.UNDERSTANDING,),
+        CommonCategory.STRENGTH_WEAKNESS: (R.SPECIFICITY, R.LEARNING),
+        CommonCategory.FUTURE_PLAN: (R.UNDERSTANDING,),
+        CommonCategory.VALUES: (R.UNDERSTANDING, R.COLLABORATION),
+        CommonCategory.CLOSING: (),
+    }
+    for q in COMMON_QUESTIONS:
+        if q.category == CommonCategory.PERSONALITY_BEHAVIORAL:
+            assert q.rubric_items == behavioral[q.topic], q.id
+        elif q.category == CommonCategory.PERSONALITY_SITUATIONAL:
+            assert q.rubric_items == (R.UNDERSTANDING, R.REASONING, R.COLLABORATION), q.id
+        else:
+            assert q.rubric_items == basic[q.category], q.id
+
+
+def test_values_question_joins_the_second_basic_pool_and_sits_with_motivation():
+    subtypes = {q.subtype for seed in range(80) for q in sample(seed)}
+    assert "values" in subtypes
+    comp = Composition(common_basic=5, personality_behavioral=1, personality_situational=0)
+    ordered = [q.subtype for q in sample(3, composition=comp)]
+    assert ordered[0] == "self_introduction"
+    assert set(ordered[1:3]) == {"motivation", "values"}
+    assert ordered.index("future_plan") > ordered.index("personality_behavioral")
+    assert ordered[-1] == "closing"
 
 
 def test_default_sample_has_expected_counts_and_order():
@@ -207,7 +333,7 @@ def test_default_sample_has_expected_counts_and_order():
     basic = [
         s
         for s in subtypes
-        if s in {"self_introduction", "motivation", "strength_weakness", "future_plan"}
+        if s in {"self_introduction", "motivation", "strength_weakness", "future_plan", "values"}
     ]
     assert len(basic) == 2
     assert all(q.kind == "common" and q.bank_id == q.id and q.round == 1 for q in questions)

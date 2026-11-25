@@ -83,7 +83,7 @@ MAX_INTENT_CHARS = 100
 # Share of the time budget after which no further extraction call starts.
 EXTRACT_BUDGET_SHARE = 0.6
 MAX_GENERATED_QUESTIONS = 8
-MAX_COMMON_BASIC = 4  # self-introduction plus the three other basic categories
+MAX_COMMON_BASIC = 5  # self-introduction plus the four other basic categories
 MAX_PERSONALITY = 6  # one per topic; behavioral and situational never share a topic
 
 # Material kinds each document-question subtype may be built on (plan 4.2 table).
@@ -806,7 +806,7 @@ class _Notifier:
 def _with_fillers(composition: Composition, shortfall: int) -> Composition:
     """Composition asking the bank for `shortfall` extra common questions.
 
-    Extra basic questions (motivation, strength/weakness, future plan) first, then extra
+    Extra basic questions (motivation, strength/weakness, future plan, values) first, then extra
     behavioral personality questions; both are capped by what the bank can give distinctly.
     """
     if shortfall <= 0:

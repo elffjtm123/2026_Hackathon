@@ -29,6 +29,7 @@ class CommonCategory(str, Enum):
     MOTIVATION = "motivation"
     STRENGTH_WEAKNESS = "strength_weakness"
     FUTURE_PLAN = "future_plan"
+    VALUES = "values"  # 가치관·일하는 방식
     CLOSING = "closing"
     PERSONALITY_BEHAVIORAL = "personality_behavioral"
     PERSONALITY_SITUATIONAL = "personality_situational"
