@@ -61,6 +61,8 @@ class TurnRules:
     no_response_ms: int = 15000
     endpoint_ms: int = 500
     final_wait_cap_ms: int = 3000
+    # A replayed question stays on screen at least this long even if the user speaks at once.
+    replay_min_visible_ms: int = 2000
     # Segmenter limits: longest single utterance, and speech start precedes the first voiced
     # frame by this pre-roll.
     max_utterance_ms: int = 8000

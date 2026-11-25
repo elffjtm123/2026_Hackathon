@@ -173,11 +173,67 @@ def test_speaking_during_replay_hides_question_and_resumes_clocks():
     c.start(0)
     speak(c, 4000, 6000)
     c.tick(6000, 0)
-    c.on_replay(6000)  # would show until 10000
-    assert c.on_frame(7000, 7500, True) == [HideQuestion("q1")]
-    speak(c, 7500, 20000)
+    c.on_replay(6000)  # would show until 10000; speech may hide it after 2 s on screen
+    assert c.on_frame(8000, 8500, True) == [HideQuestion("q1")]
+    speak(c, 8500, 20000)
     assert c.tick(23999, 0) == []
     assert c.tick(24000, 0)[0] == Advanced("q1", "silence")
+
+
+def test_a_replayed_question_stays_visible_for_two_seconds_despite_voice():
+    c = make("q1", "q2")
+    c.start(0)
+    speak(c, 4000, 6000)
+    c.tick(6000, 0)
+    c.on_replay(6000)  # reading time would run until 10000
+    # Voice from the very first moment of the replay: no hide before 6000 + 2000.
+    assert speak(c, 6000, 8000) == []
+    assert c.tick(7999, 0) == []
+    assert c.on_frame(8000, 8500, True) == [HideQuestion("q1")]
+    speak(c, 8500, 20000)
+    # The clocks were paused for the 2 s the question was on screen (6000-8000): the silence
+    # deadline is 4 s after the last voice (20000) plus those 2 s.
+    assert advances(c.tick(23999, 0)) == []
+    assert advances(c.tick(24000, 0)) == [Advanced("q1", "silence")]
+
+
+def test_a_deferred_hide_happens_on_the_tick_when_no_later_voice_arrives():
+    c = make("q1", "q2")
+    c.start(0)
+    speak(c, 4000, 6000)
+    c.tick(6000, 0)
+    c.on_replay(6000)
+    assert c.on_frame(6100, 6200, True) == []
+    assert c.tick(7999, 0) == []
+    assert c.tick(8000, 0) == [HideQuestion("q1")]
+    # Paused exactly while visible (2 s): last voice 6200 counts as 6000 on the active clock;
+    # 10 s of answer time plus the 4 s silence rule are met at eff 14000, that is 16000.
+    assert advances(c.tick(15999, 0)) == []
+    assert advances(c.tick(16000, 0)) == [Advanced("q1", "silence")]
+
+
+def test_a_replay_without_voice_hides_at_the_reading_end():
+    c = make("q1", "q2")
+    c.start(0)
+    c.tick(4000, 0)
+    c.on_replay(5000)
+    assert c.tick(8999, 0) == []
+    assert c.tick(9000, 0) == [HideQuestion("q1")]
+
+
+def test_the_first_showing_still_hides_on_the_first_voiced_frame():
+    c = make("q1")
+    c.start(0)
+    assert c.on_frame(1000, 1500, True) == [HideQuestion("q1")]
+
+
+def test_replay_minimum_is_a_turn_rule():
+    c = make("q1", rules=TurnRules(replay_min_visible_ms=500))
+    c.start(0)
+    c.tick(4000, 0)
+    c.on_replay(5000)
+    assert c.on_frame(5200, 5400, True) == []
+    assert c.on_frame(5500, 5700, True) == [HideQuestion("q1")]
 
 
 def test_advance_waits_for_pending_finals_up_to_three_second_cap():
@@ -380,10 +436,10 @@ def test_speaking_during_replay_ends_the_pause_early():
     speak(c, 4000, 6000)
     c.tick(6000, 0)
     c.on_replay(6000)  # would pause until 10000
-    assert c.on_frame(7000, 7500, True) == [HideQuestion("q1")]  # pause is cut to 6000-7000
-    # Answer time = now - 1 s of pause - 4000, so 10 s is reached at 15000 (18000 if uncut).
-    assert advances(c.tick(14999, 0)) == []
-    assert advances(c.tick(15000, 0)) == [Advanced("q1", "silence")]
+    assert c.on_frame(8000, 8500, True) == [HideQuestion("q1")]  # pause is cut to 6000-8000
+    # Answer time = now - 2 s of pause - 4000, so 10 s is reached at 16000 (18000 if uncut).
+    assert advances(c.tick(15999, 0)) == []
+    assert advances(c.tick(16000, 0)) == [Advanced("q1", "silence")]
 
 
 def test_fired_advance_reason_survives_new_speech_while_waiting_for_finals():

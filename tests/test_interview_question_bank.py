@@ -19,6 +19,9 @@ def sample(seed=0, *, job=None, exclude=(), composition=None):
 
 
 MIN_PER_GROUP = 10
+# Closing has fewer: two of its ten were removed (2026-11-25); their ids stay unused.
+MIN_CLOSING = 8
+REMOVED_IDS = {"basic-closing-4", "basic-closing-10"}
 PERSONALITY = (CommonCategory.PERSONALITY_BEHAVIORAL, CommonCategory.PERSONALITY_SITUATIONAL)
 # IDs of the seed questions; they are stored in users' browser history and must never change.
 _SEED_BASIC_PREFIXES = ("intro", "motive", "strength", "plan", "closing")
@@ -106,7 +109,8 @@ def groups():
 
 def test_bank_has_at_least_ten_questions_per_category_and_topic():
     for label, questions in groups():
-        assert len(questions) >= MIN_PER_GROUP, (label, len(questions))
+        minimum = MIN_CLOSING if label == (CommonCategory.CLOSING, None) else MIN_PER_GROUP
+        assert len(questions) >= minimum, (label, len(questions))
 
 
 def test_seed_question_ids_are_preserved():
@@ -119,10 +123,22 @@ def test_seed_question_texts_are_preserved():
     assert {i: BANK_BY_ID[i].text for i in SEED_IDS} == SEED_TEXTS
 
 
-def test_question_ids_are_numbered_without_gaps_per_group():
+def test_question_ids_are_numbered_without_gaps_except_the_removed_ones():
     for label, questions in groups():
         numbers = [int(q.id.rsplit("-", 1)[1]) for q in questions]
-        assert numbers == list(range(1, len(questions) + 1)), label
+        removed = {10, 4} if label == (CommonCategory.CLOSING, None) else set()
+        expected = [n for n in range(1, len(questions) + len(removed) + 1) if n not in removed]
+        assert numbers == expected, label  # only the removed ids are missing
+
+
+def test_removed_questions_are_gone_and_closing_keeps_the_other_eight():
+    assert not REMOVED_IDS & set(BANK_BY_ID)
+    closing = sorted(
+        int(q.id.rsplit("-", 1)[1])
+        for q in COMMON_QUESTIONS
+        if q.category == CommonCategory.CLOSING
+    )
+    assert closing == [1, 2, 3, 5, 6, 7, 8, 9]
 
 
 def test_questions_within_length_limits_and_one_sentence_unless_situational():

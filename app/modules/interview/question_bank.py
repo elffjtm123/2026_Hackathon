@@ -1,7 +1,10 @@
 """Common question bank and sampling.
 
-Every category/topic has 10 or more questions. Question ids are stored in users' browser
-history, so existing ids must never be renumbered or reused; new questions are appended.
+Every category/topic has 10 or more questions, except closing, which has 8: basic-closing-4
+and basic-closing-10 were removed (2026-11-25 user decision; their "anything to add" form
+differs from the plan's default closing). Question ids are stored in users' browser history,
+so existing ids must never be renumbered or reused (the removed ones stay unused); new
+questions are appended.
 Each question carries a `source`: "NCS 문형" (wording or topic follows the NCS 직업기초능력
 경험·상황면접 예시문항), "OPM 문형" (follows OPM structured-interview phrasing) or "자체 작성".
 Texts follow plan section 4.0: behavioral questions pick one "가장 ~한" experience and
@@ -64,7 +67,7 @@ _BASIC_INTENT = {
     CommonCategory.CLOSING: "지원자가 질문하는 시간이다. 평가하지 않는다.",
 }
 
-_BASIC_TEXTS: dict[CommonCategory, tuple[tuple[str, str], ...]] = {
+_BASIC_TEXTS: dict[CommonCategory, tuple[tuple[str, str] | None, ...]] = {
     CommonCategory.SELF_INTRODUCTION: (
         ("1분 동안 {직무} 직무에 지원한 본인을 소개해 주세요.", "자체 작성"),
         ("본인을 가장 잘 나타내는 키워드 하나를 골라 자기소개를 해 주세요.", "자체 작성"),
@@ -132,13 +135,13 @@ _BASIC_TEXTS: dict[CommonCategory, tuple[tuple[str, str], ...]] = {
         ("마지막으로 저희에게 궁금한 점이 있으면 질문해 주세요.", "OPM 문형"),
         ("면접을 마치기 전에 직무나 조직에 대해 궁금한 점이 있으면 질문해 주세요.", "OPM 문형"),
         ("{직무} 직무와 관련해 궁금한 점이 있으면 편하게 질문해 주세요.", "OPM 문형"),
-        ("면접 중 더 설명하고 싶었지만 하지 못한 내용이 있으면 말씀해 주세요.", "자체 작성"),
+        None,  # basic-closing-4: removed (id kept so the others are not renumbered)
         ("{직무} 직무의 하루 업무가 궁금하시면 편하게 질문해 주세요.", "OPM 문형"),
         ("입사 후 교육이나 적응 과정이 궁금하시면 질문해 주세요.", "OPM 문형"),
         ("함께 일하게 될 팀의 분위기나 일하는 방식이 궁금하시면 질문해 주세요.", "OPM 문형"),
         ("면접을 보면서 새로 궁금해진 점이 있으면 질문해 주세요.", "OPM 문형"),
         ("지원 과정이나 직무에 대해 확인하고 싶은 점이 있으면 편하게 질문해 주세요.", "OPM 문형"),
-        ("마지막으로 하고 싶은 질문이나 한마디가 있으면 말씀해 주세요.", "자체 작성"),
+        None,  # basic-closing-10: removed (id kept so the others are not renumbered)
     ),
 }
 
@@ -788,7 +791,10 @@ _BASIC_ID = {
 def _build_bank() -> tuple[BankQuestion, ...]:
     bank: list[BankQuestion] = []
     for category, entries in _BASIC_TEXTS.items():
-        for n, (text, source) in enumerate(entries, 1):
+        for n, entry in enumerate(entries, 1):
+            if entry is None:
+                continue  # a removed question keeps its number
+            text, source = entry
             bank.append(
                 BankQuestion(
                     f"basic-{_BASIC_ID[category]}-{n}",

@@ -8,8 +8,9 @@ Rules in short (values come from TurnRules):
 - Silence advances only after `silence_ms` without voice AND `min_answer_ms` of answer time.
 - The time limit advances at the end of the current utterance (last voiced end + endpoint).
 - No response is measured from the end of the first reading time.
-- One replay per question; the answer, silence and no-response clocks stop while it is shown
-  (speaking during a replay hides it and resumes the clocks).
+- One replay per question; the answer, silence and no-response clocks stop while it is shown.
+  Speaking during a replay hides it and resumes the clocks, but not before it has been on
+  screen `replay_min_visible_ms` (the hide waits for that, the reading end still hides it).
 - Once an advance reason fires it is committed: the conductor waits for `pending_finals == 0`
   (at most `final_wait_cap_ms`) before advancing. Later finals still attach to the original
   question because they are assigned by `start_ms` to the question whose window contains it.
@@ -74,6 +75,7 @@ class _Slot:
     first_reading_end_ms: int
     visible: bool = True
     visible_since_ms: int = 0  # start of the current on-screen period (first show or replay)
+    hide_deferred: bool = False  # voice arrived during the replay's minimum display time
     answer_started_ms: int | None = None
     last_voiced_end_ms: int | None = None
     replay_used: bool = False
@@ -119,6 +121,9 @@ class InterviewConductor:
         slot.last_voiced_end_ms = max(slot.last_voiced_end_ms or 0, end_ms)
         # A frame that began before the question (re)appeared is lagging speech, not a reaction.
         if slot.visible and start_ms >= slot.visible_since_ms:
+            if slot.replay_used and start_ms < self._replay_min_end(slot):
+                slot.hide_deferred = True  # the tick hides it when the minimum has passed
+                return actions
             slot.visible = False
             actions.append(HideQuestion(slot.question.id))
             # Speaking during a replay ends its pause at the moment speech began.
@@ -160,6 +165,13 @@ class InterviewConductor:
         if slot.visible and now_ms >= slot.reading_end_ms:
             slot.visible = False
             actions.append(HideQuestion(slot.question.id))
+        elif slot.visible and slot.hide_deferred and now_ms >= self._replay_min_end(slot):
+            slot.visible = False
+            actions.append(HideQuestion(slot.question.id))
+            # The question was on screen until the minimum ended, not until this tick.
+            for window in slot.pauses:
+                if window[0] <= self._replay_min_end(slot) < window[1]:
+                    window[1] = self._replay_min_end(slot)
         if slot.candidate is None:
             reason = self._detect_reason(slot, now_ms)
             if reason is not None:
@@ -236,6 +248,9 @@ class InterviewConductor:
         self._current = slot
         self._last_round = question.round
         return [self._show_action(question)]
+
+    def _replay_min_end(self, slot: _Slot) -> int:
+        return slot.visible_since_ms + self._rules.replay_min_visible_ms
 
     def _track_run(self, start_ms: int, end_ms: int) -> None:
         gap_limit = self._rules.endpoint_ms
