@@ -73,13 +73,8 @@ def _attach_interview(
                     )
                     return result
 
-        async def suspend() -> None:
-            await pipeline.suspend()
-            # A pulse model loaded during round 1 must not sit beside the generation model.
-            await app.state.pretrained_pulse.release()
-
         round_break = RoundBreak(
-            suspend=suspend,
+            suspend=pipeline.suspend,
             resume=pipeline.resume,
             follow_ups=follow_ups,
             timeout_seconds=app.state.settings.interview_follow_up_timeout_seconds,

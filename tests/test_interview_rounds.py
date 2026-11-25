@@ -272,17 +272,18 @@ def test_another_session_cannot_start_during_the_break(client, fast) -> None:
         completed(ws)
 
 
-def test_the_pulse_model_is_released_when_the_break_begins(client, fast) -> None:
+def test_the_pulse_model_stays_loaded_through_the_break(client, fast) -> None:
+    """Pulse keeps being measured during the break (explicit exception to model exclusivity)."""
     interview_id = make_plan(client)
     llm = use_llm(client, BlockingSession({}))
     pulse = client.app.state.pretrained_pulse
-    pulse.session = object()  # an ONNX session loaded by round 1
+    marker = pulse.session = object()  # an ONNX session loaded by round 1
     with client.websocket_connect(URL) as ws:
         send_v2(ws, "session.start", 1, data=start_data(interview_id, ["q1"]))
         session_id = until(ws, "session.ready")["session_id"]
         send_v2(ws, "calibration.start", 2, session_id)
         origin = until(ws, "session.running")["data"]["audio_origin_ms"]
         break_started(ws, client, origin, llm)  # generation is running
-        assert pulse.session is None
+        assert pulse.session is marker
         send_v2(ws, "session.end", 3, session_id)
         completed(ws)

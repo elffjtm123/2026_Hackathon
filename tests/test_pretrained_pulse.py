@@ -73,11 +73,12 @@ def test_infer_is_rejected_while_an_offline_job_owns_the_models(client, owner, c
     assert (response.status_code, response.json()["error"]["code"]) == (409, code)
 
 
-def test_infer_is_rejected_while_a_session_borrows_the_generation_model(client, monkeypatch):
+def test_infer_is_not_rejected_while_a_session_borrows_the_generation_model(client, monkeypatch):
+    """The round break is an explicit exception: pulse keeps being measured then."""
     monkeypatch.setattr(type(client.app.state.model_execution), "generation_active", True)
     headers = {"origin": "http://testserver", "content-type": "application/octet-stream"}
     response = client.post("/api/v1/pulse/infer", content=packet(), headers=headers)
-    assert (response.status_code, response.json()["error"]["code"]) == (409, "INTERVIEW_BUSY")
+    assert response.json().get("error", {}).get("code") not in {"INTERVIEW_BUSY", "SUMMARY_BUSY"}
 
 
 def test_missing_model_is_explicit(client, tmp_path):
@@ -247,9 +248,7 @@ def test_bundled_model_checksum_is_enforced(tmp_path, monkeypatch):
         runner._run(times, frames, "ma_ubfc_tscan")
 
 
-async def test_infer_refuses_to_load_while_the_realtime_models_are_stopped_for_a_break(
-    tmp_path, monkeypatch
-) -> None:
+async def test_infer_keeps_working_through_a_sessions_round_break(tmp_path, monkeypatch) -> None:
     from uuid import uuid4
 
     from app.ai.model_execution import ModelExecution
@@ -267,25 +266,20 @@ async def test_infer_refuses_to_load_while_the_realtime_models_are_stopped_for_a
     pulse.execution = execution
     monkeypatch.setattr(pulse, "available", lambda *a: True)
     monkeypatch.setattr("app.services.pretrained_pulse.read_pulse_packet", lambda *a: (None, None))
-
-    def load(*args):
-        pulse.session = "ONNX"  # the lazy load of _run
-        return {}
-
-    monkeypatch.setattr(pulse, "_run", load)
+    monkeypatch.setattr(pulse, "_run", lambda *args: {"ok": True})
     session = uuid4()
     await execution.start_session(session)
-    await pulse.infer(b"x")  # round 1: fine
-    await pulse.release()
-    await execution.suspend_session(session)  # suspended, not yet borrowing
-    with pytest.raises(AppError) as refused:
-        await pulse.infer(b"x")
-    assert refused.value.code == "INTERVIEW_BUSY" and pulse.session is None
+    assert await pulse.infer(b"x") == {"ok": True}
+    await execution.suspend_session(session)  # suspended
+    assert await pulse.infer(b"x") == {"ok": True}
     async with execution.borrowing(session):  # the generation model is loaded
-        with pytest.raises(AppError):
-            await pulse.infer(b"x")
-        assert pulse.session is None
+        assert await pulse.infer(b"x") == {"ok": True}
     await execution.resume_session(session)
-    await pulse.infer(b"x")  # the realtime models are back
-    assert pulse.session == "ONNX"
+    assert await pulse.infer(b"x") == {"ok": True}
     await execution.stop_session(session)
+    for kind in ("summary", "interview_plan", "interview_evaluation"):
+        execution.reserve_offline(kind)  # no practice session runs: still refused
+        with pytest.raises(AppError) as refused:
+            await pulse.infer(b"x")
+        assert refused.value.code == "INTERVIEW_BUSY"
+        execution.release_offline(kind)
