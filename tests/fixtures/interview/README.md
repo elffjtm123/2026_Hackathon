@@ -1,12 +1,14 @@
 # 면접 연습 샘플 문서
 
-모든 인물·학교·회사·연락처는 가상입니다(실존 인물 정보 없음). 공개 샘플을 찾지 않고 직접 만든 합성 문서입니다.
+모든 인물·학교·회사·연락처는 가상입니다. 실존 인물의 이름, 연락처, 학교, 회사명은 들어 있지 않습니다.
+
+문서 내용은 공개된 개발자 이력서의 요소(프로젝트 유형, 문제와 해결 방식, 기술 스택)를 익명화하고 문장을 바꿔 쓴 뒤 여러 출처를 섞어 만들었습니다. 고유한 수치는 다른 값으로 바꿨고, 한 사람이 특정되지 않도록 세부 내용을 조합했습니다. 이력서의 섹션 구조(요약, 경력, 경험, 학력, ETC)는 공개된 가상 이력서 양식을 따랐고 그 문구는 쓰지 않았습니다.
 
 | 세트 | 직무 | 이력서 | 자기소개서 | 포트폴리오 |
 |---|---|---|---|---|
-| `a_ai_engineer` | AI 엔지니어 신입(프로젝트 다수) | `resume.pdf` | `cover_letter.docx` | `portfolio.txt` |
-| `b_backend` | 백엔드 개발자 신입(인턴) | `resume.docx`(표 포함) | `cover_letter.txt` | `portfolio.pdf` |
-| `c_planning` | 기획·마케팅(활동 중심) | `resume.txt` | `cover_letter.pdf` | `portfolio.docx`(표 포함) |
+| `a_ai_engineer` | AI/ML 엔지니어 신입 | `resume.pdf` | `cover_letter.docx` | `portfolio.txt` |
+| `b_backend` | 백엔드 개발자 신입(인턴 포함) | `resume.docx`(표 포함) | `cover_letter.txt` | `portfolio.pdf` |
+| `c_frontend` | 프론트엔드 개발자 신입~2년차 | `resume.txt` | `cover_letter.pdf` | `portfolio.docx`(표 포함) |
 
 `extra/` 는 오류·검증 테스트용입니다.
 

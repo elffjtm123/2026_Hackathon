@@ -47,37 +47,37 @@ def error_code(call) -> str:
 def test_pdf_korean_text_is_extracted() -> None:
     result = extract("a_ai_engineer/resume.pdf")
     assert result.kind is DocumentKind.RESUME
-    assert "한지우" in result.text
-    assert "객체 검출" in result.text
+    assert "정다온" in result.text
+    assert "종양 세포" in result.text
     assert "정보처리기사" in result.text
     assert result.warnings == ()
 
 
 def test_docx_extracts_paragraphs_and_table_cells_in_document_order() -> None:
     result = extract("b_backend/resume.docx")
-    assert "오세진" in result.text
-    assert "가상공과대학교" in result.text  # inside a table
-    assert "정산 서비스 API 개선" in result.text  # inside a table
-    # table 인적사항 comes before the 학력 heading and its table
+    assert "임도현" in result.text
+    assert "dohyun.lim@example.com" in result.text  # inside the contacts table
+    assert "결제 API 리팩터링" in result.text
+    # the contacts table comes before the 보유 역량 요약 heading, 학력 and ETC come last
     assert (
-        result.text.index("오세진")
-        < result.text.index("학력")
+        result.text.index("dohyun.lim@example.com")
+        < result.text.index("보유 역량 요약")
         < result.text.index("가상공과대학교")
+        < result.text.index("SQLD")
     )
-    assert "자격" in result.text and result.text.index("가상공과대학교") < result.text.index("SQLD")
 
 
 def test_docx_table_row_cells_stay_on_one_line() -> None:
-    result = extract("c_planning/portfolio.docx", DocumentKind.PORTFOLIO)
+    result = extract("c_frontend/portfolio.docx", DocumentKind.PORTFOLIO)
     assert any(
-        "마케팅 학회 공모전" in line and "기획팀장" in line for line in result.text.splitlines()
+        "사내 디자인 시스템" in line and "Storybook" in line for line in result.text.splitlines()
     )
 
 
 def test_txt_is_decoded_and_normalized() -> None:
     result = extract("a_ai_engineer/portfolio.txt", DocumentKind.PORTFOLIO)
-    assert "소형 객체 검출 데이터 증강 연구" in result.text
-    assert "58%" in result.text
+    assert "병리 영상 종양 세포 검출" in result.text
+    assert "약 20%" in result.text
 
 
 def test_txt_strips_bom_and_falls_back_to_cp949() -> None:
@@ -242,11 +242,11 @@ def test_a_document_exactly_at_the_budget_is_not_truncated() -> None:
 
 def test_fixture_sets_cover_every_kind_with_key_phrases() -> None:
     expected = {
-        "a_ai_engineer/cover_letter.docx": "물체의 재현율",
-        "b_backend/cover_letter.txt": "정산 배치",
+        "a_ai_engineer/cover_letter.docx": "염색 정규화",
+        "b_backend/cover_letter.txt": "멱등성 키",
         "b_backend/portfolio.pdf": "Redis",
-        "c_planning/cover_letter.pdf": "기획팀장",
-        "c_planning/resume.txt": "문하린",
+        "c_frontend/cover_letter.pdf": "디자인 시스템",
+        "c_frontend/resume.txt": "신채원",
     }
     for relative, phrase in expected.items():
         assert phrase in extract(relative, DocumentKind.COVER_LETTER).text, relative

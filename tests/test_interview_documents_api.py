@@ -42,9 +42,9 @@ def test_three_fixtures_return_kind_text_and_warnings(client: TestClient) -> Non
     assert response.status_code == 200
     body = response.json()
     assert [item["kind"] for item in body] == ["resume", "cover_letter", "portfolio"]
-    assert "한지우" in body[0]["text"]
-    assert "물체의 재현율" in body[1]["text"]
-    assert "소형 객체 검출 데이터 증강 연구" in body[2]["text"]
+    assert "정다온" in body[0]["text"]
+    assert "염색 정규화" in body[1]["text"]
+    assert "병리 영상 종양 세포 검출" in body[2]["text"]
     assert all(item["warnings"] == [] for item in body)
 
 

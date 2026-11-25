@@ -22,7 +22,7 @@ SOURCES = FIXTURES / "src"
 LAYOUT: dict[str, dict[str, str]] = {
     "a_ai_engineer": {"resume": "pdf", "cover_letter": "docx", "portfolio": "txt"},
     "b_backend": {"resume": "docx", "cover_letter": "txt", "portfolio": "pdf"},
-    "c_planning": {"resume": "txt", "cover_letter": "pdf", "portfolio": "docx"},
+    "c_frontend": {"resume": "txt", "cover_letter": "pdf", "portfolio": "docx"},
 }
 
 
