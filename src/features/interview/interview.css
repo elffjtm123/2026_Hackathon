@@ -1,13 +1,20 @@
 /* Interview: preparation, live question panel and result. Panels reuse the paper recipe of styles.css. */
-.interview-setup, .interview-results { display: grid; gap: var(--space-md); min-width: 0; }
+.interview-setup, .interview-results { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-md); min-width: 0; }
+.interview-results > *, .interview-setup > * { min-width: 0; }
+/* the delivery table scrolls inside its own wrapper instead of widening the page */
+.interview-report { grid-template-columns: minmax(0, 1fr); }
+.interview-report > *, .interview-results .summary-panel, .interview-results .delivery-report { min-width: 0; }
+.interview-results .summary-panel, .interview-results .delivery-report { grid-template-columns: minmax(0, 1fr); }
+.interview-results .delivery-report > * { min-width: 0; }
 .interview-panel, .interview-card { display: grid; gap: var(--space-sm); min-width: 0; padding: var(--space-md); border: 1px solid var(--color-rule); border-radius: var(--radius-card); background: var(--light); }
 .interview-panel h2, .interview-results__cards > h2 { font-size: var(--text-lg); }
 .interview-note, .interview-count { color: var(--color-ink-2); font-size: var(--text-sm); line-height: 1.55; }
 .interview-warning { padding: var(--space-xs) var(--space-sm); border-radius: var(--radius-input); background: var(--color-paper-2); color: var(--color-ink-2); font-size: var(--text-sm); line-height: 1.5; }
-.interview-doc { display: grid; gap: var(--space-xs); min-width: 0; margin: 0; padding: var(--space-sm); border: 1px solid var(--color-rule); border-radius: var(--radius-input); }
+.interview-doc { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-xs); min-width: 0; min-inline-size: 0; box-sizing: border-box; margin: 0; padding: var(--space-sm); border: 1px solid var(--color-rule); border-radius: var(--radius-input); }
 .interview-doc legend { padding-inline: var(--space-xs); font-weight: 500; }
-.interview-doc__file { display: grid; gap: var(--space-2xs); }
-.interview-doc__input { max-width: 100%; font: inherit; }
+.interview-doc__file { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-2xs); min-width: 0; }
+.interview-doc__file > *, .interview-doc .label, .interview-job .label { min-width: 0; overflow-wrap: anywhere; }
+.interview-doc__input { width: 100%; min-width: 0; max-width: 100%; font: inherit; }
 .interview-doc__input::file-selector-button { min-height: var(--control-h); margin-right: var(--space-sm); padding: 0 var(--space-md); border: 1px solid var(--color-rule); border-radius: var(--radius-input); background: var(--light); color: var(--color-ink); font: inherit; cursor: pointer; }
 .interview-doc__name { color: var(--color-muted); font-size: var(--text-sm); overflow-wrap: anywhere; }
 .interview-doc textarea, .interview-job input { width: 100%; min-height: var(--control-h); padding: var(--space-xs) var(--space-sm); border: 1px solid var(--color-muted); border-radius: var(--radius-input); background: var(--color-paper); color: var(--color-ink); font: inherit; line-height: 1.55; box-sizing: border-box; resize: vertical; }
@@ -18,6 +25,7 @@
 .interview-progress { display: grid; gap: var(--space-xs); }
 .interview-progress progress { width: 100%; height: var(--space-xs); }
 .interview-questions { display: grid; gap: var(--space-xs); margin: 0; padding: 0; list-style: none; counter-reset: q; }
+.interview-questions, .interview-q { min-width: 0; }
 .interview-q { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-xs) var(--space-sm); padding: var(--space-sm); border: 1px solid var(--color-rule); border-radius: var(--radius-input); counter-increment: q; }
 .interview-q.is-off { background: var(--color-paper-3); color: var(--color-muted); }
 .interview-q__check { display: flex; align-items: flex-start; gap: var(--space-xs); min-width: 0; cursor: pointer; }

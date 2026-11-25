@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {answerRemainingMs, canReplay, initialInterviewState, interviewReducer, readingRemainingMs,
+import {formatClock, answerRemainingMs, canReplay, initialInterviewState, interviewReducer, readingRemainingMs,
   remainingQuestions, closeOpenBreaks} from '../src/features/interview/interviewState.ts';
 
 const ev = (event, data, at, serverMs = at) => ({type: 'event', event, data, at, serverMs});
@@ -126,12 +126,42 @@ test('malformed events are ignored and reset returns to the start', () => {
   assert.deepEqual(interviewReducer(used, {type: 'reset'}), initialInterviewState);
 });
 
+test('the countdowns never exceed their limits even when the local clock lags the event', () => {
+  const s = run([ev('interview.question', question('q1', {answer_limit_ms: 90000, reading_ms: 5000}), 1000),
+    ev('interview.question_hidden', {question_id: 'q1'}, 6000)]);
+  assert.equal(answerRemainingMs(s, 5800), 90000, 'now (a 250 ms tick) is older than the hide event');
+  assert.equal(formatClock(answerRemainingMs(s, 5800)), '1:30');
+  const early = run([ev('interview.question', question('q1'), 1000)]);
+  assert.equal(readingRemainingMs(early, 900), 5000);
+});
+
+test('a connection lost after the first question loses the plan', async () => {
+  const {interviewScreen} = await import('../src/features/interview/interviewState.ts');
+  const lost = {locked: false, completed: false, hasSummary: true, asked: true, dismissed: false};
+  assert.deepEqual(interviewScreen(lost), {report: false, showSetup: true, planSpent: false, planLost: true});
+  assert.equal(interviewScreen({...lost, asked: false}).planLost, false, 'before the first question the plan is given back');
+  assert.equal(interviewScreen({...lost, completed: true}).planLost, false);
+  assert.equal(interviewScreen({...lost, locked: true}).planLost, false);
+});
+
 test('the screen returns to the question list when the session ended before its first question', async () => {
   const {interviewScreen} = await import('../src/features/interview/interviewState.ts');
   const base = {locked: false, completed: true, hasSummary: true, asked: false, dismissed: false};
-  assert.deepEqual(interviewScreen(base), {report: false, showSetup: true, planSpent: false}, 'start cancelled or connection lost');
-  assert.deepEqual(interviewScreen({...base, asked: true}), {report: true, showSetup: false, planSpent: true}, 'the plan is spent while the report shows');
-  assert.deepEqual(interviewScreen({...base, asked: true, dismissed: true}), {report: true, showSetup: true, planSpent: false});
+  assert.deepEqual(interviewScreen(base), {report: false, showSetup: true, planSpent: false, planLost: false}, 'start cancelled or connection lost');
+  assert.deepEqual(interviewScreen({...base, asked: true}), {report: true, showSetup: false, planSpent: true, planLost: false}, 'the plan is spent while the report shows');
+  assert.deepEqual(interviewScreen({...base, asked: true, dismissed: true}), {report: true, showSetup: true, planSpent: false, planLost: false});
   assert.equal(interviewScreen({...base, asked: true, locked: true}).showSetup, false);
   assert.equal(interviewScreen({...base, completed: false, hasSummary: false}).showSetup, true);
+});
+
+test('a later presentation session or a failed end never reads as a lost interview', async () => {
+  const {interviewScreen} = await import('../src/features/interview/interviewState.ts');
+  const finished = {locked: false, completed: true, hasSummary: true, asked: true, dismissed: false, interview: true};
+  assert.equal(interviewScreen(finished).planLost, false, 'a normal end');
+  // The user then switches to 발표 and starts or cancels a presentation: completed is false, the run still says asked.
+  assert.equal(interviewScreen({...finished, completed: false, interview: false}).planLost, false);
+  assert.equal(interviewScreen({...finished, completed: false, hasSummary: false, interview: false}).planLost, false);
+  // The end failed (timeout, socket died): the interview's own session has no summary, so the plan is lost.
+  assert.equal(interviewScreen({...finished, hasSummary: false}).planLost, true);
+  assert.equal(interviewScreen({...finished, completed: false}).planLost, true);
 });

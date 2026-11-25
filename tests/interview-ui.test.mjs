@@ -168,7 +168,6 @@ test("면접은 진행 화면과 실제 세션 결과 화면을 구분한다", a
       },
     })
   );
-  assert.match(report, /실제로 인식된 답변/);
   assert.match(report, /질문별 결과/);
   assert.match(report, /tabindex="-1"[^>]*>면접 연습 결과<\/h2>/);
   assert.doesNotMatch(report, /<video/);
@@ -374,4 +373,47 @@ test("1초마다 바뀌는 카운트다운은 읽어 주는 영역 밖에 있다
   assert.doesNotMatch(hidden + reading + await renderLive(runState({ status: "break", question: null, breakStage: "generating" })), /role="status"[^>]*>[^<]*<[^>]*role="status"/);
   const breakHtml = await renderLive(runState({ status: "break", question: null, textVisible: false, breakStage: "generating" }));
   assert.doesNotMatch(breakHtml.match(/<div aria-live="polite"[^>]*>.*?<\/div>/s)[0], /role="status"/);
+});
+
+test("면접 결과에는 발표 전용 항목이 없고 저장 안내가 면접에 맞다", async () => {
+  const { InterviewContent } = await server.ssrLoadModule("/src/features/practice/components/InterviewContent.tsx");
+  const { SessionSummary } = await server.ssrLoadModule("/src/features/practice/components/SessionSummary.tsx");
+  const summary = { sessionId: "s1", durationSeconds: 60, gazeAwayRatio: 0.1, pronunciationAccuracy: null, speechPaceWarningCount: 0,
+    averageSyllablesPerMinute: 250, fillerWordCounts: {}, transcript: "전체 받아쓰기 문장", incomplete: false,
+    deliveryMetrics: { status: "observed", agc_on: false,
+      report: { total_voiced_ms: 60000, sentences: [{ start_ms: 0, end_ms: 1, voiced_ms: 1000, sentence_index: 0 }], baseline: {}, bursts: [] },
+      windows: { window_ms: 10000, baseline: {}, windows: [{ start_ms: 0, end_ms: 10000, voiced_ms: 8000, coverage: 0.8, speech_rate: 300 }] } } };
+  const html = renderToStaticMarkup(createElement(InterviewContent, { ...liveProps, isRunning: false, summary, reportItems }));
+  for (const gone of ["대본과 인식 결과 일치도", "실제 대본 진행률", "대본 일치도는 STT", "대본 문장별 특징", "새 리포트에는 저장하지 않습니다", "받아쓰기 결과", "전체 받아쓰기 문장"])
+    assert.ok(!html.includes(gone), `${gone} must not show in interview mode`);
+  assert.match(html, /이 브라우저에만 저장/);
+  assert.match(html, /시간 구간별 특징/);
+  const presentation = renderToStaticMarkup(createElement(SessionSummary, { summary }));
+  for (const kept of ["대본과 인식 결과 일치도", "실제 대본 진행률", "받아쓰기 결과", "전체 받아쓰기 문장", "대본 문장별 특징", "새 리포트에는 저장하지 않습니다"])
+    assert.ok(presentation.includes(kept), `${kept} stays in presentation mode`);
+});
+
+test("준비 화면은 파일 없음 문구를 한 번만 보이고, 잃어버린 계획 안내를 보여 준다", async () => {
+  const empty = await renderSetup(baseSetup());
+  assert.equal((empty.match(/선택한 파일 없음/g) ?? []).length, 0, "the native input already says it");
+  const named = await renderSetup(baseSetup({ kinds: { ...kinds, resume: { ...kinds.resume, fileName: "이력서.pdf" } } }));
+  assert.match(named, /이력서\.pdf/);
+  const notice = await renderSetup(baseSetup(), { notice: "연결이 끊겨 면접이 중단되었습니다. 질문을 다시 만들어 주세요." });
+  assert.match(notice, /role="alert"[^>]*>연결이 끊겨/);
+});
+
+test("준비 화면의 줄은 좁은 화면에서 줄어들 수 있게 minmax(0, 1fr)로 둔다", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const css = await readFile(new URL("../src/features/interview/interview.css", import.meta.url), "utf8");
+  assert.match(css, /\.interview-doc__file\s*{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/);
+  assert.match(css, /\.interview-doc\s*{[^}]*min-inline-size:\s*0/);
+  assert.match(css, /\.interview-doc__input\s*{[^}]*width:\s*100%/);
+});
+
+test("결과 화면의 열은 넓은 표 때문에 늘어나지 않는다", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const css = await readFile(new URL("../src/features/interview/interview.css", import.meta.url), "utf8");
+  assert.match(css, /\.interview-setup, \.interview-results\s*{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/);
+  assert.match(css, /\.interview-report\s*{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/);
+  assert.match(css, /\.interview-results \.summary-panel[^{]*{[^}]*min-width:\s*0/);
 });

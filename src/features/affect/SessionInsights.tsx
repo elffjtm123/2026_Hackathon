@@ -54,10 +54,10 @@ function PulseReference({signals}:{signals:SessionSignals}){
     <p className="affect-note">카메라 맥박 추정은 정확도가 검증되지 않았습니다. 목소리 활성도 계산에 쓰지 않고, 화면에서만 보여 주며 JSON 내려받기에도 넣지 않습니다.</p></div>;
 }
 
-export function SessionInsights({summary,signals}: {summary:PracticeSummary;signals:SessionSignals}){
+export function SessionInsights({summary,signals,scriptless=false}: {summary:PracticeSummary;signals:SessionSignals;scriptless?:boolean}){
   const dialog=useRef<HTMLDialogElement>(null);
   const analysis=useMemo(()=>analyzeActivation(signals,summary.deliveryMetrics),[signals,summary.deliveryMetrics]);
-  const coaching=useMemo(()=>coachingFor(summary),[summary]);
+  const coaching=useMemo(()=>coachingFor(summary,{scriptless}),[summary,scriptless]);
   const [selected,setSelected]=useState<number|null>(null);
   const point=selected===null?null:analysis.points[selected];
   const enough=analysis.status==='ok';

@@ -43,3 +43,16 @@ test('thousands of samples are bucketed to a few seconds, a bucket keeps the med
   assert.equal(series.samples.find(s => s.timeMs >= 250000).inBreak, false);
   assert.equal(pulseSeries({faces: [], pulses: [{time: 0, bpm: 60}, {time: 1000, bpm: 90}, {time: 2000, bpm: 70}]}).samples[0].bpm, 70);
 });
+
+test('coaching in an interview never mentions a script, and presentation wording is unchanged', async () => {
+  const {coachingFor} = await import('../src/features/affect/analysis.ts');
+  const summary = {incomplete: false, gazeStatus: 'ok', gazeCoverageRatio: 0.9, gazeAwayRatio: 0.4, averageSyllablesPerMinute: 400,
+    fillerWordCounts: {}, scriptCompletionRatio: 0.9};
+  const text = c => [...c.strengths, ...c.improvements, ...c.nextPractice].join(' ');
+  assert.doesNotMatch(text(coachingFor(summary, {scriptless: true})), /대본/);
+  assert.match(text(coachingFor(summary, {scriptless: true})), /같은 답변을 다시 말해/);
+  assert.match(text(coachingFor({...summary, averageSyllablesPerMinute: 100, gazeAwayRatio: 0.1}, {scriptless: true})), /의미 단위/);
+  assert.match(text(coachingFor({...summary, gazeAwayRatio: 0.1, averageSyllablesPerMinute: 250}, {scriptless: true})), /같은 질문으로 한 번 더/);
+  assert.doesNotMatch(text(coachingFor({...summary, averageSyllablesPerMinute: 250, gazeAwayRatio: 0.1, fillerWordCounts: null}, {scriptless: true})), /대본/);
+  assert.match(text(coachingFor(summary)), /같은 대본을 다시 읽고/);
+});

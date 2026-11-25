@@ -12,11 +12,13 @@ type InterviewSetupProps = {
   pastResults: StoredResult[];
   onOpenResult: (id: string) => void;
   onDeleteResult: (id: string) => void;
+  // Why the questions are gone (a lost connection spent the plan).
+  notice?: string | null;
 };
 
 const KIND_LABEL = {common: '공통', document: '서류 기반', follow_up: '추가'} as const;
 
-export function InterviewSetup({ setup, disabled, onStart, pastResults, onOpenResult, onDeleteResult }: InterviewSetupProps) {
+export function InterviewSetup({ setup, disabled, onStart, pastResults, onOpenResult, onDeleteResult, notice = null }: InterviewSetupProps) {
   const total = totalChars(setup.texts);
   const overLimit = total > MAX_TOTAL_CHARS;
   const uploading = DOCUMENT_KINDS.some(({ kind }) => setup.kinds[kind].busy);
@@ -25,6 +27,7 @@ export function InterviewSetup({ setup, disabled, onStart, pastResults, onOpenRe
     <div className="interview-setup">
       <section className="interview-panel" aria-labelledby="interview-docs-title">
         <h2 id="interview-docs-title">면접 서류와 지원 직무</h2>
+        {notice ? <p className="error-banner" role="alert">{notice}</p> : null}
         <p className="interview-note">
           자기소개서·이력서·포트폴리오를 올리면 그 내용으로 질문을 만듭니다. 서류 없이도 공통 질문으로 연습할 수 있습니다.
           서류 전문은 저장하지 않고 이 화면에만 남으며, 질문 생성에만 쓰고 버립니다. PDF·DOCX·TXT를 올릴 수 있고,
@@ -52,7 +55,7 @@ export function InterviewSetup({ setup, disabled, onStart, pastResults, onOpenRe
                     if (file) void setup.upload(kind, file);
                   }}
                 />
-                <span className="interview-doc__name" role="status">{state.busy ? '읽는 중' : state.fileName ?? '선택한 파일 없음'}</span>
+                {state.busy || state.fileName ? <span className="interview-doc__name" role="status">{state.busy ? '읽는 중' : state.fileName}</span> : null}
               </div>
               {state.error ? <p className="error-text" role="alert">{state.error}</p> : null}
               {state.note ? <p className="interview-warning" role="status">{state.note}</p> : null}

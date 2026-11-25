@@ -165,7 +165,8 @@ export function insightsExport(sessionId:string,analysis:ActivationAnalysis,coac
 }
 
 export type Coaching={strengths:string[];improvements:string[];nextPractice:string[]};
-export function coachingFor(summary:PracticeSummary):Coaching{
+// `scriptless` (interviews) words the tips without a script.
+export function coachingFor(summary:PracticeSummary,{scriptless=false}:{scriptless?:boolean}={}):Coaching{
   const strengths:string[]=[],improvements:string[]=[],nextPractice:string[]=[];
   if(summary.incomplete)improvements.push('일부 분석이 미완료여서 확인된 지표만 반영했습니다.');
   if(summary.gazeStatus==='disabled')improvements.push('시선 분석이 꺼져 있어 이번 시선 평가는 제공하지 않습니다.');
@@ -173,13 +174,13 @@ export function coachingFor(summary:PracticeSummary):Coaching{
     improvements.push('시선 관찰 근거가 부족합니다. 얼굴 위치와 조명을 확인한 뒤 다시 연습해 주세요.');
   else if(finite(summary.gazeAwayRatio)){
     const value=Math.round(summary.gazeAwayRatio*100);
-    if(value>20){improvements.push(`유효 관찰 중 시선 이탈이 ${value}%였습니다. 대본을 확인한 뒤 카메라 방향으로 시선을 회복해 보세요.`);nextPractice.push('대본 한 문장을 읽은 뒤 카메라 방향으로 시선을 되돌리는 연습을 합니다.');}
+    if(value>20){improvements.push(`유효 관찰 중 시선 이탈이 ${value}%였습니다. ${scriptless?'답변을 떠올리다 시선이 흐트러지지 않았는지 확인하고':'대본을 확인한 뒤'} 카메라 방향으로 시선을 회복해 보세요.`);nextPractice.push(scriptless?'한 문장을 말한 뒤 카메라 방향으로 시선을 되돌리는 연습을 합니다.':'대본 한 문장을 읽은 뒤 카메라 방향으로 시선을 되돌리는 연습을 합니다.');}
     else strengths.push(`유효 관찰 구간의 ${100-value}%에서 시선이 보정 기준 근처에 있었습니다.`);
   }
   const rate=summary.averageSyllablesPerMinute;
   if(summary.speechStatus!=='disabled'&&finite(rate)){
-    if(rate>360){improvements.push(`평균 ${Math.round(rate)}음절/분으로 현재 속도 설정 상한(360)을 넘었습니다.`);nextPractice.push('문장 끝에서 짧게 쉬며 같은 대본을 다시 읽고 속도 변화를 비교합니다.');}
-    else if(rate<140){improvements.push(`평균 ${Math.round(rate)}음절/분으로 현재 속도 설정 하한(140)보다 느렸습니다.`);nextPractice.push('문장을 의미 단위로 묶어 읽고 과도하게 긴 쉼이 줄었는지 확인합니다.');}
+    if(rate>360){improvements.push(`평균 ${Math.round(rate)}음절/분으로 현재 속도 설정 상한(360)을 넘었습니다.`);nextPractice.push(scriptless?'문장 끝에서 짧게 쉬며 같은 답변을 다시 말해 보고 속도 변화를 비교합니다.':'문장 끝에서 짧게 쉬며 같은 대본을 다시 읽고 속도 변화를 비교합니다.');}
+    else if(rate<140){improvements.push(`평균 ${Math.round(rate)}음절/분으로 현재 속도 설정 하한(140)보다 느렸습니다.`);nextPractice.push(scriptless?'답변을 의미 단위로 나눠 말하고 과도하게 긴 쉼이 줄었는지 확인합니다.':'문장을 의미 단위로 묶어 읽고 과도하게 긴 쉼이 줄었는지 확인합니다.');}
     else strengths.push(`평균 발화 속도 ${Math.round(rate)}음절/분이 현재 설정 범위 안에 있었습니다.`);
   }else improvements.push('발화 속도를 산출할 근거가 부족하거나 기능이 꺼져 있습니다.');
   if(!['disabled','unavailable'].includes(summary.fillerStatus??'')&&summary.fillerWordCounts!==null){
@@ -187,7 +188,7 @@ export function coachingFor(summary:PracticeSummary):Coaching{
     if(total>0){improvements.push(`받아쓰기에 남은 습관어가 ${total}회 검출됐습니다. 실제 발화보다 적게 집계될 수 있습니다.`);nextPractice.push('습관어가 나오는 구간을 짧은 무음으로 바꾸어 한 번 더 연습합니다.');}
     else strengths.push('받아쓰기에서 습관어가 검출되지 않았습니다. STT에서 생략된 표현은 포함되지 않습니다.');
   }
-  if(finite(summary.scriptCompletionRatio)&&summary.scriptCompletionRatio>=.8)strengths.push(`대본 진행률 ${Math.round(summary.scriptCompletionRatio*100)}%를 확인했습니다.`);
-  if(!nextPractice.length)nextPractice.push('같은 대본으로 한 번 더 연습하고 시선·속도·습관어 결과를 비교합니다.');
+  if(!scriptless&&finite(summary.scriptCompletionRatio)&&summary.scriptCompletionRatio>=.8)strengths.push(`대본 진행률 ${Math.round(summary.scriptCompletionRatio*100)}%를 확인했습니다.`);
+  if(!nextPractice.length)nextPractice.push(scriptless?'같은 질문으로 한 번 더 연습하고 시선·속도·습관어 결과를 비교합니다.':'같은 대본으로 한 번 더 연습하고 시선·속도·습관어 결과를 비교합니다.');
   return {strengths:strengths.slice(0,3),improvements:improvements.slice(0,4),nextPractice:nextPractice.slice(0,3)};
 }

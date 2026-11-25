@@ -25,13 +25,16 @@ export function useInterviewResult({run, plan, chosenIds, summary, items, onFini
   const evaluation = useInterviewEvaluation();
   const recorded = useRef<string | null>(null);
   const gates = useRef({evaluate: createOnceGate(), save: createOnceGate(), finish: createOnceGate()});
+  // Summary, items and plan as they were when the evaluation started, so the result is still saved
+  // if the screen has moved on (a presentation started) by the time it settles.
+  const snapshot = useRef<{plan: InterviewPlan; items: InterviewItem[]; summary: PracticeSummary} | null>(null);
   const callbacks = useRef({onFinished});
   useEffect(() => { callbacks.current = {onFinished}; }, [onFinished]);
 
   const resetEvaluation = evaluation.reset;
   const reset = useCallback(() => {
     resetEvaluation();
-    recorded.current = null;
+    recorded.current = null; snapshot.current = null;
     Object.values(gates.current).forEach(gate => gate.reset());
   }, [resetEvaluation]);
 
@@ -51,19 +54,22 @@ export function useInterviewResult({run, plan, chosenIds, summary, items, onFini
   const sessionId = summary?.sessionId ?? null;
   const startEvaluation = evaluation.start;
   useEffect(() => {
-    if (plan && shouldAutoEvaluate(gates.current.evaluate, {sessionId, hasPlan: true, itemCount: items.length}))
+    if (summary && plan && shouldAutoEvaluate(gates.current.evaluate, {sessionId, hasPlan: true, itemCount: items.length})) {
+      snapshot.current = {plan, items, summary};
       void startEvaluation(plan.interview_id);
-  }, [sessionId, plan, items, startEvaluation]);
+    }
+  }, [sessionId, summary, plan, items, startEvaluation]);
 
   // Stored with the evaluation when it finished, transcript-only when it failed or was cancelled.
   // A retry that succeeds replaces the transcript-only entry.
   const { status, evaluation: result } = evaluation.state;
   useEffect(() => {
-    if (!summary || !plan || items.length === 0) return;
+    const kept = snapshot.current;
+    if (!kept) return;
     if (status !== 'complete' && status !== 'failed' && status !== 'cancelled') return;
-    if (!gates.current.save.take(resultSaveKey(plan, status))) return;
-    saveResult(browserStorage(), storedResultFor({plan, items, summary, status, evaluation: result, date: new Date().toISOString()}));
-  }, [status, result, summary, plan, items]);
+    if (!gates.current.save.take(resultSaveKey(kept.plan, status))) return;
+    saveResult(browserStorage(), storedResultFor({...kept, status, evaluation: result, date: new Date().toISOString()}));
+  }, [status, result]);
 
   return {evaluation, reset};
 }

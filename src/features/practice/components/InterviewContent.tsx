@@ -150,7 +150,7 @@ export function InterviewContent({
           onCancelEvaluation={onCancelEvaluation}
           onRetryEvaluation={onRetryEvaluation}
         >
-          <SessionSummary summary={summary} />
+          <SessionSummary summary={summary} interview />
         </InterviewReport>
       </section>
     );

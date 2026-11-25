@@ -77,9 +77,17 @@ export function PracticePage({onActivityChange}: {onActivityChange?: (busy: bool
   const [reportDismissed, setReportDismissed] = useState(false);
   const [viewingId, setViewingId] = useState<string | null>(null);
   const [pastResults, setPastResults] = useState<StoredResult[]>(() => loadResults());
-  const {report: interviewReport, showSetup, planSpent} = interviewScreen({locked, completed: completedMode === "interview",
-    hasSummary: !!session.summary, asked: interviewRun.run.status !== "idle", dismissed: reportDismissed});
+  const [planNotice, setPlanNotice] = useState<string | null>(null);
+  const {report: interviewReport, showSetup, planSpent, planLost} = interviewScreen({locked, completed: completedMode === "interview",
+    hasSummary: !!session.summary, asked: interviewRun.run.status !== "idle", dismissed: reportDismissed, interview});
   useEffect(() => { if (showSetup) setPastResults(loadResults()); }, [showSetup]);
+  // The connection ended a started interview: its plan is spent, so a new one has to be made.
+  const {resetPlan} = interviewSetup, resetRun = interviewRun.reset;
+  useEffect(() => {
+    if (!planLost) return;
+    resetPlan(); resetRun();
+    setPlanNotice('연결이 끊겨 면접이 중단되었습니다. 이미 시작한 질문은 다시 쓸 수 없으니 질문을 다시 만들어 주세요.');
+  }, [planLost, resetPlan, resetRun]);
   const endRef = useRef<() => void>(() => undefined);
   endRef.current = () => { void lifecycle.end(); };
   const onFinished = useCallback(() => endRef.current(), []);
@@ -87,7 +95,12 @@ export function PracticePage({onActivityChange}: {onActivityChange?: (busy: bool
     summary: interviewReport ? session.summary : null, items: session.completionReport?.interviewItems ?? [], onFinished});
   const startInterview = () => {
     if (!interviewSetup.start || locked || planSpent) return;
-    interviewRun.reset(); interviewResult.reset(); setReportDismissed(false); setViewingId(null);
+    interviewRun.reset(); interviewResult.reset(); setReportDismissed(false); setViewingId(null); setPlanNotice(null);
+    void lifecycle.start();
+  };
+  // A finished interview's plan is spent and its screen is left behind once another session starts.
+  const startPresentation = () => {
+    if (interviewRun.run.status !== "idle") { interviewSetup.resetPlan(); interviewRun.reset(); setPlanNotice(null); }
     void lifecycle.start();
   };
   const newInterview = () => {
@@ -148,7 +161,7 @@ export function PracticePage({onActivityChange}: {onActivityChange?: (busy: bool
         isStopping={isStopping}
         elapsedSeconds={session.elapsedSeconds}
         onModeChange={session.setMode}
-        onStart={interview ? startInterview : lifecycle.start}
+        onStart={interview ? startInterview : startPresentation}
         onEnd={interview ? () => { void lifecycle.end({incomplete: true}); } : lifecycle.end}
         startBlocked={script.isSummarizing}
         startDisabled={interview && (!interviewSetup.start || planSpent)}
@@ -157,14 +170,14 @@ export function PracticePage({onActivityChange}: {onActivityChange?: (busy: bool
       <div className="screen">
         <h1>{interview ? "면접 연습" : "발표 및 면접 실시간 피드백"}</h1>
         {media.error ? <p className="error-banner">{media.error}</p> : null}
-        {operationError ? <p className="error-banner" role="alert">{operationError}</p> : null}
+        {operationError && operationError !== media.error ? <p className="error-banner" role="alert">{operationError}</p> : null}
         {socketErrorShown ? <p className="error-banner" role="alert">{socket.error}</p> : null}
 
         {interview ? <>
           {showSetup ? (viewing ? <StoredResultView result={viewing} onBack={() => setViewingId(null)}
             onDelete={() => { deleteResult(browserStorage(), viewing.interview_id); setViewingId(null); setPastResults(loadResults()); }} />
             : <InterviewSetup setup={interviewSetup} disabled={isStarting || isStopping} onStart={startInterview}
-              pastResults={pastResults} onOpenResult={setViewingId}
+              pastResults={pastResults} onOpenResult={setViewingId} notice={interviewSetup.plan ? null : planNotice}
               onDeleteResult={id => { deleteResult(browserStorage(), id); setPastResults(loadResults()); }} />) : <>
             <SessionStatus phase={session.phase} connectionStatus={socket.status} onRecalibrate={socket.startCalibration} />
             <InterviewContent
@@ -216,7 +229,7 @@ export function PracticePage({onActivityChange}: {onActivityChange?: (busy: bool
           </section>
         </> : prepare}
 
-        {interview && !showSetup && interviewReport && session.summary && signals.recorded ? <SessionInsights summary={session.summary} signals={signals.recorded} /> : null}
+        {interview && !showSetup && interviewReport && session.summary && signals.recorded ? <SessionInsights summary={session.summary} signals={signals.recorded} scriptless /> : null}
       </div>
     </main>
     </>

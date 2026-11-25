@@ -16,6 +16,12 @@ export function mediaErrorMessage(error: unknown) {
   return "카메라/마이크를 시작하지 못했습니다. 장치와 브라우저 권한을 확인해 주세요.";
 }
 
+// What startMedia throws: the page shows its message, so it must be Korean; the raw browser error
+// (English text) stays reachable as `cause` and in the console.
+export function mediaStartError(error: unknown): Error {
+  return new Error(mediaErrorMessage(error), {cause: error});
+}
+
 export function useUserMedia() {
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -76,6 +82,8 @@ export function useUserMedia() {
         const message = mediaErrorMessage(mediaError);
         setError(message);
         stopMedia();
+        console.warn('getUserMedia failed', mediaError);
+        throw mediaStartError(mediaError);
       }
       throw mediaError;
     }

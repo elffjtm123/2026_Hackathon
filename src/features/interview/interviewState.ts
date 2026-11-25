@@ -113,13 +113,14 @@ export const canReplay = (state: InterviewRunState) =>
 
 export function readingRemainingMs(state: InterviewRunState, now: number): number {
   if (!state.question || !state.textVisible || state.readingStartedAt === null) return 0;
-  return Math.max(0, state.question.readingMs - (now - state.readingStartedAt));
+  // `now` is a coarse tick and can be older than the event: never more than the full time.
+  return Math.min(state.question.readingMs, Math.max(0, state.question.readingMs - (now - state.readingStartedAt)));
 }
 
 // Null while the first reading is on screen (no answer time has passed). Stopped during a replay.
 export function answerRemainingMs(state: InterviewRunState, now: number): number | null {
   if (!state.question || (state.answerRunningSince === null && state.answerElapsedMs === 0)) return null;
-  const used = state.answerElapsedMs + (state.answerRunningSince === null ? 0 : now - state.answerRunningSince);
+  const used = state.answerElapsedMs + (state.answerRunningSince === null ? 0 : Math.max(0, now - state.answerRunningSince));
   return Math.max(0, state.question.answerLimitMs - used);
 }
 
@@ -135,9 +136,13 @@ export function formatClock(ms: number): string {
 // Which interview screen shows. A session that ended before its first question has no result (the
 // server gives the plan back), so it returns to the setup; a finished interview shows its report
 // until the user asks for a new one, and its plan is spent meanwhile.
-export function interviewScreen({locked, completed, hasSummary, asked, dismissed}: {
+export function interviewScreen({locked, completed, hasSummary, asked, dismissed, interview = true}: {
   locked: boolean; completed: boolean; hasSummary: boolean; asked: boolean; dismissed: boolean;
-}): {report: boolean; showSetup: boolean; planSpent: boolean} {
+  // The session mode on screen: a later presentation session says nothing about the interview's end.
+  interview?: boolean;
+}): {report: boolean; showSetup: boolean; planSpent: boolean; planLost: boolean} {
   const report = completed && hasSummary && asked;
-  return {report, showSetup: !locked && (!report || dismissed), planSpent: report && !dismissed};
+  // Questions were asked but the session never completed (connection lost): the plan cannot be reused.
+  return {report, showSetup: !locked && (!report || dismissed), planSpent: report && !dismissed,
+    planLost: interview && !locked && asked && !(completed && hasSummary)};
 }
