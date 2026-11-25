@@ -256,3 +256,29 @@ async def test_old_or_delayed_gaze_result_cannot_become_fresh(recalibrate):
     finally:
         release.set()
         await pipeline.stop()
+
+
+def test_an_excluded_interval_shortens_the_duration_and_splits_gaze_episodes() -> None:
+    aggregator = FeedbackAggregator()
+    aggregator.add(gaze_result(1000, True, "left"))
+    aggregator.add(gaze_result(1500, True, "left"))
+    aggregator.exclude(2000, 32_000)  # e.g. the interview's round break
+    aggregator.add(gaze_result(32_000, True, "left"))
+    aggregator.add(gaze_result(32_500, True, "center"))
+
+    report = aggregator.report(0, 40_000)
+
+    # The break is not away time; the same direction afterwards is a new episode.
+    assert report["gaze_away_duration_ms"] == 1000
+    assert report["gaze_away_count"] == 2
+    assert report["summary"]["duration_ms"] == 10_000
+    assert report["gaze_metrics"]["valid_duration_ms"] == 2000
+    assert report["gaze_metrics"]["unknown_duration_ms"] == 8000
+    assert aggregator.gaze_away_duration_ms == 500 + 500  # the live counter skips the break too
+
+
+def test_an_interval_outside_the_report_range_is_not_subtracted() -> None:
+    aggregator = FeedbackAggregator()
+    aggregator.exclude(50_000, 60_000)
+    assert aggregator.report(0, 40_000)["summary"]["duration_ms"] == 40_000
+    assert aggregator.report(0, 55_000)["summary"]["duration_ms"] == 50_000

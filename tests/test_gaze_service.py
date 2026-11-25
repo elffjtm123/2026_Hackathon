@@ -210,3 +210,16 @@ def test_face_change_during_initial_calibration_restarts_window_not_session():
     for index in range(16):
         result = stabilizer.update(gaze_result(1125 + index * 125, True, "center"))
     assert result.metrics["calibrated"]
+
+
+def test_a_bridged_gap_keeps_the_calibration_where_a_plain_gap_invalidates_it() -> None:
+    plain, bridged = GazeStabilizer(), GazeStabilizer()
+    for stabilizer in (plain, bridged):
+        stabilizer.update(gaze_result(1000, face_detected=True, direction="center"))
+    bridged.bridge_gap()  # a long break with no frames (the interview's round break)
+    for stabilizer in (plain, bridged):
+        stabilizer.update(gaze_result(60_000, face_detected=True, direction="center"))
+    assert plain.recalibration_required and plain.baseline_yaw is None
+    assert not bridged.recalibration_required and bridged.baseline_yaw == 0.0
+    result = bridged.update(gaze_result(61_000, face_detected=True, direction="left"))
+    assert result.metrics["calibrated"] is True

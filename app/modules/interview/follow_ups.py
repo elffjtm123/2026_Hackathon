@@ -148,7 +148,7 @@ def build_fallback_follow_up(parent: PlannedQuestion, gap: GapType) -> PlannedQu
         text=fallback_question_text(gap),
         intent=f"답변에서 빠진 요소({gap.value})를 확인한다.",
         source_quote=None,
-        rubric_items=list(parent.rubric_items),
+        rubric_items=[GAP_RUBRIC_ITEM[gap]],
         parent_id=parent.id,
         bank_id=None,
         round=2,

@@ -34,6 +34,9 @@ Subscriber = Callable[[RealtimeEvent], Awaitable[None]]
 logger = logging.getLogger(__name__)
 # Audio time between display-only previews of the utterance still being spoken.
 PARTIAL_INTERVAL_MS = 1500
+# The first audio after a round break may be stamped at most this far before the resume (it
+# was captured while the models were coming back); older audio belongs to the break.
+RESUME_AUDIO_TOLERANCE_MS = 1000
 
 
 def _delivery_counts(text: str) -> tuple[int, int]:
@@ -95,6 +98,13 @@ class SessionPipeline:
         # Set only for an interview with questions; fed frames/finals, started when running.
         self.interview: InterviewRun | None = None
         self.phase = "preparing"
+        # Round break: None, "suspending", "suspended" or "resuming" (see suspend()).
+        self.break_state: str | None = None
+        self._break_started_ms = 0
+        self._audio_resync = False  # the first audio after a break may skip ahead
+        self._resumed_ms = 0
+        self._utterance_counter = 0  # utterance ids keep counting across segmenters
+        self._drain_lock = asyncio.Lock()
         self.protocol = 1
         self.running_started_ms: int | None = None
         self.audio_origin_ms = 0
@@ -161,12 +171,24 @@ class SessionPipeline:
                 raise ValueError("MODEL_UNAVAILABLE_OR_BUSY")
         self.running = True
         self.started_monotonic = time.monotonic()
+        self._start_workers()
+        await self.state_store.set(self.session_id, {"status": "active", **self.metrics()})
+
+    def _start_workers(self) -> None:
         self.tasks = [
             asyncio.create_task(self._video_worker(), name=f"video-{self.session_id}"),
             asyncio.create_task(self._audio_worker(), name=f"audio-{self.session_id}"),
             asyncio.create_task(self._speech_worker(), name=f"speech-{self.session_id}"),
         ]
-        await self.state_store.set(self.session_id, {"status": "active", **self.metrics()})
+
+    def _models_unavailable(self) -> bool:
+        return any(
+            enabled and hasattr(adapter, "reason")
+            for enabled, adapter in [
+                (self.analysis_settings.get("gaze_enabled", True), self.gaze),
+                (self._speech_needed(), self.speech),
+            ]
+        )
 
     async def start_calibration(self) -> None:
         if self.phase not in {"preparing", "calibrating", "running"}:
@@ -210,7 +232,30 @@ class SessionPipeline:
             # The first question appears only now, when the user's answers can be heard.
             await self.interview.start(self.audio_origin_ms)
 
+    async def _drop_media_during_break(self, media: MediaPayload) -> None:
+        """Media sent while the break is on (the client may not know yet) is not an error.
+
+        Audio is acknowledged and its position remembered, so a client that kept sending
+        continues seamlessly after the break; video is dropped silently.
+        """
+        if media.format != "pcm16":
+            return
+        if media.sequence > self.media_sequences["pcm16"]:
+            self.media_sequences["pcm16"] = media.sequence
+            self.next_audio_sample = max(
+                self.next_audio_sample, media.start_sample + media.sample_count
+            )
+            self.media_timestamps["pcm16"] = max(self.media_timestamps["pcm16"], media.timestamp_ms)
+        await self.emit(
+            "media.ack",
+            self.elapsed_ms(),
+            {"media_type": "audio", "accepted_sequence": media.sequence},
+        )
+
     async def accept_media(self, media: MediaPayload) -> None:
+        if self.break_state is not None and self.phase in {"running", "suspended"}:
+            await self._drop_media_during_break(media)
+            return
         if not self.accepting or (media.format == "pcm16" and self.phase != "running"):
             raise ValueError("INVALID_SESSION_STATE")
         kind = media.format
@@ -235,9 +280,18 @@ class SessionPipeline:
         ):
             self.incomplete = True
             raise ValueError("INVALID_MEDIA_TIMESTAMP")
+        resync = kind == "pcm16" and self._audio_resync
+        if resync and media.timestamp_ms < self._resumed_ms - RESUME_AUDIO_TOLERANCE_MS:
+            # Samples stamped inside the break: the client's sample counter stopped with it.
+            self.incomplete = True
+            raise ValueError("INVALID_MEDIA_TIMESTAMP")
         if media.sequence <= last or (
             kind == "pcm16"
-            and (media.sequence != last + 1 or media.start_sample != self.next_audio_sample)
+            and (
+                media.start_sample < self.next_audio_sample
+                if resync  # the client may have stopped sending during the break
+                else media.sequence != last + 1 or media.start_sample != self.next_audio_sample
+            )
         ):
             self.incomplete = True
             raise ValueError("MEDIA_SEQUENCE_GAP")
@@ -251,7 +305,8 @@ class SessionPipeline:
             except asyncio.TimeoutError as exc:
                 self.incomplete = True
                 raise ValueError("AUDIO_QUEUE_FULL") from exc
-            self.next_audio_sample += media.sample_count
+            self.next_audio_sample = media.start_sample + media.sample_count
+            self._audio_resync = False
             self.audio_receipts[media.sequence] = receipt
             if len(self.audio_receipts) > 32:
                 del self.audio_receipts[min(self.audio_receipts)]
@@ -291,6 +346,112 @@ class SessionPipeline:
             self.incomplete = True
             return False
 
+    def _clear_queues(self) -> None:
+        for queue in [self.audio_queue, self.speech_queue, self.video_queue.queue]:
+            while not queue.empty():
+                queue.get_nowait()
+                queue.task_done()
+
+    async def _drain_workers(self) -> bool:
+        """Stop the workers after the accepted audio is processed, speech tail included.
+
+        Returns True when the grace period ran out first. Video is replaceable and just
+        cancelled. A no-op when the workers are already down (suspended).
+        """
+        async with self._drain_lock:
+            if not self.tasks:
+                return False
+            self.tasks[0].cancel()
+
+            async def drain() -> None:
+                await self.audio_queue.put(
+                    MediaPayload(self.session_id, self.elapsed_ms(), b"", format="flush")
+                )
+                await self.audio_queue.join()
+                await self.speech_queue.join()
+
+            timed_out = False
+            try:
+                await asyncio.wait_for(drain(), timeout=self.settings.pipeline_grace_seconds)
+            except asyncio.TimeoutError:
+                timed_out = True
+                logger.warning("pipeline_grace_timeout", extra={"session_id": self.session_id})
+            if self.partial_task is not None:
+                self.tasks.append(self.partial_task)
+                self.partial_task = None
+            for task in self.tasks:
+                task.cancel()
+            await asyncio.gather(*self.tasks, return_exceptions=True)
+            self.tasks.clear()
+            return timed_out
+
+    async def suspend(self) -> None:
+        """Round break: stop the realtime models but keep the session (and its report) alive.
+
+        New media is dropped from now on. The speech received so far is transcribed first (the
+        same drain `stop` does), then the workers stop and `execution.suspend_session` stops the
+        realtime runtime while the session keeps owning the models. The aggregator, gaze
+        calibration, timeline and session clock stay as they are; the break is left out of the
+        observation time when `resume` (or `stop`) closes it. `stop` works at any point of it.
+        """
+        if self.phase != "running" or self.break_state is not None:
+            raise ValueError("INVALID_SESSION_STATE")
+        self.break_state = "suspending"
+        self.accepting = False
+        self._break_started_ms = self.elapsed_ms()
+        if await self._drain_workers():
+            self.incomplete = True
+        self._clear_queues()  # what a grace timeout left behind must not reach round two
+        if self.segmenter is not None:
+            self._utterance_counter = self.segmenter.counter
+            self.segmenter = None
+        self.gaze_stabilizer.bridge_gap()  # the calibration survives the break
+        if self.execution is not None and self._execution_acquired:
+            await self.execution.suspend_session(self.session_id)
+        if self.phase != "running":
+            return  # stop() got there first
+        self.break_state = "suspended"
+        self.phase = "suspended"
+        await self.emit("session.suspended", self.elapsed_ms(), {})
+
+    async def resume(self) -> None:
+        """End the round break: restart the realtime models and workers and accept media again.
+
+        The audio timeline is unchanged (`audio_origin_ms` and sample numbers keep counting
+        with the session clock); the first audio after this may skip ahead over what the client
+        did not send during the break.
+        """
+        if self.phase != "suspended" or self.break_state != "suspended":
+            raise ValueError("INVALID_SESSION_STATE")
+        self.break_state = "resuming"
+        if self.execution is not None and self._execution_acquired:
+            await self.execution.resume_session(self.session_id)
+        if self.phase != "suspended":
+            return  # stop() got there first
+        if self._models_unavailable():
+            if self.execution is not None and self._execution_acquired:
+                await self.execution.stop_session(self.session_id)
+                self._execution_acquired = False
+            raise ValueError("MODEL_UNAVAILABLE_OR_BUSY")
+        now = self.elapsed_ms()
+        self.aggregator.exclude(self._break_started_ms, now)
+        if self.delivery is not None:
+            self.delivery.mark_gap(self._break_started_ms, now)
+        self.last_audio_activity_ms = now
+        self.speech_waiting = False
+        self.partial_last_end_ms = None
+        self._audio_resync = True
+        self._resumed_ms = now
+        self._start_workers()
+        self.accepting = True
+        self.phase = "running"
+        self.break_state = None
+        await self.emit(
+            "session.resumed",
+            self.elapsed_ms(),
+            {"audio_origin_ms": self.audio_origin_ms, "break_ms": now - self._break_started_ms},
+        )
+
     async def stop(self) -> dict[str, Any]:
         async with self._stop_lock:
             if self.completed_report is not None:
@@ -306,35 +467,16 @@ class SessionPipeline:
             if self.running:
                 if self.protocol == 2:
                     await self.emit("session.draining", self.elapsed_ms(), self.metrics())
-                # Video is replaceable; accepted audio must be drained, including its tail.
-                self.tasks[0].cancel()
-
-                async def drain() -> None:
-                    await self.audio_queue.put(
-                        MediaPayload(self.session_id, self.elapsed_ms(), b"", format="flush")
-                    )
-                    await self.audio_queue.join()
-                    await self.speech_queue.join()
-
-                try:
-                    await asyncio.wait_for(
-                        drain(),
-                        timeout=self.settings.pipeline_grace_seconds,
-                    )
-                except asyncio.TimeoutError:
+                if await self._drain_workers():
                     incomplete = True
-                    logger.warning(
-                        "pipeline_grace_timeout",
-                        extra={"session_id": self.session_id},
-                    )
-                if self.partial_task is not None:
-                    self.tasks.append(self.partial_task)
-                    self.partial_task = None
-                for task in self.tasks:
-                    task.cancel()
-                await asyncio.gather(*self.tasks, return_exceptions=True)
-                self.tasks.clear()
                 self.running = False
+
+            if self.break_state is not None:
+                # Stopped during the break: it ends here and is not observation time.
+                self.aggregator.exclude(self._break_started_ms, running_end_ms)
+                if self.delivery is not None:
+                    self.delivery.mark_gap(self._break_started_ms, running_end_ms)
+                self.break_state = None
 
             delivery_metrics = self._delivery_metrics()
             report = {
@@ -354,10 +496,7 @@ class SessionPipeline:
             if self.experiment is not None:
                 report["comparison"] = self.experiment.summary(self.video_queue.stats.dropped)
             self.audio_receipts.clear()
-            for queue in [self.audio_queue, self.speech_queue, self.video_queue.queue]:
-                while not queue.empty():
-                    queue.get_nowait()
-                    queue.task_done()
+            self._clear_queues()
             if self.execution is not None and self._execution_acquired:
                 await self.execution.stop_session(self.session_id)
                 self._execution_acquired = False
@@ -483,6 +622,12 @@ class SessionPipeline:
                         silence_rms_threshold=self.settings.stt_silence_rms_threshold,
                         observe_frame=self._observe_frame,
                     )
+                    self.segmenter.counter = self._utterance_counter
+                    if media.format == "pcm16":
+                        # After a break the first audio starts wherever the client got to.
+                        self.segmenter.next_sample = self.segmenter.pending_start = (
+                            media.start_sample
+                        )
                 segments = (
                     self.segmenter.flush()
                     if media.format == "flush"

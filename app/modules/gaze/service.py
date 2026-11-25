@@ -102,6 +102,16 @@ class GazeStabilizer:
         self.last_timestamp_ms = self.last_valid_ms = None
         self.last_warning_ms = None
 
+    def bridge_gap(self) -> None:
+        """Keep the calibration across a long pause in frames (the interview's round break).
+
+        Without this the next frame, minutes later, would look like a lost face and
+        invalidate the baseline. Only the running state is forgotten.
+        """
+        self.last_valid_ms = None
+        self.smooth = None
+        self.state, self.state_started_ms = "unknown", None
+
     def invalidate(self, reason: str) -> None:
         self.window.clear()
         self.baseline_yaw = self.baseline_pitch = None

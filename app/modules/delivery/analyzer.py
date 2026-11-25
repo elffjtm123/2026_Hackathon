@@ -75,6 +75,29 @@ class DeliveryAnalyzer:
         self.voiced_clock = 0
         self.last_sentence_index = 0
         self.last_start_ms = 0
+        self.gaps: list[tuple[int, int]] = []
+
+    def mark_gap(self, start_ms: int, end_ms: int) -> None:
+        """Declare [start_ms, end_ms) unobserved (a round break): it is no pause, no silent
+        window and no speech time. Gaps must not overlap."""
+        if end_ms > start_ms:
+            self.gaps.append((start_ms, end_ms))
+
+    def _gap_overlap(self, start_ms: int, end_ms: int) -> int:
+        return sum(max(0, min(end_ms, b) - max(start_ms, a)) for a, b in self.gaps)
+
+    def _spans_gap(self, left_end: int, right_start: int) -> bool:
+        return any(left_end < b and right_start > a for a, b in self.gaps)
+
+    def _pause_stats(self, runs: list[tuple[int, int]]) -> tuple[int, int]:
+        """Pause count and longest pause of ordered runs; a pause over a gap is not counted."""
+        parts: list[list[tuple[int, int]]] = [[]]
+        for run in runs:
+            if parts[-1] and self._spans_gap(parts[-1][-1][1], run[0]):
+                parts.append([])
+            parts[-1].append(run)
+        stats = [features.pauses(part) for part in parts]
+        return sum(count for count, _ in stats), max((longest for _, longest in stats), default=0)
 
     def _slot(self, ms: int) -> int:
         return (ms - self.origin_ms) // self.window_ms
@@ -166,12 +189,14 @@ class DeliveryAnalyzer:
         rows = []
         for position, index in enumerate(order):
             s = self.sentences[index]
-            count, longest = features.pauses(s.runs)
+            count, longest = self._pause_stats(s.runs)
             following = next(
                 (self.sentences[i] for i in order[position + 1 :] if self.sentences[i].runs), None
             )
             end_pause = (
-                max(0, following.runs[0][0] - s.runs[-1][1]) if s.runs and following else None
+                max(0, following.runs[0][0] - s.runs[-1][1])
+                if s.runs and following and not self._spans_gap(s.runs[-1][1], following.runs[0][0])
+                else None
             )
             rows.append(
                 {
@@ -179,7 +204,12 @@ class DeliveryAnalyzer:
                     "voiced_ms": s.voiced_ms,
                     "syllables": s.syllables,
                     "speech_rate": features.speech_rate(
-                        s.syllables, s.runs[-1][1] - s.runs[0][0] if s.runs else 0
+                        s.syllables,
+                        s.runs[-1][1]
+                        - s.runs[0][0]
+                        - self._gap_overlap(s.runs[0][0], s.runs[-1][1])
+                        if s.runs
+                        else 0,
                     ),
                     "articulation_rate": features.articulation_rate(s.syllables, s.voiced_ms),
                     "pause_count": count,
@@ -222,6 +252,7 @@ class DeliveryAnalyzer:
             self._slot(left[1])
             for left, right in itertools.pairwise(self.runs)
             if right[0] - left[1] >= features.PAUSE_MIN_MS
+            and not self._spans_gap(left[1], right[0])
         )
         session_f0 = self._session_f0_median()
         rows = []
@@ -229,7 +260,10 @@ class DeliveryAnalyzer:
             w = self.slots.get(slot) or _Window()
             start = self.origin_ms + slot * self.window_ms
             enough = w.voiced_ms >= features.WINDOW_MIN_VOICED_MS
-            observed = min(start + self.window_ms, self.last_ms) - max(start, self.first_ms)
+            span = (max(start, self.first_ms), min(start + self.window_ms, self.last_ms))
+            observed = span[1] - span[0] - self._gap_overlap(*span)
+            if observed <= 0 and not w.voiced_ms and self.gaps:
+                continue  # a window inside a gap does not exist
 
             def acoustic(value: float | None, enough: bool = enough) -> float | None:
                 return value if enough else None

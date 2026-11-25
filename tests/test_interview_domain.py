@@ -416,7 +416,7 @@ def test_fallback_text_exists_for_every_gap_and_builds_round_two_question():
     assert child.kind == "follow_up" and child.round == 2
     assert child.parent_id == parent.id and child.subtype == "own_role"
     assert child.text == fallback_question_text(GapType.OWN_ROLE)
-    assert child.rubric_items == parent.rubric_items
+    assert child.rubric_items == [RubricItem.SPECIFICITY]  # the gap's own rubric item
 
 
 def test_dedupe_keeps_same_template_questions_about_different_materials():

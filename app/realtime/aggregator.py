@@ -29,6 +29,18 @@ class FeedbackAggregator:
         self.script_progress_ratio = 0.0
         self.script_alignment_observed = False
         self.script_pace_deltas: list[int] = []
+        self.excluded: list[tuple[int, int]] = []  # intervals nobody was observed in
+
+    def exclude(self, start_ms: int, end_ms: int) -> None:
+        """Leave [start_ms, end_ms) out of the observation time (a round break).
+
+        Gaze observations never span it (the report skips gaps over 1 s), so it only shortens
+        the duration. The away episode in progress ends here: the break is not away time, and
+        looking away again afterwards starts a new episode.
+        """
+        if end_ms > start_ms:
+            self.excluded.append((start_ms, end_ms))
+        self.last_gaze_was_away = False
 
     def add(self, result: AIResult) -> bool:
         if result.source == "speech_rate" and result.is_final:
@@ -158,7 +170,11 @@ class FeedbackAggregator:
         settings = settings or {}
         if end_ms is None:
             end_ms = self.last_gaze_timestamp_ms or running_started_ms
-        duration = max(0, end_ms - running_started_ms)
+        excluded_ms = sum(
+            max(0, min(stop, end_ms) - max(start, running_started_ms))
+            for start, stop in self.excluded
+        )
+        duration = max(0, end_ms - running_started_ms - excluded_ms)
         valid_ms = away_ms = 0
         for index, (timestamp, valid, away) in enumerate(self.gaze_observations):
             if index + 1 < len(self.gaze_observations):

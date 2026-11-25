@@ -19,7 +19,7 @@ from app.core.errors import AppError
 from app.core.security import decode_token
 from app.db.models.session import PracticeSession, SessionStatus
 from app.modules.interview.composition import TurnRules
-from app.modules.interview.questions import ItemRecord
+from app.modules.interview.questions import ItemRecord, PlannedQuestion
 from app.realtime.events import (
     ClientEvent,
     InterviewStartData,
@@ -27,7 +27,7 @@ from app.realtime.events import (
     SessionStartData,
     V2ClientEvent,
 )
-from app.realtime.interview_run import InterviewRun
+from app.realtime.interview_run import InterviewRun, RoundBreak
 from app.realtime.media import decode_media_v2
 from app.realtime.pipeline import SessionPipeline
 from app.services.experiment_exclusion import ExperimentRunning
@@ -75,6 +75,27 @@ def _attach_interview(
     def save_items(items: list[ItemRecord]) -> None:
         store.save_items(start.interview_id, items)
 
+    app = websocket.app
+    execution = app.state.model_execution
+    round_break: RoundBreak | None = None
+    if execution is not None:
+
+        async def follow_ups(items: list[ItemRecord]) -> list[PlannedQuestion]:
+            # The generation model may only load while this session is suspended; stop_session
+            # cancels this task (the borrower) and waits for llama-server to be reaped.
+            async with execution.borrowing(session_id):
+                async with app.state.local_llm.loaded() as llm_session:
+                    result: list[PlannedQuestion] = await app.state.interview_llm.follow_ups(
+                        items, llm_session
+                    )
+                    return result
+
+        round_break = RoundBreak(
+            suspend=pipeline.suspend,
+            resume=pipeline.resume,
+            follow_ups=follow_ups,
+            timeout_seconds=app.state.settings.interview_follow_up_timeout_seconds,
+        )
     return InterviewRun(
         questions,
         TurnRules(),
@@ -82,6 +103,7 @@ def _attach_interview(
         emit=emit,
         pending_finals=pipeline.pending_finals,
         save_items=save_items,
+        round_break=round_break,
     )
 
 

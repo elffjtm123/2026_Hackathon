@@ -18,8 +18,14 @@ All outgoing events pass one outbox that a single task drains, so they leave in 
 conductor produced them even though frames are observed from synchronous callbacks. The task
 wakes at once when something was queued and otherwise ticks every `tick_seconds`.
 
-Round 2 (follow-up questions after a round break) is not wired yet: `_on_round_finished` is the
-seam where step 7 suspends the pipeline, generates follow-ups and calls `conductor.add_questions`.
+Round break: when round 1 finishes and `round_break` hooks are given, `interview.finished` is
+held back and a separate task (never the flush that saw `RoundFinished`, which holds the flush
+lock) runs: suspend the pipeline, generate follow-ups, resume, `conductor.add_questions`. Its
+events go through the same outbox. No evaluable answer, no follow-ups, a failed or timed-out
+generation all end the interview with `round_break {stage: "skipped"}` and `interview.finished`
+(without restarting the realtime models just to finish). `stop` and `finalize` cancel the task.
+The conductor has no current question during the break, so nothing times out in it; when the
+models are back its clock jumps to the wall clock and round 2 starts there.
 """
 
 from __future__ import annotations
@@ -28,6 +34,7 @@ import asyncio
 import logging
 from collections import deque
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from typing import Any
 
 from app.modules.interview.composition import TurnRules
@@ -40,11 +47,22 @@ from app.modules.interview.conductor import (
     RoundFinished,
     ShowQuestion,
 )
+from app.modules.interview.follow_ups import allowed_gaps, follow_up_candidate
 from app.modules.interview.questions import FinalUtterance, ItemRecord, PlannedQuestion
 
 logger = logging.getLogger(__name__)
 
 Emit = Callable[[str, dict[str, Any]], Awaitable[None]]
+
+
+@dataclass
+class RoundBreak:
+    """What the round break needs from outside (all awaited from the break task)."""
+
+    suspend: Callable[[], Awaitable[None]]  # stop the realtime models, keep the session
+    resume: Callable[[], Awaitable[None]]  # bring them back
+    follow_ups: Callable[[list[ItemRecord]], Awaitable[list[PlannedQuestion]]]
+    timeout_seconds: float = 120  # for `follow_ups`, model start-up included
 
 
 class InterviewRun:
@@ -58,7 +76,10 @@ class InterviewRun:
         pending_finals: Callable[[], int],
         save_items: Callable[[list[ItemRecord]], None],
         tick_seconds: float = 0.2,
+        round_break: RoundBreak | None = None,
     ) -> None:
+        self._round_break = round_break
+        self._break_task: asyncio.Task[None] | None = None
         self._conductor = InterviewConductor(questions, rules)
         self._stall_allowance_ms = rules.stall_allowance_ms
         self._latest_frame_end: int | None = None
@@ -131,9 +152,13 @@ class InterviewRun:
             return
         self._stopped = True
         task, self._task = self._task, None
-        if task is not None:
-            task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
+        break_task = self._break_task
+        for running in (task, break_task):
+            if running is not None:
+                running.cancel()
+        await asyncio.gather(
+            *(t for t in (task, break_task) if t is not None), return_exceptions=True
+        )
         self._guarded(lambda: self._enqueue(self._conductor.stop(self._now())))
         try:
             await asyncio.wait_for(self.step(tick=False), self.stop_flush_seconds)
@@ -154,6 +179,8 @@ class InterviewRun:
             task, self._task = self._task, None
             if task is not None:
                 task.cancel()  # no await here; stop() is the clean path
+            if self._break_task is not None:
+                self._break_task.cancel()
             self._guarded(lambda: self._conductor.stop(self._now()))
         items = self._conductor.items()
         try:
@@ -198,7 +225,6 @@ class InterviewRun:
             while self._outbox:
                 entry = self._outbox.popleft()
                 if isinstance(entry, RoundFinished):
-                    await self._emit("interview.finished", {})
                     await self._on_round_finished(entry.round)
                 else:
                     await self._emit(*entry)
@@ -241,11 +267,99 @@ class InterviewRun:
             self._wakeup.set()
 
     async def _on_round_finished(self, round_: int) -> None:
-        """Seam for step 7, called right after `interview.finished` went out for `round_`.
+        """Called from the flush for each `RoundFinished`.
 
-        Round 1 simply ends the interview for now; step 7 will start the round break here
-        (and send `interview.finished` only when no follow-ups follow).
+        Round 1 with break hooks starts the break (as a task: it must not run inside the
+        flush); anything else ends the interview.
         """
+        if (
+            round_ == 1
+            and self._round_break is not None
+            and not self._stopped
+            and self._break_task is None
+        ):
+            self._break_task = asyncio.create_task(self._break(), name="interview-round-break")
+            return
+        await self._emit("interview.finished", {})
+
+    async def _say(self, name: str, data: dict[str, Any]) -> None:
+        """Send an event in order with the conductor's own."""
+        self._outbox.append((name, data))
+        await self.step(tick=False)
+
+    async def _break(self) -> None:
+        try:
+            await self._round_break_flow()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("interview_round_break_failed")
+            try:
+                await self._say(
+                    "error",
+                    {
+                        "code": "INTERVIEW_ROUND_BREAK_FAILED",
+                        "message": "추가 질문을 이어가지 못해 면접을 마칩니다.",
+                    },
+                )
+                await self._say("interview.finished", {})
+            except Exception:
+                logger.exception("interview_round_break_finish_failed")
+
+    async def _round_break_flow(self) -> None:
+        hooks = self._round_break
+        assert hooks is not None
+        # Finals still on their way (the last answer's, cut by the final wait cap) arrive while
+        # the pipeline suspends, so the skip is only certain when none are pending; the items
+        # are read again after the suspend.
+        if self._pending_finals() == 0 and not self._has_follow_up_material():
+            await self._skip_break()
+            return
+        await self._say("interview.round_break", {"stage": "suspending"})
+        await hooks.suspend()
+        items = self._conductor.items()
+        if not self._has_follow_up_material():
+            await self._skip_break()  # nothing to resume for: the session ends here
+            return
+        await self._say("interview.round_break", {"stage": "generating"})
+        questions: list[PlannedQuestion] = []
+        try:
+            questions = await asyncio.wait_for(hooks.follow_ups(items), hooks.timeout_seconds)
+        except asyncio.TimeoutError:
+            logger.warning("interview_follow_up_timeout")
+        except Exception:
+            logger.exception("interview_follow_up_generation_failed")
+        if not questions:
+            # The session ends here; restarting the models only to stop them again is waste.
+            await self._skip_break()
+            return
+        await self._say(
+            "interview.round_break", {"stage": "resuming", "follow_up_count": len(questions)}
+        )
+        await hooks.resume()
+        self._start_round_two(questions)
+        await self.step(tick=False)
+
+    def _has_follow_up_material(self) -> bool:
+        return any(
+            follow_up_candidate(i, allowed_gaps(i.question)) is not None
+            for i in self._conductor.items()
+        )
+
+    async def _skip_break(self) -> None:
+        await self._say("interview.round_break", {"stage": "skipped", "follow_up_count": 0})
+        await self._say("interview.finished", {})
+
+    def _start_round_two(self, questions: list[PlannedQuestion]) -> None:
+        for question in questions:
+            self._by_id[question.id] = question
+            self._total[question.round] = self._total.get(question.round, 0) + 1
+        # The models are back: the conductor's clock jumps over the break to the wall clock,
+        # and frames older than that (from before the break) never set it back.
+        wall = self._clock()
+        self._latest_frame_end = max(self._latest_frame_end or 0, wall)
+        self._last_frame_wall = wall
+        self._guarded(lambda: self._enqueue(self._conductor.add_questions(questions, self._now())))
 
     def _to_event(
         self, action: ShowQuestion | HideQuestion | Advanced | ReplayRejected
@@ -284,6 +398,7 @@ def _report_item(item: ItemRecord) -> dict[str, Any]:
     return {
         "question_id": item.question.id,
         "round": item.question.round,
+        "parent_id": item.question.parent_id,
         "text": item.question.text,
         "shown_ms": item.shown_ms,
         "answer_started_ms": item.answer_started_ms,

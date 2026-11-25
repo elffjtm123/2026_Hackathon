@@ -495,3 +495,41 @@ def test_window_coverage_never_exceeds_one():
     first = a.windows()["windows"][0]
     assert first["voiced_ms"] == 20 and first["observed_ms"] == 10
     assert first["coverage"] == 1.0
+
+
+def test_a_marked_gap_is_neither_a_pause_nor_silent_windows_nor_speech_time():
+    a = DeliveryAnalyzer(fake_f0(), window_ms=10_000)
+    feed(a, 0, 2000)
+    utter(a, 0, 2100, syllables=10)
+    a.mark_gap(10_000, 70_000)  # e.g. the interview's round break
+    feed(a, 70_000, 72_000)
+    utter(a, 70_000, 72_100, syllables=10)
+    row = sentence(a)
+    assert row["pause_count"] == 0 and row["longest_pause_ms"] == 0
+    # 20 syllables over the 12 s that were observed, not over 72 s.
+    assert row["speech_rate"] == pytest.approx(100.0)
+    windows = a.windows()["windows"]
+    assert [w["start_ms"] for w in windows] == [0, 70_000]
+    assert a.windows()["windows"][1]["pause_count"] == 0
+
+
+def test_a_gap_between_sentences_gives_no_sentence_end_pause():
+    a = DeliveryAnalyzer(fake_f0())
+    feed(a, 0, 2000)
+    utter(a, 0, 2100, sentence=0)
+    a.mark_gap(5_000, 60_000)
+    feed(a, 60_000, 62_000)
+    utter(a, 60_000, 62_100, sentence=1)
+    assert sentence(a, 0)["sentence_end_pause_ms"] is None
+
+
+def test_a_window_partly_inside_a_gap_is_normalised_by_the_observed_part():
+    a = DeliveryAnalyzer(fake_f0(), window_ms=10_000)
+    feed(a, 0, 5000)
+    utter(a, 0, 5100)
+    a.mark_gap(5_000, 15_000)
+    feed(a, 15_000, 20_000)
+    utter(a, 15_000, 20_100)
+    first, second = a.windows()["windows"]
+    assert first["observed_ms"] == 5000 and second["observed_ms"] == 5000
+    assert first["coverage"] == pytest.approx(1.0) and second["coverage"] == pytest.approx(1.0)

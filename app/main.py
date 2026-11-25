@@ -126,8 +126,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.settings = settings
         app.state.model_execution = execution
         app.state.script_summarizer = LocalScriptSummarizer(settings, execution)
+        app.state.local_llm = LocalLlm(settings)
         app.state.interview_llm = InterviewLlm(
-            LocalLlm(settings), timeout_seconds=settings.interview_plan_timeout_seconds
+            app.state.local_llm, timeout_seconds=settings.interview_plan_timeout_seconds
         )
         app.state.interview_store = InterviewStore(
             settings.interview_plan_ttl_seconds, settings.interview_store_max_entries

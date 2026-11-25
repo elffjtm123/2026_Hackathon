@@ -12,6 +12,8 @@ EventName = Literal[
     "session.calibrating",
     "session.running",
     "session.draining",
+    "session.suspended",
+    "session.resumed",
     "media.ack",
     "feedback",
     "script.progress",
@@ -23,6 +25,7 @@ EventName = Literal[
     "interview.question_hidden",
     "interview.advanced",
     "interview.replay_rejected",
+    "interview.round_break",
     "interview.finished",
     "error",
     "ping",
@@ -68,6 +71,9 @@ class SessionStartData(BaseModel):
     def validate_script_pair(self) -> "SessionStartData":
         if (self.script is None) != (self.time_limit_seconds is None):
             raise ValueError("script and time limit must be provided together")
+        if self.interview is not None and self.stt_model_id not in (None, "service_qwen"):
+            # Any other model runs inside the server and would stay loaded in the round break.
+            raise ValueError("an interview with questions uses the service speech model")
         if self.mode == "interview" and self.script is not None:
             raise ValueError("interview does not accept a presentation script")
         if self.interview is not None and self.mode != "interview":
